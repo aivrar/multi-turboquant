@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Logs
+*.log
+bridge.log*
+
+# WSL/Linux artifacts
+app/linux/rootfs.tar.gz
+app/linux/ubuntu-base.tar.gz
+
+# Temp benchmark runs (official results are tracked)
+benchmark_results_*.md
+retest_results.md
+
+# Model files (too large for git)
+*.gguf
+*.safetensors
+*.bin
+*.pt
+turboquant_kv.json
+
+# Debug/temp
+*.tmp
+x.txt
