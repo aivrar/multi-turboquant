@@ -43,6 +43,8 @@ def patch_vllm(config: CacheConfig, *, force: bool = False) -> bool:
     if _PATCHED and not force:
         return True
 
+    _check_rotor_unsupported(config)
+
     try:
         import vllm
     except ImportError:
@@ -256,6 +258,23 @@ def _patch_triattention(config: CacheConfig) -> None:
         )
 
 
+def _check_rotor_unsupported(config: CacheConfig) -> None:
+    """Raise a clear error if rotor methods are requested for vLLM.
+
+    Rotor methods are not yet supported by vLLM's cache-dtype enum or
+    attention backend. Users should use the Python API directly, or
+    swap to iso3/iso4/planar3/planar4 for inference-backend use.
+    """
+    for label, method in [("K", config.k_method), ("V", config.v_method)]:
+        if METHOD_FAMILIES[method] == MethodFamily.ROTORQUANT:
+            raise NotImplementedError(
+                f"{label} method {method.value} is not supported by vLLM yet — "
+                f"cache-type registration pending. Use the Python API directly "
+                f"(multi_turboquant.compress / decompress), or fall back to "
+                f"iso3/iso4/planar3/planar4."
+            )
+
+
 def get_vllm_kv_cache_dtype(config: CacheConfig) -> str:
     """Get the vLLM --kv-cache-dtype flag value for a config.
 
@@ -265,6 +284,7 @@ def get_vllm_kv_cache_dtype(config: CacheConfig) -> str:
     Returns:
         String for vLLM's --kv-cache-dtype argument.
     """
+    _check_rotor_unsupported(config)
     # For symmetric configs, return the dtype string
     method_to_dtype = {
         CacheMethod.TURBO2: "turboquant25",

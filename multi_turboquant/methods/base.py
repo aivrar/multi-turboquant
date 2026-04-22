@@ -25,6 +25,7 @@ class MethodInfo:
     description: str
     fma_count: int          # FMAs per encode for head_dim=128
     param_count: int        # learnable/fixed parameters
+    experimental: bool = False
 
 
 @dataclass

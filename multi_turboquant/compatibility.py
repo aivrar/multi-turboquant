@@ -159,7 +159,17 @@ def check_config(
                 if m not in (CacheMethod.FP16, CacheMethod.Q8_0)
             ]
 
-            if compute == "rocm" and family in (MethodFamily.TURBOQUANT, MethodFamily.TCQ):
+            if family == MethodFamily.ROTORQUANT:
+                issues.append(CompatIssue(
+                    severity="error",
+                    method=f"{label}={method.value}",
+                    message=f"{method.value} is not yet supported by llama.cpp or vLLM — "
+                            f"upstream cache-type registration pending.",
+                    suggestion="Use the Python API directly: "
+                               "multi_turboquant.compress(...) / decompress(...). "
+                               "For inference-backend compression use iso3/iso4 or planar3/planar4.",
+                ))
+            elif compute == "rocm" and family in (MethodFamily.TURBOQUANT, MethodFamily.TCQ):
                 issues.append(CompatIssue(
                     severity="error",
                     method=f"{label}={method.value}",

@@ -66,14 +66,23 @@ def get_llamacpp_args(
     k_type = LLAMACPP_CACHE_TYPES.get(config.k_method)
     v_type = LLAMACPP_CACHE_TYPES.get(config.v_method)
 
+    def _unsupported(label: str, method: CacheMethod) -> ValueError:
+        family = METHOD_FAMILIES[method]
+        if family == MethodFamily.ROTORQUANT:
+            return ValueError(
+                f"{label} method {method.value} is not supported by llama.cpp upstream yet — "
+                f"cache-type registration pending. Use the Python API directly "
+                f"(multi_turboquant.compress / decompress), or fall back to "
+                f"iso3/iso4/planar3/planar4 for llama.cpp inference."
+            )
+        return ValueError(
+            f"{label} method {method.value} is not supported in llama.cpp"
+        )
+
     if k_type is None:
-        raise ValueError(
-            f"Method {config.k_method.value} is not supported in llama.cpp"
-        )
+        raise _unsupported("K", config.k_method)
     if v_type is None:
-        raise ValueError(
-            f"Method {config.v_method.value} is not supported in llama.cpp"
-        )
+        raise _unsupported("V", config.v_method)
 
     args.extend(["--cache-type-k", k_type])
     args.extend(["--cache-type-v", v_type])

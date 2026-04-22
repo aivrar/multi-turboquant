@@ -10,6 +10,7 @@ from .turboquant import TurboQuantMethod
 from .tcq import TCQMethod
 from .isoquant import IsoQuantMethod
 from .planarquant import PlanarQuantMethod
+from .rotorquant import RotorQuantMethod
 from .triattention import TriAttentionMethod
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "TCQMethod",
     "IsoQuantMethod",
     "PlanarQuantMethod",
+    "RotorQuantMethod",
     "TriAttentionMethod",
 ]

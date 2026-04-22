@@ -50,6 +50,8 @@ class TestRegistry:
         assert CacheMethod.TURBO3_TCQ in methods
         assert CacheMethod.ISO3 in methods
         assert CacheMethod.PLANAR3 in methods
+        assert CacheMethod.ROTOR3 in methods
+        assert CacheMethod.ROTOR4 in methods
         assert CacheMethod.TRIATTENTION in methods
 
     def test_list_methods_returns_info(self):
@@ -179,6 +181,107 @@ class TestPlanarQuant:
     def test_metal_support(self):
         m = get_method(CacheMethod.PLANAR3)
         assert m.supports_metal()
+
+
+# ─── RotorQuant tests ──────────────────────────────────────────────────────────
+
+class TestRotorQuant:
+    @pytest.mark.parametrize("method", [CacheMethod.ROTOR3, CacheMethod.ROTOR4])
+    def test_roundtrip(self, small_kv, method):
+        m = get_method(method)
+        compressed = m.encode(small_kv)
+        decoded = m.decode(compressed, dtype=torch.float32)
+        assert decoded.shape == small_kv.shape
+
+    def test_roundtrip_quality_rotor3(self, random_kv):
+        m = get_method(CacheMethod.ROTOR3)
+        compressed = m.encode(random_kv)
+        decoded = m.decode(compressed, dtype=torch.float32)
+        cos_sim = torch.nn.functional.cosine_similarity(
+            random_kv.reshape(-1, 128), decoded.reshape(-1, 128), dim=-1,
+        ).mean()
+        assert cos_sim > 0.97, f"rotor3 cosine similarity too low: {cos_sim}"
+
+    def test_roundtrip_quality_rotor4(self, random_kv):
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore", UserWarning)
+            m = get_method(CacheMethod.ROTOR4)
+        compressed = m.encode(random_kv)
+        decoded = m.decode(compressed, dtype=torch.float32)
+        cos_sim = torch.nn.functional.cosine_similarity(
+            random_kv.reshape(-1, 128), decoded.reshape(-1, 128), dim=-1,
+        ).mean()
+        assert cos_sim > 0.99, f"rotor4 cosine similarity too low: {cos_sim}"
+
+    def test_rotor4_marked_experimental(self):
+        """MethodInfo.experimental must be True for rotor4, False for rotor3."""
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore", UserWarning)
+            rotor3 = get_method(CacheMethod.ROTOR3)
+            rotor4 = get_method(CacheMethod.ROTOR4)
+        assert rotor3.info().experimental is False
+        assert rotor4.info().experimental is True
+
+    def test_rotor4_emits_experimental_warning(self):
+        """Fresh warning state: constructing rotor4 must emit a UserWarning."""
+        from multi_turboquant.methods import rotorquant as _rq
+        _rq._EXPERIMENTAL_WARNED.discard(CacheMethod.ROTOR4)
+        with pytest.warns(UserWarning, match="experimental"):
+            get_method(CacheMethod.ROTOR4)
+
+    def test_no_calibration_needed(self):
+        assert CacheMethod.ROTOR3 in CALIBRATION_FREE
+        assert CacheMethod.ROTOR4 in CALIBRATION_FREE
+
+    def test_rotation_orthogonality(self):
+        """The 3x3 SO(3) rotation should be orthogonal (R^T R = I)."""
+        from multi_turboquant.methods.rotorquant import _rotation_matrix_3d
+        R = _rotation_matrix_3d("cpu", None)
+        identity = torch.eye(3)
+        product = R.T @ R
+        assert torch.allclose(product, identity, atol=1e-6)
+
+    def test_rotation_proper_rotation(self):
+        """det(R) should be +1 for a proper SO(3) rotation (not a reflection)."""
+        from multi_turboquant.methods.rotorquant import _rotation_matrix_3d
+        R = _rotation_matrix_3d("cpu", None)
+        assert torch.allclose(torch.linalg.det(R), torch.tensor(1.0), atol=1e-6)
+
+    def test_sandwich_invertibility(self):
+        """Rotor sandwich then inverse should recover the input exactly."""
+        from multi_turboquant.methods.rotorquant import _apply_rotor_sandwich
+        x = torch.randn(1, 4, 129)  # must be multiple of 3
+        rotated = _apply_rotor_sandwich(x)
+        recovered = _apply_rotor_sandwich(rotated, inverse=True)
+        assert torch.allclose(x, recovered, atol=1e-5)
+
+    def test_padding_head_dim_128(self, small_kv):
+        """head_dim=128 is not divisible by 3 — verify padding round-trips cleanly."""
+        m = get_method(CacheMethod.ROTOR3)
+        compressed = m.encode(small_kv)
+        decoded = m.decode(compressed, dtype=torch.float32)
+        # Output head_dim must match input (padding was stripped)
+        assert decoded.shape == small_kv.shape
+        assert decoded.shape[-1] == 128
+
+    def test_padding_head_dim_64(self):
+        """head_dim=64 also needs padding (64 % 3 == 1 -> pad to 66)."""
+        torch.manual_seed(7)
+        x = torch.randn(4, 2, 64, dtype=torch.float32)
+        m = get_method(CacheMethod.ROTOR3)
+        compressed = m.encode(x)
+        decoded = m.decode(compressed, dtype=torch.float32)
+        assert decoded.shape == x.shape
+
+    def test_experimental_warning_rotor4_only(self):
+        """rotor3 must NOT emit the experimental warning."""
+        # Fresh warning state: call rotor3 and assert no UserWarning
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error", UserWarning)
+            get_method(CacheMethod.ROTOR3)  # should not raise
 
 
 # ─── TriAttention tests ─────────────────────────────────────────────────────────

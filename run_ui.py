@@ -204,6 +204,7 @@ h1 { color: #58a6ff; font-size: 24px; margin-bottom: 4px; }
 .tag-turbo { background: #1f6feb33; color: #58a6ff; }
 .tag-iso { background: #23863633; color: #3fb950; }
 .tag-planar { background: #a371f733; color: #bc8cff; }
+.tag-rotor { background: #ff7b7233; color: #ff7b72; }
 .tag-tri { background: #f0883e33; color: #f0883e; }
 .tag-tcq { background: #1f6feb33; color: #79c0ff; }
 .tag-free { background: #23863633; color: #3fb950; font-size: 10px; }
@@ -331,7 +332,7 @@ async function api(path, body) {
 }
 
 function familyTag(family) {
-  const tags = {turboquant:'tag-turbo',tcq:'tag-tcq',isoquant:'tag-iso',planarquant:'tag-planar',triattention:'tag-tri'};
+  const tags = {turboquant:'tag-turbo',tcq:'tag-tcq',isoquant:'tag-iso',planarquant:'tag-planar',rotorquant:'tag-rotor',triattention:'tag-tri'};
   return `<span class="tag ${tags[family]||''}">${family}</span>`;
 }
 

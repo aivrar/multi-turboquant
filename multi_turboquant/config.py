@@ -29,6 +29,10 @@ class CacheMethod(str, Enum):
     PLANAR3 = "planar3"        # 3.25-bit, 256 FMAs, no calibration
     PLANAR4 = "planar4"        # 4.25-bit, 256 FMAs, no calibration
 
+    # --- RotorQuant (Cl(3,0) sandwich, SO(3) rotation on 3D groups) ---
+    ROTOR3 = "rotor3"          # 3.25-bit, no calibration
+    ROTOR4 = "rotor4"          # 4.25-bit, no calibration, experimental
+
     # --- TriAttention (token eviction) ---
     TRIATTENTION = "triattention"  # full precision, fewer tokens
 
@@ -43,6 +47,7 @@ class MethodFamily(str, Enum):
     TCQ = "tcq"
     ISOQUANT = "isoquant"
     PLANARQUANT = "planarquant"
+    ROTORQUANT = "rotorquant"
     TRIATTENTION = "triattention"
     BASELINE = "baseline"
 
@@ -58,6 +63,8 @@ METHOD_FAMILIES: dict[CacheMethod, MethodFamily] = {
     CacheMethod.ISO4: MethodFamily.ISOQUANT,
     CacheMethod.PLANAR3: MethodFamily.PLANARQUANT,
     CacheMethod.PLANAR4: MethodFamily.PLANARQUANT,
+    CacheMethod.ROTOR3: MethodFamily.ROTORQUANT,
+    CacheMethod.ROTOR4: MethodFamily.ROTORQUANT,
     CacheMethod.TRIATTENTION: MethodFamily.TRIATTENTION,
     CacheMethod.FP16: MethodFamily.BASELINE,
     CacheMethod.Q8_0: MethodFamily.BASELINE,
@@ -80,6 +87,8 @@ CALIBRATION_FREE: set[CacheMethod] = {
     CacheMethod.ISO4,
     CacheMethod.PLANAR3,
     CacheMethod.PLANAR4,
+    CacheMethod.ROTOR3,
+    CacheMethod.ROTOR4,
     CacheMethod.FP16,
     CacheMethod.Q8_0,
 }
@@ -95,6 +104,8 @@ METHOD_BITS: dict[CacheMethod, float] = {
     CacheMethod.ISO4: 4.25,
     CacheMethod.PLANAR3: 3.25,
     CacheMethod.PLANAR4: 4.25,
+    CacheMethod.ROTOR3: 3.25,
+    CacheMethod.ROTOR4: 4.25,
     CacheMethod.TRIATTENTION: 16.0,  # full precision, token eviction
     CacheMethod.FP16: 16.0,
     CacheMethod.Q8_0: 8.0,
@@ -111,6 +122,7 @@ SUPPORTED_HEAD_DIMS: dict[MethodFamily, tuple[int, ...]] = {
     MethodFamily.TCQ: (64, 128, 192, 256),
     MethodFamily.ISOQUANT: (64, 128),     # quaternion needs head_dim % 4 == 0
     MethodFamily.PLANARQUANT: (64, 128),  # givens needs head_dim % 2 == 0
+    MethodFamily.ROTORQUANT: (64, 128),   # Cl(3,0) groups-of-3; padded to multiple of 3
     MethodFamily.TRIATTENTION: (64, 128, 192, 256),
     MethodFamily.BASELINE: (64, 128, 192, 256),
 }

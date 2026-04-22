@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Unified KV cache compression toolkit for LLM inference</strong><br>
-  <em>10 methods. 16 presets. GPU-validated. One API.</em>
+  <em>12 methods. 16 presets. GPU-validated. One API.</em>
 </p>
 
 <p align="center">
@@ -15,8 +15,8 @@
   <a href="#"><img src="https://img.shields.io/badge/AMD-ROCm-ED1C24?style=flat-square&logo=amd&logoColor=white" alt="AMD"></a>
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
-  <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-10%20compression-blueviolet?style=flat-square" alt="10 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-77%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-87%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
 </p>
@@ -25,7 +25,7 @@
 
 ## What Is This
 
-A Python toolkit that compresses the KV cache in large language models. The KV cache is the #1 memory bottleneck during inference — a 32B model at 32K context uses 8+ GB just for the cache. This library gives you 10 different ways to compress it, all under one API.
+A Python toolkit that compresses the KV cache in large language models. The KV cache is the #1 memory bottleneck during inference — a 32B model at 32K context uses 8+ GB just for the cache. This library gives you 12 different ways to compress it, all under one API.
 
 Install it, pick a preset, and get the exact launch command for llama.cpp or vLLM with optimal compression. Or use it directly in your own inference code.
 
@@ -51,11 +51,15 @@ Four lines. Opens a browser dashboard. See your GPUs, benchmark methods, plan de
 | `iso4` | IsoQuant | Quaternion 4D rotation | 4.25 | 3.8x | **No** | ~0% |
 | `planar3` | PlanarQuant | Givens 2D rotation | 3.25 | 4.9x | **No** | -1% |
 | `planar4` | PlanarQuant | Givens 2D rotation | 4.25 | 3.8x | **No** | ~0% |
+| `rotor3` | RotorQuant | Cl(3,0) SO(3) sandwich | 3.25 | 4.7x | **No** | Python-API only |
+| `rotor4` | RotorQuant | Cl(3,0) SO(3) sandwich | 4.25 | 3.6x | **No** | ⚠️ Experimental |
 | `triattention` | TriAttention | DFT token eviction | 16 | 10-16x | Required | Varies |
 
 **Combined mode** (unique to this repo): Token eviction + quantization together. Evict unimportant tokens, compress the survivors. ~80x total KV reduction.
 
-All 10 methods run on GPU through our code. No upstream forks needed.
+All 12 methods run on GPU through our code. No upstream forks needed.
+
+**Note on rotor3/rotor4:** These use a Cl(3,0) Clifford-algebra rotor sandwich product on groups of 3 dimensions (head_dim is padded to a multiple of 3 internally). They work end-to-end through the Python API on CPU or GPU, but llama.cpp and vLLM do not yet register these cache types upstream — for inference-backend use, pick `iso3`/`iso4`/`planar3`/`planar4` instead. `rotor4` is gated experimental with a runtime warning: upstream's 4-bit rotor path has known dispatch crashes, and our pure-torch implementation is untested at production scale.
 
 ## GPU-Validated Results
 
@@ -71,15 +75,17 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | iso4 | 0.9951 | 3.7x | ✅ |
 | planar3 | 0.9783 | 4.7x | ✅ |
 | planar4 | 0.9952 | 3.7x | ✅ |
+| rotor3 | 0.9780 | 4.7x | ✅ |
+| rotor4 | 0.9951 | 3.6x | ✅ |
 | TriAttn + iso3 | 0.9782 | 9.5x | ✅ |
 
 ## Tests
 
-77 automated tests: 68 CPU + 9 GPU.
+87 automated tests: 78 CPU + 9 GPU.
 
 | Suite | Tests | What It Proves |
 |-------|:-----:|----------------|
-| `test_methods.py` | 37 | All 10 methods encode/decode, config, presets, integration |
+| `test_methods.py` | 50 | All 12 methods encode/decode, config, presets, integration |
 | `test_integration.py` | 31 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 
@@ -199,11 +205,11 @@ IsoQuant and PlanarQuant need **no calibration** — just works.
 
 | Platform | Methods Available | Engine |
 |----------|:-----------------:|--------|
-| Linux + NVIDIA | All 10 | llama.cpp + vLLM |
-| Windows + NVIDIA | All 10 | llama.cpp + vLLM |
-| Linux + AMD (ROCm) | iso/planar (4) | llama.cpp |
-| macOS + Apple Silicon | iso/planar (4) | llama.cpp (Metal) |
-| Any (CPU) | All 10 | Library only |
+| Linux + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
+| Windows + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
+| Linux + AMD (ROCm) | iso/planar (4) + rotor (Python) | llama.cpp |
+| macOS + Apple Silicon | iso/planar (4) + rotor (Python) | llama.cpp (Metal) |
+| Any (CPU) | All 12 | Library only |
 
 ## Web Dashboard
 
@@ -242,7 +248,7 @@ This project reimplements algorithms from published research. All original repos
 |-------------|--------|
 | Walsh-Hadamard KV compression | TheTom/llama-cpp-turboquant |
 | Trellis Coded Quantization | spiritbuun/buun-llama-cpp |
-| IsoQuant / PlanarQuant | scrya-com/rotorquant (ParaMind2025) |
+| IsoQuant / PlanarQuant / RotorQuant | scrya-com/rotorquant (ParaMind2025) |
 | CUDA + Metal kernels | johndpope/llama-cpp-turboquant |
 | TriAttention token eviction | WeianMao/triattention |
 

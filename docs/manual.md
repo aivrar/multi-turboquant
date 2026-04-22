@@ -97,6 +97,8 @@ With 8 agents at 8K each: 2.0 GB x 8 = 16.2 GB
 
 **Givens Rotation (PlanarQuant)**: Applies 2D rotations to pairs of dimensions using golden-angle-spaced angles, then uniform-quantizes. The simplest method, with O(d) complexity.
 
+**Rotor Sandwich (RotorQuant)**: Groups dimensions in threes and applies an SO(3) rotation via the Clifford Cl(3,0) rotor sandwich product R·v·R̃. We materialize the sandwich as a precomputed 3×3 rotation matrix about the (1,1,1)/√3 axis at the golden angle — equivalent to the upstream rotor sandwich on pure 3-vectors. Head dims that aren't multiples of 3 (e.g. 64 and 128) are zero-padded to the next multiple and truncated on decode.
+
 **Trellis Coded Quantization (TCQ)**: Replaces TurboQuant's nearest-centroid assignment with Viterbi-optimal path selection through a trellis. Same compression ratio, better quality.
 
 **Trigonometric Frequency Scoring (TriAttention)**: Scores token importance by analyzing the frequency spectrum of pre-RoPE key vectors via DFT. Low-scoring tokens are evicted from the cache entirely.
@@ -118,6 +120,8 @@ With 8 agents at 8K each: 2.0 GB x 8 = 16.2 GB
 | iso4 | IsoQuant | 4.25 | 3.8x | No | ~0% decode | Higher quality K-only |
 | planar3 | PlanarQuant | 3.25 | 4.9x | No | -1% decode | Simplest, Metal support |
 | planar4 | PlanarQuant | 4.25 | 3.8x | No | ~0% decode | Quality K-only |
+| rotor3 | RotorQuant | 3.25 | 4.7x | No | Python-API only | Research / Cl(3,0) sibling |
+| rotor4 | RotorQuant | 4.25 | 3.6x | No | ⚠️ Experimental | Research only, quality gap vs iso4 |
 | triattention | TriAttention | 16 | 10-16x | Required | Varies | Long reasoning, compose with above |
 
 ### Choosing a method
@@ -319,6 +323,10 @@ CacheMethod.ISO4        # 4.25-bit
 # PlanarQuant (Givens rotation, NO calibration)
 CacheMethod.PLANAR3     # 3.25-bit
 CacheMethod.PLANAR4     # 4.25-bit
+
+# RotorQuant (Cl(3,0) sandwich, NO calibration — Python API only)
+CacheMethod.ROTOR3      # 3.25-bit
+CacheMethod.ROTOR4      # 4.25-bit  (experimental — emits UserWarning)
 
 # TriAttention (token eviction)
 CacheMethod.TRIATTENTION
@@ -1206,6 +1214,7 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Trellis Coded Quantization variant | spiritbuun / buun-llama-cpp | MIT |
 | IsoQuant (quaternion rotation) | scrya-com / rotorquant (ParaMind2025) | MIT |
 | PlanarQuant (Givens rotation) | scrya-com / rotorquant (ParaMind2025) | MIT |
+| RotorQuant (Cl(3,0) sandwich) | scrya-com / rotorquant (ParaMind2025) | MIT |
 | llama.cpp iso/planar CUDA+Metal kernels | johndpope / llama-cpp-turboquant | MIT |
 | TriAttention (trigonometric token eviction) | WeianMao / triattention | Apache-2.0 |
 
