@@ -7,9 +7,9 @@ setup(
     description="Unified KV cache compression for LLM inference — TurboQuant, TCQ, IsoQuant, PlanarQuant, TriAttention",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
-    author="rookiemann",
+    author="aivrar",
     license="MIT",
-    url="https://github.com/rookiemann/multi-turboquant",
+    url="https://github.com/aivrar/multi-turboquant",
     packages=find_packages(exclude=["tests*"]),
     python_requires=">=3.10",
     install_requires=[

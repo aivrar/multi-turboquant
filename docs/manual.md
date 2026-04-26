@@ -167,7 +167,7 @@ CacheConfig(k_method=CacheMethod.TURBO3, v_method=CacheMethod.TURBO4)
 
 ```bash
 # Clone the repository
-git clone https://github.com/rookiemann/multi-turboquant
+git clone https://github.com/aivrar/multi-turboquant
 cd portable-turboquant-server
 
 # Core install (PyTorch only)

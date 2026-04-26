@@ -30,7 +30,7 @@ A Python toolkit that compresses the KV cache in large language models. The KV c
 Install it, pick a preset, and get the exact launch command for llama.cpp or vLLM with optimal compression. Or use it directly in your own inference code.
 
 ```bash
-git clone https://github.com/rookiemann/multi-turboquant
+git clone https://github.com/aivrar/multi-turboquant
 cd multi-turboquant
 pip install -e .
 python run_ui.py
