@@ -208,7 +208,7 @@ IsoQuant and PlanarQuant need **no calibration** — just works.
 | Linux + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
 | Windows + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
 | Linux + AMD (ROCm) | iso/planar (4) + rotor (Python) | llama.cpp |
-| macOS + Apple Silicon | iso/planar (4) + rotor (Python) | llama.cpp (Metal) |
+| macOS + Apple Silicon | iso/planar (4) + rotor (Python) + fused MLX kernels (ForgeAttention) | llama.cpp (Metal) + MLX |
 | Any (CPU) | All 12 | Library only |
 
 ## Web Dashboard
@@ -253,6 +253,14 @@ This project reimplements algorithms from published research. All original repos
 | TriAttention token eviction | WeianMao/triattention |
 
 We reimplemented the algorithms in Python. Credit goes to these authors for the mathematical ideas.
+
+## Community Contributors
+
+| Contribution | Contributor | Reference |
+|--------------|-------------|-----------|
+| ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
+
+The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 
 ## License
 
