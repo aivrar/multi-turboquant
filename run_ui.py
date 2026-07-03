@@ -149,15 +149,41 @@ def api_benchmark(params):
     return {"device": device, "head_dim": head_dim, "seq_len": seq_len, "results": results}
 
 
+def _truthy(value):
+    return value is True or (
+        isinstance(value, str) and value.lower() in {"1", "true", "yes", "on"}
+    )
+
+
+def _command_config(params):
+    """Build a CacheConfig from command-generator params.
+
+    Older UI payloads can send triattention as a K/V method. TriAttention is a
+    token eviction mode, so translate that selection into the explicit flag and
+    leave the affected cache side at FP16 for llama.cpp command generation.
+    """
+    k = params.get("k_method", "turbo4")
+    v = params.get("v_method", k)
+    triattention_enabled = _truthy(params.get("triattention"))
+
+    if k == CacheMethod.TRIATTENTION.value:
+        triattention_enabled = True
+        k = CacheMethod.FP16.value
+    if v == CacheMethod.TRIATTENTION.value:
+        triattention_enabled = True
+        v = CacheMethod.FP16.value
+
+    return CacheConfig(
+        k_method=CacheMethod(k),
+        v_method=CacheMethod(v),
+        triattention_enabled=triattention_enabled,
+    )
+
+
 def api_generate_command(params):
     """Generate a llama.cpp or vLLM launch command."""
     from multi_turboquant.integration import get_llamacpp_command
-    k = params.get("k_method", "turbo4")
-    v = params.get("v_method", k)
-    config = CacheConfig(
-        k_method=CacheMethod(k),
-        v_method=CacheMethod(v),
-    )
+    config = _command_config(params)
     cmd = get_llamacpp_command(
         config,
         model_path=params.get("model_path", "/opt/models/model.gguf"),
@@ -169,8 +195,8 @@ def api_generate_command(params):
     issues = []
     plat = detect_platform()
     for issue in check_config(config, plat):
-        issues.append({"severity": issue.severity, "message": issue.message,
-                        "suggestion": issue.suggestion})
+        issues.append({"severity": issue.severity, "method": issue.method,
+                        "message": issue.message, "suggestion": issue.suggestion})
     return {"command": " ".join(cmd), "issues": issues}
 
 
@@ -388,6 +414,7 @@ async function init() {
   cmdK.innerHTML = '<option value="f16">f16 (no compression)</option>';
   cmdV.innerHTML = '<option value="f16">f16 (no compression)</option>';
   methods.forEach(m => {
+    if (m.family === 'triattention' || m.value === 'f16') return;
     cmdK.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
     cmdV.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
   });
