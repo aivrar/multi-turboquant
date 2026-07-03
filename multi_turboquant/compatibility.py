@@ -205,13 +205,29 @@ def check_config(
     # TriAttention checks
     if config.triattention_enabled:
         if engine == "llamacpp":
-            issues.append(CompatIssue(
-                severity="warning",
-                method="triattention",
-                message="TriAttention is vLLM-only — ignored in llama.cpp mode.",
-                suggestion="Use vLLM or disable TriAttention.",
-            ))
-        if not plat.can_run_vllm:
+            if getattr(config, "use_custom_triattention_llamacpp", False):
+                if not config.triattention_stats_path:
+                    issues.append(CompatIssue(
+                        severity="error",
+                        method="triattention",
+                        message="Patched llama.cpp TriAttention requires a stats file.",
+                        suggestion="Set triattention_stats_path / --triattention-stats.",
+                    ))
+                else:
+                    issues.append(CompatIssue(
+                        severity="info",
+                        method="triattention",
+                        message="TriAttention flags require a patched llama.cpp fork.",
+                        suggestion="Use a binary such as atomicmilkshake/llama-cpp-turboquant.",
+                    ))
+            else:
+                issues.append(CompatIssue(
+                    severity="warning",
+                    method="triattention",
+                    message="TriAttention is vLLM-only unless using a patched llama.cpp fork.",
+                    suggestion="Use vLLM, enable patched llama.cpp mode, or disable TriAttention.",
+                ))
+        if engine != "llamacpp" and not plat.can_run_vllm:
             issues.append(CompatIssue(
                 severity="error",
                 method="triattention",

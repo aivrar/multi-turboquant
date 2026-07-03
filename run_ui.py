@@ -32,6 +32,7 @@ from multi_turboquant.compatibility import (
     check_config, get_available_methods, get_recommended_config,
 )
 from multi_turboquant.config import METHOD_BITS
+from multi_turboquant.integration import CudaWeightShareConfig
 
 
 # ─── API Handlers ───────────────────────────────────────────────────────────────
@@ -155,6 +156,12 @@ def _truthy(value):
     )
 
 
+def _optional_int(value, default=None):
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
 def _command_config(params):
     """Build a CacheConfig from command-generator params.
 
@@ -165,6 +172,11 @@ def _command_config(params):
     k = params.get("k_method", "turbo4")
     v = params.get("v_method", k)
     triattention_enabled = _truthy(params.get("triattention"))
+    use_custom_triattention_llamacpp = _truthy(
+        params.get("use_custom_triattention_llamacpp")
+        or params.get("custom_triattention_llamacpp")
+    )
+    triattention_stats_path = params.get("triattention_stats_path") or None
 
     if k == CacheMethod.TRIATTENTION.value:
         triattention_enabled = True
@@ -172,11 +184,40 @@ def _command_config(params):
     if v == CacheMethod.TRIATTENTION.value:
         triattention_enabled = True
         v = CacheMethod.FP16.value
+    if use_custom_triattention_llamacpp:
+        triattention_enabled = True
 
     return CacheConfig(
         k_method=CacheMethod(k),
         v_method=CacheMethod(v),
         triattention_enabled=triattention_enabled,
+        triattention_budget=_optional_int(
+            params.get("triattention_budget"), 4096,
+        ),
+        triattention_window=_optional_int(
+            params.get("triattention_window"), 512,
+        ),
+        triattention_stats_path=triattention_stats_path,
+        use_custom_triattention_llamacpp=use_custom_triattention_llamacpp,
+        triattention_log=_truthy(params.get("triattention_log")),
+    )
+
+
+def _cuda_weight_share_config(params):
+    if not _truthy(params.get("cuda_weight_share")):
+        return None
+    return CudaWeightShareConfig(
+        enabled=True,
+        library_path=params.get("cuda_weight_share_library")
+        or "./cuda-llm-weight-share.so",
+        model_size_bytes=_optional_int(params.get("cuda_weight_share_model_size")),
+        model_size_tolerance=_optional_int(
+            params.get("cuda_weight_share_tolerance"), 0,
+        ),
+        ipc_name=params.get("cuda_weight_share_ipc_name")
+        or "/cuda_vram_ipc_auto",
+        shm_wait_sec=_optional_int(params.get("cuda_weight_share_shm_wait_sec")),
+        trace_callers=_truthy(params.get("cuda_weight_share_trace")),
     )
 
 
@@ -184,20 +225,33 @@ def api_generate_command(params):
     """Generate a llama.cpp or vLLM launch command."""
     from multi_turboquant.integration import get_llamacpp_command
     config = _command_config(params)
-    cmd = get_llamacpp_command(
-        config,
-        model_path=params.get("model_path", "/opt/models/model.gguf"),
-        port=int(params.get("port", 8080)),
-        context_size=int(params.get("context", 4096)),
-        tensor_split=params.get("tensor_split"),
-        parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
-    )
+    cuda_weight_share = _cuda_weight_share_config(params)
     issues = []
+    command = ""
+    try:
+        cmd = get_llamacpp_command(
+            config,
+            model_path=params.get("model_path", "/opt/models/model.gguf"),
+            port=int(params.get("port", 8080)),
+            context_size=int(params.get("context", 4096)),
+            tensor_split=params.get("tensor_split"),
+            parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
+            cuda_weight_share=cuda_weight_share,
+        )
+        command = " ".join(cmd)
+    except ValueError as e:
+        issues.append({"severity": "error", "method": "command",
+                       "message": str(e), "suggestion": "Fix the command inputs."})
+
     plat = detect_platform()
     for issue in check_config(config, plat):
         issues.append({"severity": issue.severity, "method": issue.method,
                         "message": issue.message, "suggestion": issue.suggestion})
-    return {"command": " ".join(cmd), "issues": issues}
+    if cuda_weight_share is not None:
+        for warning in cuda_weight_share.validate():
+            issues.append({"severity": "error", "method": "cuda_weight_share",
+                           "message": warning, "suggestion": "Fix weight-share inputs."})
+    return {"command": command, "issues": issues}
 
 
 # ─── HTML UI ────────────────────────────────────────────────────────────────────
@@ -343,6 +397,29 @@ button.secondary:hover { background: #3d444d; }
           <input type="text" id="cmd-model" value="/opt/models/model.gguf" onchange="generateCommand()">
         </div>
       </div>
+      <div class="form-row">
+        <div><label><input type="checkbox" id="cmd-tri" onchange="generateCommand()"> TriAttention</label></div>
+        <div><label><input type="checkbox" id="cmd-tri-custom" onchange="generateCommand()"> Patched llama.cpp</label></div>
+        <div><label>TriAttn Budget</label><input type="number" id="cmd-tri-budget" value="4096" onchange="generateCommand()"></div>
+        <div><label>TriAttn Window</label><input type="number" id="cmd-tri-window" value="512" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div style="grid-column:1/-1"><label>TriAttention Stats Path</label>
+          <input type="text" id="cmd-tri-stats" value="" onchange="generateCommand()">
+        </div>
+      </div>
+      <div class="form-row">
+        <div><label><input type="checkbox" id="cmd-tri-log" onchange="generateCommand()"> TriAttn Log</label></div>
+        <div><label><input type="checkbox" id="cmd-weight-share" onchange="generateCommand()"> CUDA Weight Share</label></div>
+        <div><label>MODEL_SIZE</label><input type="number" id="cmd-ws-model-size" value="" onchange="generateCommand()"></div>
+        <div><label>Tolerance</label><input type="number" id="cmd-ws-tolerance" value="0" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Preload Library</label><input type="text" id="cmd-ws-library" value="./cuda-llm-weight-share.so" onchange="generateCommand()"></div>
+        <div><label>IPC Name</label><input type="text" id="cmd-ws-ipc" value="/cuda_vram_ipc_auto" onchange="generateCommand()"></div>
+        <div><label>SHM Wait</label><input type="number" id="cmd-ws-wait" value="" onchange="generateCommand()"></div>
+        <div><label><input type="checkbox" id="cmd-ws-trace" onchange="generateCommand()"> Trace</label></div>
+      </div>
       <div class="result-box" id="cmd-result">Select methods above...</div>
     </div>
   </div>
@@ -469,6 +546,19 @@ async function generateCommand() {
     model_path: document.getElementById('cmd-model').value,
     context: document.getElementById('cmd-ctx').value,
     parallel: document.getElementById('cmd-parallel').value,
+    triattention: document.getElementById('cmd-tri').checked,
+    use_custom_triattention_llamacpp: document.getElementById('cmd-tri-custom').checked,
+    triattention_stats_path: document.getElementById('cmd-tri-stats').value,
+    triattention_budget: document.getElementById('cmd-tri-budget').value,
+    triattention_window: document.getElementById('cmd-tri-window').value,
+    triattention_log: document.getElementById('cmd-tri-log').checked,
+    cuda_weight_share: document.getElementById('cmd-weight-share').checked,
+    cuda_weight_share_library: document.getElementById('cmd-ws-library').value,
+    cuda_weight_share_model_size: document.getElementById('cmd-ws-model-size').value,
+    cuda_weight_share_tolerance: document.getElementById('cmd-ws-tolerance').value,
+    cuda_weight_share_ipc_name: document.getElementById('cmd-ws-ipc').value,
+    cuda_weight_share_shm_wait_sec: document.getElementById('cmd-ws-wait').value,
+    cuda_weight_share_trace: document.getElementById('cmd-ws-trace').checked,
   });
   let txt = result.command;
   if (result.issues?.length) {

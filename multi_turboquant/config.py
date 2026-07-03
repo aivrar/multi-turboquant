@@ -157,6 +157,8 @@ class CacheConfig:
     triattention_enabled: bool = False
     triattention_budget: int = 4096
     triattention_window: int = 512  # recent-token window that's never evicted
+    use_custom_triattention_llamacpp: bool = False
+    triattention_log: bool = False
 
     # Calibration paths
     turboquant_metadata_path: str | None = None
@@ -223,6 +225,16 @@ class CacheConfig:
                 )
         if self.triattention_enabled and self.triattention_budget <= 0:
             warnings.append("TriAttention budget must be > 0")
+        if self.triattention_enabled and self.triattention_window < 0:
+            warnings.append("TriAttention window must be >= 0")
+        if (
+            self.triattention_enabled
+            and self.use_custom_triattention_llamacpp
+            and not self.triattention_stats_path
+        ):
+            warnings.append(
+                "Patched llama.cpp TriAttention requires triattention_stats_path"
+            )
         return warnings
 
     def estimate_kv_bytes(self, context_length: int) -> int:
@@ -244,6 +256,10 @@ class CacheConfig:
             "triattention_enabled": self.triattention_enabled,
             "triattention_budget": self.triattention_budget,
             "triattention_window": self.triattention_window,
+            "use_custom_triattention_llamacpp": self.use_custom_triattention_llamacpp,
+            "triattention_log": self.triattention_log,
+            "turboquant_metadata_path": self.turboquant_metadata_path,
+            "triattention_stats_path": self.triattention_stats_path,
             "head_dim": self.head_dim,
             "num_kv_heads": self.num_kv_heads,
             "num_layers": self.num_layers,
@@ -257,6 +273,12 @@ class CacheConfig:
             triattention_enabled=data.get("triattention_enabled", False),
             triattention_budget=data.get("triattention_budget", 4096),
             triattention_window=data.get("triattention_window", 512),
+            use_custom_triattention_llamacpp=data.get(
+                "use_custom_triattention_llamacpp", False
+            ),
+            triattention_log=data.get("triattention_log", False),
+            turboquant_metadata_path=data.get("turboquant_metadata_path"),
+            triattention_stats_path=data.get("triattention_stats_path"),
             head_dim=data.get("head_dim", 128),
             num_kv_heads=data.get("num_kv_heads", 8),
             num_layers=data.get("num_layers", 32),

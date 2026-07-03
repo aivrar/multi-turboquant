@@ -123,6 +123,52 @@ cmd = get_llamacpp_command(
 #   -fa on -c 131072 --tensor-split 24,12 --parallel 8
 ```
 
+### Patched llama.cpp TriAttention
+
+TriAttention is token eviction, not a K/V cache dtype. Upstream llama.cpp ignores
+it, but patched forks such as `atomicmilkshake/llama-cpp-turboquant` expose
+runtime flags:
+
+```python
+from multi_turboquant import CacheConfig, CacheMethod
+from multi_turboquant.integration import get_llamacpp_command
+
+config = CacheConfig(
+    k_method=CacheMethod.TURBO3,
+    v_method=CacheMethod.TURBO3,
+    triattention_enabled=True,
+    use_custom_triattention_llamacpp=True,
+    triattention_stats_path="model.triattention",
+    triattention_budget=4096,
+    triattention_window=256,
+)
+
+cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
+# ... --cache-type-k turbo3 --cache-type-v turbo3
+#     --triattention-stats model.triattention --triattention-budget 4096
+```
+
+### CUDA weight-share launcher
+
+For multi-process serving on Linux + CUDA, the launcher can wrap commands for
+`pontostroy/cuda-llm-weight-share` without vendoring the preload library:
+
+```python
+from multi_turboquant.integration import CudaWeightShareConfig, get_llamacpp_command
+
+cmd = get_llamacpp_command(
+    config,
+    model_path="/opt/models/model.gguf",
+    cuda_weight_share=CudaWeightShareConfig(
+        enabled=True,
+        library_path="/opt/cuda-llm-weight-share.so",
+        model_size_bytes=32060375552,
+        ipc_name="/cuda_vram_ipc_qwen3_gpu0",
+    ),
+)
+# env LD_PRELOAD=/opt/cuda-llm-weight-share.so MODEL_SIZE=32060375552 ...
+```
+
 ### Plan a multi-agent deployment
 
 ```python
@@ -232,7 +278,7 @@ multi_turboquant/
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, frequency stats, auto-calibrate
-  integration/           llama.cpp flags, vLLM patch, bridge adapter
+  integration/           llama.cpp flags, CUDA weight-share wrapper, vLLM patch
   benchmark/             Head-to-head comparison, perplexity, VRAM profiling
 ```
 
