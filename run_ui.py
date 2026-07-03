@@ -228,20 +228,26 @@ def api_generate_command(params):
     cuda_weight_share = _cuda_weight_share_config(params)
     issues = []
     command = ""
-    try:
-        cmd = get_llamacpp_command(
-            config,
-            model_path=params.get("model_path", "/opt/models/model.gguf"),
-            port=int(params.get("port", 8080)),
-            context_size=int(params.get("context", 4096)),
-            tensor_split=params.get("tensor_split"),
-            parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
-            cuda_weight_share=cuda_weight_share,
-        )
-        command = " ".join(cmd)
-    except ValueError as e:
-        issues.append({"severity": "error", "method": "command",
-                       "message": str(e), "suggestion": "Fix the command inputs."})
+    missing_patched_triattention_stats = (
+        config.triattention_enabled
+        and config.use_custom_triattention_llamacpp
+        and not config.triattention_stats_path
+    )
+    if not missing_patched_triattention_stats:
+        try:
+            cmd = get_llamacpp_command(
+                config,
+                model_path=params.get("model_path", "/opt/models/model.gguf"),
+                port=int(params.get("port", 8080)),
+                context_size=int(params.get("context", 4096)),
+                tensor_split=params.get("tensor_split"),
+                parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
+                cuda_weight_share=cuda_weight_share,
+            )
+            command = " ".join(cmd)
+        except ValueError as e:
+            issues.append({"severity": "error", "method": "command",
+                           "message": str(e), "suggestion": "Fix the command inputs."})
 
     plat = detect_platform()
     for issue in check_config(config, plat):
@@ -399,13 +405,13 @@ button.secondary:hover { background: #3d444d; }
       </div>
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri" onchange="generateCommand()"> TriAttention</label></div>
-        <div><label><input type="checkbox" id="cmd-tri-custom" onchange="generateCommand()"> Patched llama.cpp</label></div>
+        <div><label><input type="checkbox" id="cmd-tri-custom" onchange="generateCommand()"> Patched llama.cpp (stats required)</label></div>
         <div><label>TriAttn Budget</label><input type="number" id="cmd-tri-budget" value="4096" onchange="generateCommand()"></div>
         <div><label>TriAttn Window</label><input type="number" id="cmd-tri-window" value="512" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
         <div style="grid-column:1/-1"><label>TriAttention Stats Path</label>
-          <input type="text" id="cmd-tri-stats" value="" onchange="generateCommand()">
+          <input type="text" id="cmd-tri-stats" value="" placeholder="model.triattention" onchange="generateCommand()">
         </div>
       </div>
       <div class="form-row">
@@ -560,10 +566,13 @@ async function generateCommand() {
     cuda_weight_share_shm_wait_sec: document.getElementById('cmd-ws-wait').value,
     cuda_weight_share_trace: document.getElementById('cmd-ws-trace').checked,
   });
-  let txt = result.command;
+  let txt = result.command || 'Fix errors below to generate a command.';
   if (result.issues?.length) {
-    txt += '\\n\\nWarnings:';
-    result.issues.forEach(i => { txt += `\\n  [${i.severity}] ${i.message}`; });
+    txt += '\\n\\nIssues:';
+    result.issues.forEach(i => {
+      txt += `\\n  [${i.severity}] ${i.message}`;
+      if (i.suggestion) txt += `\\n    Fix: ${i.suggestion}`;
+    });
   }
   document.getElementById('cmd-result').textContent = txt;
 }

@@ -148,6 +148,15 @@ cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
 #     --triattention-stats model.triattention --triattention-budget 4096
 ```
 
+The stats file is required by the patched llama.cpp binary. Generate it with the
+patched fork, for example:
+
+```bash
+llama-cli -m /opt/models/model.gguf -ngl 99 \
+  --triattention-calibrate corpus.txt \
+  --triattention-calibrate-out model.triattention
+```
+
 ### CUDA weight-share launcher
 
 For multi-process serving on Linux + CUDA, the launcher can wrap commands for

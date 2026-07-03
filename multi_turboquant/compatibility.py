@@ -210,8 +210,15 @@ def check_config(
                     issues.append(CompatIssue(
                         severity="error",
                         method="triattention",
-                        message="Patched llama.cpp TriAttention requires a stats file.",
-                        suggestion="Set triattention_stats_path / --triattention-stats.",
+                        message=(
+                            "Patched llama.cpp TriAttention requires a stats "
+                            "file in TriAttention Stats Path."
+                        ),
+                        suggestion=(
+                            "Generate one with the patched llama-cli "
+                            "--triattention-calibrate command, then paste the "
+                            "generated .triattention file path."
+                        ),
                     ))
                 else:
                     issues.append(CompatIssue(
