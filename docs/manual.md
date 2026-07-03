@@ -620,6 +620,18 @@ cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
 For upstream llama.cpp, leave `use_custom_triattention_llamacpp=False`; the
 command generator will warn that TriAttention is ignored in that backend.
 
+The stats file is required before patched llama.cpp TriAttention can run. With
+`atomicmilkshake/llama-cpp-turboquant`, generate it from representative text:
+
+```bash
+llama-cli -m /opt/models/model.gguf -ngl 99 \
+  --triattention-calibrate corpus.txt \
+  --triattention-calibrate-out model.triattention
+```
+
+Then put the generated `model.triattention` path into the web UI's
+`TriAttention Stats Path` field or `CacheConfig.triattention_stats_path`.
+
 ### CUDA weight-share launch wrapper
 
 For Linux + CUDA multi-process serving, you can wrap the launch command for an

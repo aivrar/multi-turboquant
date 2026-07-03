@@ -68,8 +68,13 @@ def test_api_generate_command_returns_error_for_missing_triattention_stats():
     })
 
     assert result["command"] == ""
-    assert any(issue["method"] == "command" for issue in result["issues"])
-    assert any(issue["method"] == "triattention" for issue in result["issues"])
+    triattention_issues = [
+        issue for issue in result["issues"] if issue["method"] == "triattention"
+    ]
+    assert len(triattention_issues) == 1
+    assert "Stats Path" in triattention_issues[0]["message"]
+    assert "--triattention-calibrate" in triattention_issues[0]["suggestion"]
+    assert not any(issue["method"] == "command" for issue in result["issues"])
 
 
 def test_api_generate_command_supports_cuda_weight_share_wrapper():
