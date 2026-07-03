@@ -588,9 +588,65 @@ The available cache types depend on which llama.cpp fork you built:
 
 | Fork | Cache Types |
 |------|------------|
+| atomicmilkshake/llama-cpp-turboquant | turbo2, turbo3, turbo4 + patched TriAttention flags |
 | spiritbuun/buun-llama-cpp | turbo2, turbo3, turbo4, turbo2_tcq, turbo3_tcq |
 | johndpope/llama-cpp-turboquant | turbo2, turbo3, turbo4, iso3, iso4, planar3, planar4 |
 | ggml-org/llama.cpp (upstream) | f16, q8_0, q4_0, q5_0 (no TurboQuant) |
+
+### Patched llama.cpp TriAttention
+
+TriAttention is token eviction, not a K/V cache type. Keep K/V as normal cache
+methods and enable patched llama.cpp mode only when using a fork that exposes
+TriAttention runtime flags:
+
+```python
+config = CacheConfig(
+    k_method=CacheMethod.TURBO3,
+    v_method=CacheMethod.TURBO3,
+    triattention_enabled=True,
+    use_custom_triattention_llamacpp=True,
+    triattention_stats_path="model.triattention",
+    triattention_budget=4096,
+    triattention_window=256,
+    triattention_log=True,
+)
+
+cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
+# ... --cache-type-k turbo3 --cache-type-v turbo3
+#     --triattention-stats model.triattention
+#     --triattention-budget 4096 --triattention-window 256 --triattention-log
+```
+
+For upstream llama.cpp, leave `use_custom_triattention_llamacpp=False`; the
+command generator will warn that TriAttention is ignored in that backend.
+
+### CUDA weight-share launch wrapper
+
+For Linux + CUDA multi-process serving, you can wrap the launch command for an
+external `LD_PRELOAD` helper such as `pontostroy/cuda-llm-weight-share`.
+Multi-TurboQuant only generates the environment prefix; build and provide the
+preload library separately.
+
+```python
+from multi_turboquant.integration import CudaWeightShareConfig
+
+cmd = get_llamacpp_command(
+    config,
+    model_path="/opt/models/model.gguf",
+    cuda_weight_share=CudaWeightShareConfig(
+        enabled=True,
+        library_path="/opt/cuda-llm-weight-share.so",
+        model_size_bytes=32060375552,
+        model_size_tolerance=16777216,
+        ipc_name="/cuda_vram_ipc_qwen3_gpu0",
+    ),
+)
+# env LD_PRELOAD=/opt/cuda-llm-weight-share.so MODEL_SIZE=32060375552 ...
+```
+
+Run the external helper once in reconnaissance mode (`MODEL_SIZE=0`) to find the
+model weight allocation size, then reuse that value for the master and worker
+processes.
 
 ### Build flags
 
@@ -1114,6 +1170,7 @@ multi_turboquant/
 
   integration/
     llamacpp_args.py        Generate llama.cpp CLI flags
+    weight_share.py         CUDA LD_PRELOAD launch wrapper
     vllm_patch.py           Monkeypatch vLLM for all methods
     bridge_adapter.py       Adapter for Llama_TQ bridge apps
     example_app_integration.py  Usage examples

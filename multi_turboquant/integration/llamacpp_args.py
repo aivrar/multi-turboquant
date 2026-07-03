@@ -68,6 +68,13 @@ def get_llamacpp_args(
 
     def _unsupported(label: str, method: CacheMethod) -> ValueError:
         family = METHOD_FAMILIES[method]
+        if family == MethodFamily.TRIATTENTION:
+            return ValueError(
+                f"{label} method {method.value} is token eviction, not a "
+                f"llama.cpp cache type. Use a normal K/V cache type and set "
+                f"triattention_enabled=True. For patched llama.cpp forks, also "
+                f"set use_custom_triattention_llamacpp=True."
+            )
         if family == MethodFamily.ROTORQUANT:
             return ValueError(
                 f"{label} method {method.value} is not supported by llama.cpp upstream yet — "
@@ -108,15 +115,41 @@ def get_llamacpp_args(
     if parallel_slots and parallel_slots > 1:
         args.extend(["--parallel", str(parallel_slots)])
 
-    # TriAttention warning
+    # TriAttention token eviction is separate from K/V cache dtype flags.
     if config.triattention_enabled:
-        import warnings
-        warnings.warn(
-            "TriAttention is vLLM-only and will be ignored in llama.cpp mode.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+        if config.use_custom_triattention_llamacpp:
+            args.extend(_get_patched_triattention_args(config))
+        else:
+            import warnings
+            warnings.warn(
+                "TriAttention is vLLM-only unless using a patched llama.cpp fork; "
+                "it will be ignored in upstream llama.cpp mode.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
+    return args
+
+
+def _get_patched_triattention_args(config: CacheConfig) -> list[str]:
+    """Generate TriAttention flags for patched llama.cpp forks."""
+    if not config.triattention_stats_path:
+        raise ValueError(
+            "triattention_stats_path is required when "
+            "use_custom_triattention_llamacpp=True"
+        )
+    if config.triattention_budget <= 0:
+        raise ValueError("triattention_budget must be > 0")
+    if config.triattention_window < 0:
+        raise ValueError("triattention_window must be >= 0")
+
+    args = [
+        "--triattention-stats", config.triattention_stats_path,
+        "--triattention-budget", str(config.triattention_budget),
+        "--triattention-window", str(config.triattention_window),
+    ]
+    if config.triattention_log:
+        args.append("--triattention-log")
     return args
 
 
@@ -131,6 +164,7 @@ def get_llamacpp_command(
     gpu_layers: int = 99,
     tensor_split: str | None = None,
     parallel_slots: int | None = None,
+    cuda_weight_share: object | None = None,
     extra_args: list[str] | None = None,
 ) -> list[str]:
     """Generate a complete llama-server command line.
@@ -161,6 +195,10 @@ def get_llamacpp_command(
 
     if extra_args:
         cmd.extend(extra_args)
+
+    if cuda_weight_share is not None:
+        from .weight_share import wrap_cuda_weight_share_command
+        cmd = wrap_cuda_weight_share_command(cmd, cuda_weight_share)
 
     return cmd
 

@@ -428,6 +428,65 @@ class TestIntegration:
         assert "/opt/models/test.gguf" in cmd
         assert "8080" in cmd
 
+    def test_llamacpp_patched_triattention_args(self):
+        from multi_turboquant.integration import get_llamacpp_args
+        config = CacheConfig(
+            k_method=CacheMethod.TURBO3,
+            v_method=CacheMethod.TURBO3,
+            triattention_enabled=True,
+            use_custom_triattention_llamacpp=True,
+            triattention_stats_path="model.triattention",
+            triattention_budget=2048,
+            triattention_window=256,
+            triattention_log=True,
+        )
+        args = get_llamacpp_args(config)
+        assert "--cache-type-k" in args
+        assert "turbo3" in args
+        assert "--triattention-stats" in args
+        assert "model.triattention" in args
+        assert "--triattention-budget" in args
+        assert "2048" in args
+        assert "--triattention-window" in args
+        assert "256" in args
+        assert "--triattention-log" in args
+
+    def test_llamacpp_rejects_triattention_as_cache_type(self):
+        from multi_turboquant.integration import get_llamacpp_args
+        config = CacheConfig(
+            k_method=CacheMethod.TRIATTENTION,
+            v_method=CacheMethod.FP16,
+            triattention_enabled=True,
+            use_custom_triattention_llamacpp=True,
+            triattention_stats_path="model.triattention",
+        )
+        with pytest.raises(ValueError, match="token eviction"):
+            get_llamacpp_args(config)
+
+    def test_llamacpp_cuda_weight_share_wrapper(self):
+        from multi_turboquant.integration import (
+            CudaWeightShareConfig,
+            get_llamacpp_command,
+        )
+        config = CacheConfig()
+        cmd = get_llamacpp_command(
+            config,
+            model_path="/opt/models/test.gguf",
+            cuda_weight_share=CudaWeightShareConfig(
+                enabled=True,
+                library_path="/opt/cuda-llm-weight-share.so",
+                model_size_bytes=123456,
+                model_size_tolerance=1024,
+                ipc_name="/cuda_vram_ipc_test",
+            ),
+        )
+        assert cmd[0] == "env"
+        assert "LD_PRELOAD=/opt/cuda-llm-weight-share.so" in cmd
+        assert "MODEL_SIZE=123456" in cmd
+        assert "MODEL_SIZE_TOLERANCE=1024" in cmd
+        assert "CUDA_VRAM_IPC_NAME=/cuda_vram_ipc_test" in cmd
+        assert "llama-server" in cmd
+
     def test_bridge_adapter(self):
         from multi_turboquant.integration import BridgeAdapter
         config = CacheConfig(

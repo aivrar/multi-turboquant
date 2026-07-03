@@ -9,6 +9,11 @@ Modules:
 
 from .vllm_patch import patch_vllm, is_vllm_patched
 from .llamacpp_args import get_llamacpp_args, get_llamacpp_command
+from .weight_share import (
+    CudaWeightShareConfig,
+    get_cuda_weight_share_env,
+    wrap_cuda_weight_share_command,
+)
 from .bridge_adapter import BridgeAdapter
 
 __all__ = [
@@ -16,5 +21,8 @@ __all__ = [
     "is_vllm_patched",
     "get_llamacpp_args",
     "get_llamacpp_command",
+    "CudaWeightShareConfig",
+    "get_cuda_weight_share_env",
+    "wrap_cuda_weight_share_command",
     "BridgeAdapter",
 ]
