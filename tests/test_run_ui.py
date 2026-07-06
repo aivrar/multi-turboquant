@@ -4,7 +4,14 @@
 import pytest
 
 from multi_turboquant import CacheMethod
-from run_ui import _command_config, api_generate_command, api_methods, api_presets
+from run_ui import (
+    _command_config,
+    _command_context_extension_config,
+    api_generate_command,
+    api_methods,
+    api_presets,
+    api_scan_llamacpp,
+)
 
 
 def test_command_config_translates_triattention_k_method_to_flag():
@@ -99,6 +106,72 @@ def test_api_generate_command_supports_cuda_weight_share_wrapper():
     assert "MODEL_SIZE_TOLERANCE=1024" in result["command"]
     assert "CUDA_VRAM_IPC_NAME=/cuda_vram_ipc_test" in result["command"]
     assert "llama-server" in result["command"]
+
+
+def test_command_context_extension_config_parses_ui_values():
+    assert _command_context_extension_config({"rope_scaling": "off"}) is None
+
+    config = _command_context_extension_config({
+        "rope_scale": "8",
+        "yarn_orig_ctx": "4096",
+        "yarn_ext_factor": "0",
+        "yarn_attn_factor": "1.1",
+    })
+
+    assert config.rope_scaling is None
+    assert config.rope_scale == 8.0
+    assert config.yarn_orig_ctx == 4096
+    assert config.yarn_ext_factor == 0.0
+    assert config.yarn_attn_factor == 1.1
+
+
+def test_api_generate_command_supports_context_extension_flags():
+    result = api_generate_command({
+        "k_method": "f16",
+        "v_method": "f16",
+        "model_path": "/opt/models/model.gguf",
+        "port": 8080,
+        "context": 32768,
+        "parallel": 1,
+        "rope_scale": "8",
+        "yarn_orig_ctx": "4096",
+    })
+
+    assert "-c 32768" in result["command"]
+    assert "--rope-scaling yarn" in result["command"]
+    assert "--rope-scale 8.0" in result["command"]
+    assert "--yarn-orig-ctx 4096" in result["command"]
+    assert not any(issue["method"] == "command" for issue in result["issues"])
+
+
+def test_api_generate_command_reports_invalid_context_extension():
+    result = api_generate_command({
+        "k_method": "f16",
+        "v_method": "f16",
+        "model_path": "/opt/models/model.gguf",
+        "port": 8080,
+        "context": 32768,
+        "parallel": 1,
+        "rope_scaling": "linear",
+        "yarn_orig_ctx": "4096",
+    })
+
+    assert result["command"] == ""
+    assert any(
+        issue["method"] == "command" and "YaRN options require" in issue["message"]
+        for issue in result["issues"]
+    )
+
+
+def test_api_scan_llamacpp_reports_missing_binary():
+    result = api_scan_llamacpp({
+        "binary": "__definitely_missing_llama_server__",
+        "timeout_seconds": "0.1",
+    })
+
+    assert result["binary"] == "__definitely_missing_llama_server__"
+    assert result["scanned"] is False
+    assert result["error"]
 
 
 def test_api_methods_include_backend_only_kvarn():
