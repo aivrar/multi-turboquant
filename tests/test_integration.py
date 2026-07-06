@@ -472,6 +472,7 @@ class TestPresetIntegration:
         "k_only_iso", "k_only_planar", "balanced", "speed",
         "max_compression", "quality", "extreme", "long_context",
         "no_calibration_symmetric", "no_calibration_quality",
+        "godzilla_kvarn4", "godzilla_kvarn2_max", "godzilla_kvarn8_quality",
     ])
     def test_preset_config_valid(self, preset_name):
         config = get_preset(preset_name)

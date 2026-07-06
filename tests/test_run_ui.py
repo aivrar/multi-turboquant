@@ -4,7 +4,7 @@
 import pytest
 
 from multi_turboquant import CacheMethod
-from run_ui import _command_config, api_generate_command
+from run_ui import _command_config, api_generate_command, api_methods, api_presets
 
 
 def test_command_config_translates_triattention_k_method_to_flag():
@@ -99,3 +99,58 @@ def test_api_generate_command_supports_cuda_weight_share_wrapper():
     assert "MODEL_SIZE_TOLERANCE=1024" in result["command"]
     assert "CUDA_VRAM_IPC_NAME=/cuda_vram_ipc_test" in result["command"]
     assert "llama-server" in result["command"]
+
+
+def test_api_methods_include_backend_only_kvarn():
+    methods = api_methods()
+    kvarn = [m for m in methods if m["value"] == "kvarn4"]
+    assert len(kvarn) == 1
+    assert kvarn[0]["family"] == "kvarn"
+    assert kvarn[0]["backend_only"] is True
+
+
+def test_api_presets_include_godzilla_kvarn():
+    presets = api_presets()
+    preset = [p for p in presets if p["name"] == "godzilla_kvarn4"]
+    assert len(preset) == 1
+    assert preset[0]["k_method"] == "kvarn4"
+    assert preset[0]["v_method"] == "kvarn4"
+
+
+def test_api_generate_command_supports_godzilla_kvarn_dflash():
+    result = api_generate_command({
+        "fork_profile": "godzilla",
+        "k_method": "kvarn4",
+        "v_method": "kvarn4",
+        "model_path": "/opt/models/model.gguf",
+        "port": 8080,
+        "context": 8192,
+        "parallel": 1,
+        "spec_dflash": True,
+        "spec_draft_model": "/opt/models/draft.gguf",
+        "spec_draft_n_max": 16,
+        "spec_branch_budget": 0,
+        "spec_dflash_cross_ctx": 512,
+        "spec_draft_gpu_layers": "all",
+    })
+
+    assert "--cache-type-k kvarn4" in result["command"]
+    assert "--cache-type-v kvarn4" in result["command"]
+    assert "--spec-type dflash" in result["command"]
+    assert "--spec-draft-model /opt/models/draft.gguf" in result["command"]
+    assert "--spec-draft-n-max 16" in result["command"]
+    assert not any(issue["method"] == "command" for issue in result["issues"])
+
+
+def test_api_generate_command_rejects_kvarn_without_godzilla_profile():
+    result = api_generate_command({
+        "k_method": "kvarn4",
+        "v_method": "kvarn4",
+        "model_path": "/opt/models/model.gguf",
+        "port": 8080,
+        "context": 8192,
+        "parallel": 1,
+    })
+
+    assert result["command"] == ""
+    assert any(issue["method"] == "command" for issue in result["issues"])

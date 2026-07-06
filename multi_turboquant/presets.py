@@ -91,6 +91,25 @@ PRESETS: dict[str, CacheConfig] = {
         # Higher quality than iso3.
     ),
 
+    # === Godzilla llama.cpp KVarN presets (backend-only extension) ===
+
+    "godzilla_kvarn4": CacheConfig(
+        k_method=CacheMethod.KVARN4,
+        v_method=CacheMethod.KVARN4,
+        # Godzilla llama.cpp only. Calibration-free KVarN target cache.
+        # Requires fork_profile="godzilla" and 128-slice-compatible heads.
+    ),
+    "godzilla_kvarn2_max": CacheConfig(
+        k_method=CacheMethod.KVARN2,
+        v_method=CacheMethod.KVARN2,
+        # Most aggressive Godzilla KVarN preset. Verify quality per model.
+    ),
+    "godzilla_kvarn8_quality": CacheConfig(
+        k_method=CacheMethod.KVARN8,
+        v_method=CacheMethod.KVARN8,
+        # Conservative KVarN preset for quality-sensitive runs.
+    ),
+
     # === Agent-optimized presets (multi-slot, dual GPU) ===
 
     "agents_8x16k": CacheConfig(
@@ -149,6 +168,9 @@ def get_preset(name: str) -> CacheConfig:
 def list_presets() -> dict[str, str]:
     """Return preset names with short descriptions."""
     descriptions = {
+        "godzilla_kvarn4": "Godzilla KVarN4 symmetric - backend-only, no calibration",
+        "godzilla_kvarn2_max": "Godzilla KVarN2 symmetric - maximum KVarN compression",
+        "godzilla_kvarn8_quality": "Godzilla KVarN8 symmetric - quality-focused",
         "k_only_iso": "ISO3 K-only — free 5x K compression, beats FP16 speed",
         "k_only_planar": "Planar3 K-only — simplest transform, Metal support",
         "balanced": "Turbo3 TCQ symmetric — best quality at 5x compression",

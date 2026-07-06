@@ -31,8 +31,18 @@ from multi_turboquant.hardware import detect_platform, detect_gpus
 from multi_turboquant.compatibility import (
     check_config, get_available_methods, get_recommended_config,
 )
-from multi_turboquant.config import METHOD_BITS
+from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
 from multi_turboquant.integration import CudaWeightShareConfig
+
+
+BACKEND_ONLY_METHODS = (
+    CacheMethod.KVARN2,
+    CacheMethod.KVARN3,
+    CacheMethod.KVARN4,
+    CacheMethod.KVARN5,
+    CacheMethod.KVARN6,
+    CacheMethod.KVARN8,
+)
 
 
 # ─── API Handlers ───────────────────────────────────────────────────────────────
@@ -51,7 +61,7 @@ def api_status():
         "cuda": plat.cuda_available,
         "torch_version": torch.__version__,
         "torch_cuda": torch.cuda.is_available(),
-        "methods": len(registered_methods()),
+        "methods": len(registered_methods()) + len(BACKEND_ONLY_METHODS),
         "presets": len(list_presets()),
     }
 
@@ -71,6 +81,24 @@ def api_methods():
             "transform": info.transform_name,
             "description": info.description,
             "fma_count": info.fma_count,
+            "backend_only": False,
+        })
+    for m in BACKEND_ONLY_METHODS:
+        bits = METHOD_BITS[m]
+        methods.append({
+            "value": m.value,
+            "family": METHOD_FAMILIES[m].value,
+            "bits": bits,
+            "compression": round(16.0 / bits, 1),
+            "requires_calibration": m in CALIBRATION_REQUIRED,
+            "supports_asymmetric": True,
+            "transform": "KVarN",
+            "description": (
+                "Godzilla llama.cpp target-cache alias; requires "
+                "fork_profile=godzilla and 128-slice-compatible heads."
+            ),
+            "fma_count": 0,
+            "backend_only": True,
         })
     return methods
 
@@ -162,6 +190,18 @@ def _optional_int(value, default=None):
     return int(value)
 
 
+def _optional_float(value, default=None):
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
+def _optional_text(value):
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
 def _command_config(params):
     """Build a CacheConfig from command-generator params.
 
@@ -221,11 +261,45 @@ def _cuda_weight_share_config(params):
     )
 
 
+def _command_speculative_config(params):
+    spec_type = params.get("spec_type")
+    if _truthy(params.get("spec_dflash")):
+        spec_type = "dflash"
+    elif _truthy(params.get("spec_mtp")):
+        spec_type = "draft-mtp"
+    if not spec_type or spec_type == "none":
+        return None
+
+    from multi_turboquant.integration import LlamaCppSpeculativeConfig
+
+    return LlamaCppSpeculativeConfig(
+        spec_type=spec_type,
+        draft_model=_optional_text(params.get("spec_draft_model")),
+        draft_hf=_optional_text(params.get("spec_draft_hf")),
+        draft_context_size=_optional_int(params.get("spec_draft_context")),
+        draft_gpu_layers=_optional_text(params.get("spec_draft_gpu_layers")),
+        draft_device=_optional_text(params.get("spec_draft_device")),
+        draft_cache_type_k=_optional_text(params.get("spec_draft_cache_k")),
+        draft_cache_type_v=_optional_text(params.get("spec_draft_cache_v")),
+        draft_n_max=_optional_int(params.get("spec_draft_n_max")),
+        draft_n_min=_optional_int(params.get("spec_draft_n_min")),
+        branch_budget=_optional_int(params.get("spec_branch_budget")),
+        draft_top_k=_optional_int(params.get("spec_draft_top_k")),
+        draft_p_split=_optional_float(params.get("spec_draft_p_split")),
+        draft_p_min=_optional_float(params.get("spec_draft_p_min")),
+        draft_temp=_optional_text(params.get("spec_draft_temp")),
+        dflash_cross_ctx=_optional_int(params.get("spec_dflash_cross_ctx")),
+        dflash_max_slots=_optional_int(params.get("spec_dflash_max_slots")),
+    )
+
+
 def api_generate_command(params):
     """Generate a llama.cpp or vLLM launch command."""
     from multi_turboquant.integration import get_llamacpp_command
     config = _command_config(params)
     cuda_weight_share = _cuda_weight_share_config(params)
+    fork_profile = params.get("fork_profile") or params.get("llamacpp_profile") or "upstream"
+    speculative = _command_speculative_config(params)
     issues = []
     command = ""
     missing_patched_triattention_stats = (
@@ -243,6 +317,8 @@ def api_generate_command(params):
                 tensor_split=params.get("tensor_split"),
                 parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
                 cuda_weight_share=cuda_weight_share,
+                fork_profile=fork_profile,
+                speculative=speculative,
             )
             command = " ".join(cmd)
         except ValueError as e:
@@ -250,7 +326,7 @@ def api_generate_command(params):
                            "message": str(e), "suggestion": "Fix the command inputs."})
 
     plat = detect_platform()
-    for issue in check_config(config, plat):
+    for issue in check_config(config, plat, fork_profile=fork_profile):
         issues.append({"severity": issue.severity, "method": issue.method,
                         "message": issue.message, "suggestion": issue.suggestion})
     if cuda_weight_share is not None:
@@ -292,6 +368,7 @@ h1 { color: #58a6ff; font-size: 24px; margin-bottom: 4px; }
 .tag-planar { background: #a371f733; color: #bc8cff; }
 .tag-rotor { background: #ff7b7233; color: #ff7b72; }
 .tag-tri { background: #f0883e33; color: #f0883e; }
+.tag-kvarn { background: #2f81f733; color: #79c0ff; }
 .tag-tcq { background: #1f6feb33; color: #79c0ff; }
 .tag-free { background: #23863633; color: #3fb950; font-size: 10px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -389,6 +466,11 @@ button.secondary:hover { background: #3d444d; }
     <div class="card full">
       <h2>Command Generator</h2>
       <div class="form-row">
+        <div><label>Profile</label><select id="cmd-profile" onchange="generateCommand()">
+          <option value="upstream" selected>upstream</option>
+          <option value="patched_triattention">patched_triattention</option>
+          <option value="godzilla">godzilla</option>
+        </select></div>
         <div><label>K Method</label><select id="cmd-k" onchange="generateCommand()">
           <option value="f16">f16</option>
         </select></div>
@@ -396,12 +478,24 @@ button.secondary:hover { background: #3d444d; }
           <option value="f16">f16</option>
         </select></div>
         <div><label>Context</label><input type="number" id="cmd-ctx" value="4096" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div style="grid-column:1/4"><label>Model Path</label>
+          <input type="text" id="cmd-model" value="/opt/models/model.gguf" onchange="generateCommand()">
+        </div>
         <div><label>Parallel Slots</label><input type="number" id="cmd-parallel" value="1" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
-        <div style="grid-column:1/-1"><label>Model Path</label>
-          <input type="text" id="cmd-model" value="/opt/models/model.gguf" onchange="generateCommand()">
-        </div>
+        <div><label><input type="checkbox" id="cmd-spec-dflash" onchange="generateCommand()"> DFlash</label></div>
+        <div><label>Draft Model</label><input type="text" id="cmd-spec-draft-model" value="" placeholder="draft.gguf" onchange="generateCommand()"></div>
+        <div><label>Draft N Max</label><input type="number" id="cmd-spec-draft-n-max" value="16" onchange="generateCommand()"></div>
+        <div><label>DFlash Cross Ctx</label><input type="number" id="cmd-spec-cross-ctx" value="512" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Draft GPU Layers</label><input type="text" id="cmd-spec-draft-ngl" value="all" onchange="generateCommand()"></div>
+        <div><label>Branch Budget</label><input type="number" id="cmd-spec-branch-budget" value="0" onchange="generateCommand()"></div>
+        <div><label>Draft K Cache</label><input type="text" id="cmd-spec-cache-k" value="" placeholder="f16" onchange="generateCommand()"></div>
+        <div><label>Draft V Cache</label><input type="text" id="cmd-spec-cache-v" value="" placeholder="f16" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri" onchange="generateCommand()"> TriAttention</label></div>
@@ -441,7 +535,7 @@ async function api(path, body) {
 }
 
 function familyTag(family) {
-  const tags = {turboquant:'tag-turbo',tcq:'tag-tcq',isoquant:'tag-iso',planarquant:'tag-planar',rotorquant:'tag-rotor',triattention:'tag-tri'};
+  const tags = {turboquant:'tag-turbo',tcq:'tag-tcq',isoquant:'tag-iso',planarquant:'tag-planar',rotorquant:'tag-rotor',kvarn:'tag-kvarn',triattention:'tag-tri'};
   return `<span class="tag ${tags[family]||''}">${family}</span>`;
 }
 
@@ -477,7 +571,8 @@ async function init() {
   let mHtml = '<table><tr><th>Method</th><th>Family</th><th>Bits</th><th class="num">Ratio</th><th>Calibration</th><th>Description</th></tr>';
   methods.forEach(m => {
     const cal = m.requires_calibration ? 'Required' : '<span class="tag tag-free">Free</span>';
-    mHtml += `<tr><td><b>${m.value}</b></td><td>${familyTag(m.family)}</td>
+    const backend = m.backend_only ? '<span class="tag tag-free">Backend</span>' : '';
+    mHtml += `<tr><td><b>${m.value}</b> ${backend}</td><td>${familyTag(m.family)}</td>
       <td class="num">${m.bits}</td><td class="num">${m.compression}x</td>
       <td>${cal}</td><td style="color:#8b949e">${m.description}</td></tr>`;
   });
@@ -547,11 +642,20 @@ async function runBenchmark() {
 
 async function generateCommand() {
   const result = await api('/api/command', {
+    fork_profile: document.getElementById('cmd-profile').value,
     k_method: document.getElementById('cmd-k').value,
     v_method: document.getElementById('cmd-v').value,
     model_path: document.getElementById('cmd-model').value,
     context: document.getElementById('cmd-ctx').value,
     parallel: document.getElementById('cmd-parallel').value,
+    spec_dflash: document.getElementById('cmd-spec-dflash').checked,
+    spec_draft_model: document.getElementById('cmd-spec-draft-model').value,
+    spec_draft_n_max: document.getElementById('cmd-spec-draft-n-max').value,
+    spec_dflash_cross_ctx: document.getElementById('cmd-spec-cross-ctx').value,
+    spec_draft_gpu_layers: document.getElementById('cmd-spec-draft-ngl').value,
+    spec_branch_budget: document.getElementById('cmd-spec-branch-budget').value,
+    spec_draft_cache_k: document.getElementById('cmd-spec-cache-k').value,
+    spec_draft_cache_v: document.getElementById('cmd-spec-cache-v').value,
     triattention: document.getElementById('cmd-tri').checked,
     use_custom_triattention_llamacpp: document.getElementById('cmd-tri-custom').checked,
     triattention_stats_path: document.getElementById('cmd-tri-stats').value,

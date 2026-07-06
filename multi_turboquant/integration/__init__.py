@@ -8,7 +8,13 @@ Modules:
 """
 
 from .vllm_patch import patch_vllm, is_vllm_patched
-from .llamacpp_args import get_llamacpp_args, get_llamacpp_command
+from .llamacpp_args import (
+    LlamaCppProfile,
+    LlamaCppSpeculativeConfig,
+    get_llamacpp_args,
+    get_llamacpp_command,
+    normalize_llamacpp_profile,
+)
 from .weight_share import (
     CudaWeightShareConfig,
     get_cuda_weight_share_env,
@@ -21,6 +27,9 @@ __all__ = [
     "is_vllm_patched",
     "get_llamacpp_args",
     "get_llamacpp_command",
+    "LlamaCppProfile",
+    "LlamaCppSpeculativeConfig",
+    "normalize_llamacpp_profile",
     "CudaWeightShareConfig",
     "get_cuda_weight_share_env",
     "wrap_cuda_weight_share_command",
