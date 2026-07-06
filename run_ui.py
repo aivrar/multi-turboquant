@@ -32,7 +32,11 @@ from multi_turboquant.compatibility import (
     check_config, get_available_methods, get_recommended_config,
 )
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
-from multi_turboquant.integration import CudaWeightShareConfig
+from multi_turboquant.integration import (
+    CudaWeightShareConfig,
+    LlamaCppContextExtensionConfig,
+    scan_llamacpp_binary,
+)
 
 
 BACKEND_ONLY_METHODS = (
@@ -293,6 +297,35 @@ def _command_speculative_config(params):
     )
 
 
+def _command_context_extension_config(params):
+    rope_scaling = _optional_text(params.get("rope_scaling"))
+    if rope_scaling is not None:
+        rope_scaling = rope_scaling.strip().lower()
+        if rope_scaling in {"", "off"}:
+            rope_scaling = None
+
+    values = {
+        "rope_scaling": rope_scaling,
+        "rope_scale": _optional_float(params.get("rope_scale")),
+        "rope_freq_base": _optional_float(params.get("rope_freq_base")),
+        "rope_freq_scale": _optional_float(params.get("rope_freq_scale")),
+        "yarn_orig_ctx": _optional_int(params.get("yarn_orig_ctx")),
+        "yarn_ext_factor": _optional_float(params.get("yarn_ext_factor")),
+        "yarn_attn_factor": _optional_float(params.get("yarn_attn_factor")),
+        "yarn_beta_slow": _optional_float(params.get("yarn_beta_slow")),
+        "yarn_beta_fast": _optional_float(params.get("yarn_beta_fast")),
+    }
+    if not any(value is not None for value in values.values()):
+        return None
+    return LlamaCppContextExtensionConfig(**values)
+
+
+def api_scan_llamacpp(params):
+    binary = _optional_text(params.get("binary")) or "llama-server"
+    timeout = _optional_float(params.get("timeout_seconds"), 10.0)
+    return scan_llamacpp_binary(binary, timeout_seconds=timeout).to_dict()
+
+
 def api_generate_command(params):
     """Generate a llama.cpp or vLLM launch command."""
     from multi_turboquant.integration import get_llamacpp_command
@@ -300,6 +333,7 @@ def api_generate_command(params):
     cuda_weight_share = _cuda_weight_share_config(params)
     fork_profile = params.get("fork_profile") or params.get("llamacpp_profile") or "upstream"
     speculative = _command_speculative_config(params)
+    context_extension = _command_context_extension_config(params)
     issues = []
     command = ""
     missing_patched_triattention_stats = (
@@ -311,6 +345,7 @@ def api_generate_command(params):
         try:
             cmd = get_llamacpp_command(
                 config,
+                binary=params.get("binary") or "llama-server",
                 model_path=params.get("model_path", "/opt/models/model.gguf"),
                 port=int(params.get("port", 8080)),
                 context_size=int(params.get("context", 4096)),
@@ -318,6 +353,7 @@ def api_generate_command(params):
                 parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
                 cuda_weight_share=cuda_weight_share,
                 fork_profile=fork_profile,
+                context_extension=context_extension,
                 speculative=speculative,
             )
             command = " ".join(cmd)
@@ -371,6 +407,14 @@ h1 { color: #58a6ff; font-size: 24px; margin-bottom: 4px; }
 .tag-kvarn { background: #2f81f733; color: #79c0ff; }
 .tag-tcq { background: #1f6feb33; color: #79c0ff; }
 .tag-free { background: #23863633; color: #3fb950; font-size: 10px; }
+.capability-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
+.capability { border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px;
+              font-size: 11px; color: #8b949e; }
+.cap-ok { border-color: #238636; color: #3fb950; }
+.cap-warn { border-color: #d29922; color: #d29922; }
+.cap-bad { border-color: #f85149; color: #ff7b72; }
+.mini-label { color: #8b949e; font-size: 11px; text-transform: uppercase;
+              letter-spacing: 0.5px; margin: 8px 0; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: #8b949e; font-weight: 600; padding: 8px 6px;
      border-bottom: 2px solid #30363d; }
@@ -466,6 +510,15 @@ button.secondary:hover { background: #3d444d; }
     <div class="card full">
       <h2>Command Generator</h2>
       <div class="form-row">
+        <div style="grid-column:1/4"><label title="Path to the llama.cpp-compatible server binary used for both scanning and command generation.">llama-server Binary</label>
+          <input type="text" id="cmd-binary" value="llama-server" onchange="generateCommand()">
+        </div>
+        <div><label>&nbsp;</label><button class="secondary" onclick="scanLlamaCpp()">Scan</button></div>
+      </div>
+      <div class="capability-row" id="cmd-capabilities">
+        <span class="capability">Not scanned</span>
+      </div>
+      <div class="form-row">
         <div><label>Profile</label><select id="cmd-profile" onchange="generateCommand()">
           <option value="upstream" selected>upstream</option>
           <option value="patched_triattention">patched_triattention</option>
@@ -478,6 +531,27 @@ button.secondary:hover { background: #3d444d; }
           <option value="f16">f16</option>
         </select></div>
         <div><label>Context</label><input type="number" id="cmd-ctx" value="4096" onchange="generateCommand()"></div>
+      </div>
+      <div class="mini-label">Context Extension</div>
+      <div class="form-row">
+        <div><label title="Select the RoPE scaling mode passed to llama.cpp. Leave model default unless extending beyond the model's trained context.">RoPE Mode</label><select id="cmd-rope-scaling" onchange="generateCommand()">
+          <option value="" selected>model default</option>
+          <option value="linear">linear</option>
+          <option value="yarn">YaRN</option>
+          <option value="none">none</option>
+        </select></div>
+        <div><label title="Context scaling factor. For example, 8 extends a 4K-trained model toward a 32K target.">RoPE Scale</label><input type="number" step="0.0001" id="cmd-rope-scale" value="" placeholder="8" onchange="generateCommand()"></div>
+        <div><label title="Original trained context for YaRN. Use the model's training context, such as 4096 or 8192.">YaRN Orig Ctx</label><input type="number" id="cmd-yarn-orig-ctx" value="" placeholder="4096" onchange="generateCommand()"></div>
+        <div><label title="RoPE base frequency override for models or experiments that need a custom base.">Freq Base</label><input type="number" step="0.0001" id="cmd-rope-freq-base" value="" placeholder="10000" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div><label title="RoPE frequency scale. This conflicts with RoPE Scale because llama.cpp maps both to frequency scaling.">Freq Scale</label><input type="number" step="0.0001" id="cmd-rope-freq-scale" value="" placeholder="0.125" onchange="generateCommand()"></div>
+        <div><label title="YaRN extrapolation mix factor. Zero means full interpolation; leave blank for llama.cpp default.">YaRN Ext</label><input type="number" step="0.0001" id="cmd-yarn-ext-factor" value="" placeholder="0" onchange="generateCommand()"></div>
+        <div><label title="YaRN attention magnitude factor. Leave blank unless a model card specifies it.">YaRN Attn</label><input type="number" step="0.0001" id="cmd-yarn-attn-factor" value="" placeholder="1" onchange="generateCommand()"></div>
+        <div><label title="YaRN correction range. Use slow,fast such as 1,32 if a model card or experiment specifies it.">YaRN Beta Slow/Fast</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+          <input type="number" step="0.0001" id="cmd-yarn-beta-slow" value="" placeholder="1" onchange="generateCommand()">
+          <input type="number" step="0.0001" id="cmd-yarn-beta-fast" value="" placeholder="32" onchange="generateCommand()">
+        </div></div>
       </div>
       <div class="form-row">
         <div style="grid-column:1/4"><label>Model Path</label>
@@ -527,6 +601,7 @@ button.secondary:hover { background: #3d444d; }
 
 <script>
 const API = '';
+let llamaCppCapabilities = null;
 
 async function api(path, body) {
   const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
@@ -534,9 +609,50 @@ async function api(path, body) {
   return r.json();
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
+
 function familyTag(family) {
   const tags = {turboquant:'tag-turbo',tcq:'tag-tcq',isoquant:'tag-iso',planarquant:'tag-planar',rotorquant:'tag-rotor',kvarn:'tag-kvarn',triattention:'tag-tri'};
   return `<span class="tag ${tags[family]||''}">${family}</span>`;
+}
+
+function capabilityTag(label, ok, title='') {
+  const cls = ok ? 'cap-ok' : 'cap-warn';
+  return `<span class="capability ${cls}" title="${escapeHtml(title)}">${escapeHtml(label)} ${ok ? 'ok' : 'missing'}</span>`;
+}
+
+function renderCapabilities(cap) {
+  const el = document.getElementById('cmd-capabilities');
+  if (!cap) {
+    el.innerHTML = '<span class="capability">Not scanned</span>';
+    return;
+  }
+  if (cap.error) {
+    el.innerHTML = `<span class="capability cap-bad" title="${escapeHtml(cap.error)}">Scan failed</span>`;
+    return;
+  }
+  el.innerHTML = [
+    capabilityTag('Context', cap.supports_context_extension, 'RoPE scaling flags'),
+    capabilityTag('YaRN', cap.supports_yarn, 'YaRN context-extension flags'),
+    capabilityTag('TriAttn', cap.supports_triattention, 'Patched TriAttention flags'),
+    capabilityTag('KVarN', cap.supports_kvarn, 'Godzilla KVarN cache aliases'),
+    capabilityTag('DFlash', cap.supports_dflash, 'Godzilla DFlash speculative flags'),
+    capabilityTag('/props', cap.supports_props_endpoint, 'llama.cpp server props endpoint'),
+  ].join('');
+}
+
+async function scanLlamaCpp() {
+  const el = document.getElementById('cmd-capabilities');
+  el.innerHTML = '<span class="capability">Scanning...</span>';
+  llamaCppCapabilities = await api('/api/llamacpp/scan', {
+    binary: document.getElementById('cmd-binary').value,
+  });
+  renderCapabilities(llamaCppCapabilities);
+  generateCommand();
 }
 
 async function init() {
@@ -640,14 +756,24 @@ async function runBenchmark() {
   el.innerHTML = html;
 }
 
-async function generateCommand() {
-  const result = await api('/api/command', {
+function commandPayload() {
+  return {
+    binary: document.getElementById('cmd-binary').value,
     fork_profile: document.getElementById('cmd-profile').value,
     k_method: document.getElementById('cmd-k').value,
     v_method: document.getElementById('cmd-v').value,
     model_path: document.getElementById('cmd-model').value,
     context: document.getElementById('cmd-ctx').value,
     parallel: document.getElementById('cmd-parallel').value,
+    rope_scaling: document.getElementById('cmd-rope-scaling').value,
+    rope_scale: document.getElementById('cmd-rope-scale').value,
+    rope_freq_base: document.getElementById('cmd-rope-freq-base').value,
+    rope_freq_scale: document.getElementById('cmd-rope-freq-scale').value,
+    yarn_orig_ctx: document.getElementById('cmd-yarn-orig-ctx').value,
+    yarn_ext_factor: document.getElementById('cmd-yarn-ext-factor').value,
+    yarn_attn_factor: document.getElementById('cmd-yarn-attn-factor').value,
+    yarn_beta_slow: document.getElementById('cmd-yarn-beta-slow').value,
+    yarn_beta_fast: document.getElementById('cmd-yarn-beta-fast').value,
     spec_dflash: document.getElementById('cmd-spec-dflash').checked,
     spec_draft_model: document.getElementById('cmd-spec-draft-model').value,
     spec_draft_n_max: document.getElementById('cmd-spec-draft-n-max').value,
@@ -669,7 +795,47 @@ async function generateCommand() {
     cuda_weight_share_ipc_name: document.getElementById('cmd-ws-ipc').value,
     cuda_weight_share_shm_wait_sec: document.getElementById('cmd-ws-wait').value,
     cuda_weight_share_trace: document.getElementById('cmd-ws-trace').checked,
-  });
+  };
+}
+
+function scannerWarnings(payload) {
+  if (!llamaCppCapabilities || !llamaCppCapabilities.scanned || llamaCppCapabilities.error) {
+    return [];
+  }
+  const warnings = [];
+  const wantsContext = payload.rope_scaling || payload.rope_scale ||
+    payload.rope_freq_base || payload.rope_freq_scale || payload.yarn_orig_ctx ||
+    payload.yarn_ext_factor || payload.yarn_attn_factor ||
+    payload.yarn_beta_slow || payload.yarn_beta_fast;
+  const wantsYarn = payload.rope_scaling === 'yarn' || payload.yarn_orig_ctx ||
+    payload.yarn_ext_factor || payload.yarn_attn_factor ||
+    payload.yarn_beta_slow || payload.yarn_beta_fast;
+  if (wantsContext && !llamaCppCapabilities.supports_context_extension) {
+    warnings.push('The scanned binary does not advertise RoPE context-extension flags.');
+  }
+  if (wantsYarn && !llamaCppCapabilities.supports_yarn) {
+    warnings.push('The scanned binary does not advertise YaRN flags.');
+  }
+  if (payload.use_custom_triattention_llamacpp && !llamaCppCapabilities.supports_triattention) {
+    warnings.push('The scanned binary does not advertise patched TriAttention flags.');
+  }
+  if ((payload.k_method || '').startsWith('kvarn') || (payload.v_method || '').startsWith('kvarn')) {
+    if (payload.triattention || payload.use_custom_triattention_llamacpp) {
+      warnings.push('Godzilla rejects KVarN with TriAttention until KVarN-aware prune is implemented.');
+    }
+    if (!llamaCppCapabilities.supports_kvarn) {
+      warnings.push('The scanned binary does not advertise Godzilla KVarN cache aliases.');
+    }
+  }
+  if (payload.spec_dflash && !llamaCppCapabilities.supports_dflash) {
+    warnings.push('The scanned binary does not advertise DFlash speculative flags.');
+  }
+  return warnings;
+}
+
+async function generateCommand() {
+  const payload = commandPayload();
+  const result = await api('/api/command', payload);
   let txt = result.command || 'Fix errors below to generate a command.';
   if (result.issues?.length) {
     txt += '\\n\\nIssues:';
@@ -677,6 +843,11 @@ async function generateCommand() {
       txt += `\\n  [${i.severity}] ${i.message}`;
       if (i.suggestion) txt += `\\n    Fix: ${i.suggestion}`;
     });
+  }
+  const warnings = scannerWarnings(payload);
+  if (warnings.length) {
+    txt += '\\n\\nScanner warnings:';
+    warnings.forEach(w => { txt += `\\n  [warning] ${w}`; });
   }
   document.getElementById('cmd-result').textContent = txt;
 }
@@ -725,6 +896,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
             self._json(api_plan(body))
         elif path == "/api/benchmark":
             self._json(api_benchmark(body))
+        elif path == "/api/llamacpp/scan":
+            self._json(api_scan_llamacpp(body))
         elif path == "/api/command":
             self._json(api_generate_command(body))
         else:

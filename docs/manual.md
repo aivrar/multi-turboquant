@@ -606,6 +606,67 @@ The available cache types depend on which llama.cpp fork you built:
 | johndpope/llama-cpp-turboquant | turbo2, turbo3, turbo4, iso3, iso4, planar3, planar4 |
 | ggml-org/llama.cpp (upstream) | f16, q8_0, q4_0, q5_0 (no TurboQuant) |
 
+### llama.cpp context extension (RoPE and YaRN)
+
+Context extension is separate from KV-cache compression. Multi-TurboQuant can
+generate llama.cpp startup flags for larger context windows and RoPE/YaRN
+scaling, then still generate the normal cache-type flags for the selected
+compression method:
+
+```python
+from multi_turboquant import get_preset
+from multi_turboquant.integration import (
+    LlamaCppContextExtensionConfig,
+    get_llamacpp_command,
+)
+
+config = get_preset("balanced")
+cmd = get_llamacpp_command(
+    config,
+    model_path="/opt/models/model.gguf",
+    context_size=32768,
+    context_extension=LlamaCppContextExtensionConfig(
+        rope_scaling="yarn",
+        rope_scale=8,
+        yarn_orig_ctx=4096,
+    ),
+)
+# ... -c 32768 --rope-scaling yarn --rope-scale 8 --yarn-orig-ctx 4096
+```
+
+Supported context-extension fields map directly to llama.cpp flags:
+
+| Field | llama.cpp flag |
+|-------|----------------|
+| `rope_scaling` | `--rope-scaling {none,linear,yarn}` |
+| `rope_scale` | `--rope-scale` |
+| `rope_freq_base` | `--rope-freq-base` |
+| `rope_freq_scale` | `--rope-freq-scale` |
+| `yarn_orig_ctx` | `--yarn-orig-ctx` |
+| `yarn_ext_factor` | `--yarn-ext-factor` |
+| `yarn_attn_factor` | `--yarn-attn-factor` |
+| `yarn_beta_slow` | `--yarn-beta-slow` |
+| `yarn_beta_fast` | `--yarn-beta-fast` |
+
+Validation is intentionally conservative:
+
+- YaRN fields require `rope_scaling="yarn"` or no explicit scaling value. If
+  YaRN fields are provided with no scaling value, the wrapper selects YaRN.
+- `rope_scale` and `rope_freq_scale` are mutually exclusive.
+- `rope_scaling="none"` rejects explicit scale/frequency-scale overrides.
+- Numeric scale/base/context values must be positive, except
+  `yarn_ext_factor`, which may be zero.
+
+These are launch-time `llama-server` flags. Current upstream `/props` does not
+provide runtime context-scaling updates, so the wrapper does not pretend that
+RoPE/YaRN can be changed after the server starts. Use the values recommended by
+the model card or validate with perplexity/task evals before deploying a longer
+context window.
+
+The web UI's command generator includes a `llama-server` binary scanner. It
+runs `--help`, then reports whether the selected binary advertises RoPE/YaRN,
+KVarN, TriAttention, speculative decoding, DFlash, and `/props` support.
+
 ### Godzilla KVarN and DFlash
 
 Use `fork_profile="godzilla"` when targeting `atomicmilkshake/godzilla-llama.cpp`.
@@ -639,7 +700,9 @@ Validation rules:
 
 - KVarN requires `fork_profile="godzilla"`.
 - K and V must both be KVarN methods.
-- KVarN cannot be combined with TriAttention.
+- KVarN cannot be combined with TriAttention in current Godzilla builds. The
+  fork rejects that pairing until KVarN-aware TriAttention pruning is
+  implemented (KVX-2).
 - `head_dim` must be 128, 256, 384, or 512.
 - Draft cache types cannot use KVarN aliases.
 
@@ -1347,9 +1410,11 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | atomicmilkshake / godzilla-llama.cpp | MIT |
 | BeeLlama / DFlash lineage | Anbeeld / beellama.cpp | MIT |
 | KVarN research and reference implementation | huawei-csl / KVarN | See upstream |
+| Context extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | ggml-org / llama.cpp, sheryc / resonance_rope, published papers | See upstream |
 | Godzilla + KVarN integration request and issue context | jawadala / issue #9 | Community contribution |
+| Context extension, Resonance RoPE review, UI scanner, and KVarN/TriAttention compatibility request | jawadala / issue #11 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation and compatibility integration only; Multi-TurboQuant does not vendor Godzilla, BeeLlama, or KVarN code. Credit goes to the upstream authors for the technical work and to @jawadala for identifying the integration target in issue #9.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation and compatibility integration only; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for identifying the Godzilla/KVarN integration target in issue #9 and the context-extension/UI scanner work in issue #11.
 
 ---
 

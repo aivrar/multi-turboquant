@@ -55,6 +55,36 @@ class LlamaCppSpeculativeConfig:
     extra_args: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class LlamaCppContextExtensionConfig:
+    """llama.cpp RoPE and YaRN context-extension arguments.
+
+    These settings are launch-time llama.cpp options. Upstream llama.cpp does
+    not currently support changing RoPE/YaRN scaling through POST /props.
+    """
+
+    rope_scaling: str | None = None
+    rope_scale: float | None = None
+    rope_freq_base: float | None = None
+    rope_freq_scale: float | None = None
+    yarn_orig_ctx: int | None = None
+    yarn_ext_factor: float | None = None
+    yarn_attn_factor: float | None = None
+    yarn_beta_slow: float | None = None
+    yarn_beta_fast: float | None = None
+    extra_args: tuple[str, ...] = ()
+
+
+LLAMACPP_ROPE_SCALING_TYPES = {"none", "linear", "yarn"}
+LLAMACPP_YARN_FIELDS = (
+    "yarn_orig_ctx",
+    "yarn_ext_factor",
+    "yarn_attn_factor",
+    "yarn_beta_slow",
+    "yarn_beta_fast",
+)
+
+
 def normalize_llamacpp_profile(
     profile: LlamaCppProfile | str | None,
 ) -> LlamaCppProfile:
@@ -140,7 +170,8 @@ def _validate_godzilla_kvarn_config(
         )
     if config.triattention_enabled:
         raise ValueError(
-            "Godzilla KVarN cannot be combined with TriAttention; disable "
+            "Godzilla currently rejects KVarN with TriAttention until "
+            "KVarN-aware prune is implemented (KVX-2). Disable "
             "triattention_enabled or choose non-KVarN cache types."
         )
 
@@ -158,6 +189,109 @@ def _non_negative_int(name: str, value: int | None) -> None:
 def _probability(name: str, value: float | None) -> None:
     if value is not None and not 0 <= value <= 1:
         raise ValueError(f"{name} must be between 0 and 1")
+
+
+def _positive_float(name: str, value: float | None) -> None:
+    if value is not None and value <= 0:
+        raise ValueError(f"{name} must be > 0")
+
+
+def _non_negative_float(name: str, value: float | None) -> None:
+    if value is not None and value < 0:
+        raise ValueError(f"{name} must be >= 0")
+
+
+def _normalize_rope_scaling(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if normalized not in LLAMACPP_ROPE_SCALING_TYPES:
+        allowed = ", ".join(sorted(LLAMACPP_ROPE_SCALING_TYPES))
+        raise ValueError(
+            f"Unknown rope_scaling {value!r}; expected one of: {allowed}"
+        )
+    return normalized
+
+
+def _uses_yarn_options(context_extension: LlamaCppContextExtensionConfig) -> bool:
+    return any(
+        getattr(context_extension, field) is not None
+        for field in LLAMACPP_YARN_FIELDS
+    )
+
+
+def _validate_context_extension(
+    context_extension: LlamaCppContextExtensionConfig,
+) -> str | None:
+    """Validate context-extension settings and return normalized scaling."""
+    rope_scaling = _normalize_rope_scaling(context_extension.rope_scaling)
+
+    _positive_float("rope_scale", context_extension.rope_scale)
+    _positive_float("rope_freq_base", context_extension.rope_freq_base)
+    _positive_float("rope_freq_scale", context_extension.rope_freq_scale)
+    _positive_int("yarn_orig_ctx", context_extension.yarn_orig_ctx)
+    _non_negative_float("yarn_ext_factor", context_extension.yarn_ext_factor)
+    _positive_float("yarn_attn_factor", context_extension.yarn_attn_factor)
+    _positive_float("yarn_beta_slow", context_extension.yarn_beta_slow)
+    _positive_float("yarn_beta_fast", context_extension.yarn_beta_fast)
+
+    if (
+        context_extension.rope_scale is not None
+        and context_extension.rope_freq_scale is not None
+    ):
+        raise ValueError("Use rope_scale or rope_freq_scale, not both")
+
+    if _uses_yarn_options(context_extension):
+        if rope_scaling in {"none", "linear"}:
+            raise ValueError(
+                "YaRN options require rope_scaling='yarn' or omitted "
+                "rope_scaling so the wrapper can select YaRN."
+            )
+        if rope_scaling is None:
+            rope_scaling = "yarn"
+
+    if rope_scaling == "none" and (
+        context_extension.rope_scale is not None
+        or context_extension.rope_freq_scale is not None
+    ):
+        raise ValueError(
+            "rope_scaling='none' cannot be combined with rope_scale or "
+            "rope_freq_scale"
+        )
+
+    for arg in context_extension.extra_args:
+        if not str(arg).strip():
+            raise ValueError("context extension extra_args cannot contain blanks")
+
+    return rope_scaling
+
+
+def _get_context_extension_args(
+    context_extension: LlamaCppContextExtensionConfig,
+) -> list[str]:
+    rope_scaling = _validate_context_extension(context_extension)
+    args: list[str] = []
+
+    if rope_scaling is not None:
+        args.extend(["--rope-scaling", rope_scaling])
+    if context_extension.rope_scale is not None:
+        args.extend(["--rope-scale", str(context_extension.rope_scale)])
+    if context_extension.rope_freq_base is not None:
+        args.extend(["--rope-freq-base", str(context_extension.rope_freq_base)])
+    if context_extension.rope_freq_scale is not None:
+        args.extend(["--rope-freq-scale", str(context_extension.rope_freq_scale)])
+    if context_extension.yarn_orig_ctx is not None:
+        args.extend(["--yarn-orig-ctx", str(context_extension.yarn_orig_ctx)])
+    if context_extension.yarn_ext_factor is not None:
+        args.extend(["--yarn-ext-factor", str(context_extension.yarn_ext_factor)])
+    if context_extension.yarn_attn_factor is not None:
+        args.extend(["--yarn-attn-factor", str(context_extension.yarn_attn_factor)])
+    if context_extension.yarn_beta_slow is not None:
+        args.extend(["--yarn-beta-slow", str(context_extension.yarn_beta_slow)])
+    if context_extension.yarn_beta_fast is not None:
+        args.extend(["--yarn-beta-fast", str(context_extension.yarn_beta_fast)])
+    args.extend(str(arg) for arg in context_extension.extra_args)
+    return args
 
 
 def _draft_cache_type(label: str, cache_type: CacheMethod | str) -> str:
@@ -294,6 +428,7 @@ def get_llamacpp_args(
     tensor_split: str | None = None,
     parallel_slots: int | None = None,
     fork_profile: LlamaCppProfile | str | None = LlamaCppProfile.UPSTREAM,
+    context_extension: LlamaCppContextExtensionConfig | None = None,
     speculative: LlamaCppSpeculativeConfig | None = None,
 ) -> list[str]:
     """Generate llama.cpp CLI arguments for a CacheConfig.
@@ -305,6 +440,7 @@ def get_llamacpp_args(
         context_size: Context window size.
         gpu_layers: Number of layers to offload to GPU.
         fork_profile: llama.cpp-compatible profile to target.
+        context_extension: RoPE/YaRN context-extension options.
         speculative: Godzilla speculative-decoding options.
 
     Returns:
@@ -364,6 +500,9 @@ def get_llamacpp_args(
 
     if context_size:
         args.extend(["-c", str(context_size)])
+
+    if context_extension is not None:
+        args.extend(_get_context_extension_args(context_extension))
 
     if gpu_layers is not None:
         args.extend(["-ngl", str(gpu_layers)])
@@ -430,6 +569,7 @@ def get_llamacpp_command(
     parallel_slots: int | None = None,
     cuda_weight_share: object | None = None,
     fork_profile: LlamaCppProfile | str | None = LlamaCppProfile.UPSTREAM,
+    context_extension: LlamaCppContextExtensionConfig | None = None,
     speculative: LlamaCppSpeculativeConfig | None = None,
     extra_args: list[str] | None = None,
 ) -> list[str]:
@@ -444,6 +584,7 @@ def get_llamacpp_command(
         context_size: Context window size.
         gpu_layers: GPU layer count.
         fork_profile: llama.cpp-compatible profile to target.
+        context_extension: RoPE/YaRN context-extension options.
         speculative: Godzilla speculative-decoding options.
         extra_args: Additional CLI arguments.
 
@@ -459,6 +600,7 @@ def get_llamacpp_command(
         tensor_split=tensor_split,
         parallel_slots=parallel_slots,
         fork_profile=fork_profile,
+        context_extension=context_extension,
         speculative=speculative,
     ))
     cmd.extend(["--host", host, "--port", str(port)])

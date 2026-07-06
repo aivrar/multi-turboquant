@@ -125,6 +125,35 @@ cmd = get_llamacpp_command(
 #   -fa on -c 131072 --tensor-split 24,12 --parallel 8
 ```
 
+### llama.cpp context extension
+
+Multi-TurboQuant can generate llama.cpp launch-time RoPE and YaRN flags while
+keeping KV-cache compression separate from context scaling:
+
+```python
+from multi_turboquant.integration import (
+    LlamaCppContextExtensionConfig,
+    get_llamacpp_command,
+)
+
+cmd = get_llamacpp_command(
+    config,
+    model_path="/opt/models/model.gguf",
+    context_size=32768,
+    context_extension=LlamaCppContextExtensionConfig(
+        rope_scaling="yarn",
+        rope_scale=8,
+        yarn_orig_ctx=4096,
+    ),
+)
+# ... -c 32768 --rope-scaling yarn --rope-scale 8 --yarn-orig-ctx 4096
+```
+
+These are startup flags for `llama-server`, not runtime `/props` mutations. Use
+the values recommended by the model card or your own evals. The web UI includes
+a binary scanner that checks whether the selected `llama-server` advertises
+RoPE, YaRN, KVarN, TriAttention, speculative, and DFlash flags before you run it.
+
 ### Patched llama.cpp TriAttention
 
 TriAttention is token eviction, not a K/V cache dtype. Upstream llama.cpp ignores
@@ -334,6 +363,9 @@ multi_turboquant/
 
 Full manual with 23 chapters: **[docs/manual.md](docs/manual.md)**
 
+Context extension research and implementation notes:
+**[docs/context-extension.md](docs/context-extension.md)**
+
 ## Attribution
 
 This project reimplements algorithms from published research. All original repos are MIT or Apache-2.0 licensed:
@@ -348,14 +380,20 @@ This project reimplements algorithms from published research. All original repos
 | Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | [atomicmilkshake/godzilla-llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp) |
 | BeeLlama / DFlash lineage | [Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp) |
 | KVarN research and reference implementation | [huawei-csl/KVarN](https://github.com/huawei-csl/KVarN) |
+| Context-extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | [llama.cpp](https://github.com/ggml-org/llama.cpp), [sheryc/resonance_rope](https://github.com/sheryc/resonance_rope), published papers |
 
-We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support is a command-generation and compatibility integration only; Multi-TurboQuant does not vendor Godzilla, BeeLlama, or KVarN code.
+We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
+is a command-generation and compatibility integration only; context-extension
+support is a llama.cpp command-generation and capability-scanning integration
+only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance
+RoPE, LongRoPE, or llama.cpp code.
 
 ## Community Contributors
 
 | Contribution | Contributor | Reference |
 |--------------|-------------|-----------|
 | Suggested the Godzilla llama.cpp + KVarN integration and provided the issue context that shaped the backend-only profile design | [@jawadala](https://github.com/jawadala) | Issue [#9](https://github.com/aivrar/multi-turboquant/issues/9) |
+| Suggested context-extension support, Resonance RoPE research, UI capability scanning, and the KVarN/TriAttention compatibility review | [@jawadala](https://github.com/jawadala) | Issue [#11](https://github.com/aivrar/multi-turboquant/issues/11) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.

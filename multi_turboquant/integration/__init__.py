@@ -9,11 +9,17 @@ Modules:
 
 from .vllm_patch import patch_vllm, is_vllm_patched
 from .llamacpp_args import (
+    LlamaCppContextExtensionConfig,
     LlamaCppProfile,
     LlamaCppSpeculativeConfig,
     get_llamacpp_args,
     get_llamacpp_command,
     normalize_llamacpp_profile,
+)
+from .llamacpp_scan import (
+    LlamaCppCapabilities,
+    parse_llamacpp_help,
+    scan_llamacpp_binary,
 )
 from .weight_share import (
     CudaWeightShareConfig,
@@ -27,9 +33,13 @@ __all__ = [
     "is_vllm_patched",
     "get_llamacpp_args",
     "get_llamacpp_command",
+    "LlamaCppContextExtensionConfig",
     "LlamaCppProfile",
     "LlamaCppSpeculativeConfig",
     "normalize_llamacpp_profile",
+    "LlamaCppCapabilities",
+    "parse_llamacpp_help",
+    "scan_llamacpp_binary",
     "CudaWeightShareConfig",
     "get_cuda_weight_share_env",
     "wrap_cuda_weight_share_command",

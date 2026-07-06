@@ -469,6 +469,74 @@ class TestIntegration:
         assert "/opt/models/test.gguf" in cmd
         assert "8080" in cmd
 
+    def test_llamacpp_context_extension_args(self):
+        from multi_turboquant.integration import (
+            LlamaCppContextExtensionConfig,
+            get_llamacpp_args,
+            get_llamacpp_command,
+        )
+
+        config = CacheConfig(
+            k_method=CacheMethod.ISO3,
+            v_method=CacheMethod.FP16,
+        )
+        context_extension = LlamaCppContextExtensionConfig(
+            rope_scale=8,
+            yarn_orig_ctx=4096,
+        )
+
+        args = get_llamacpp_args(
+            config,
+            context_size=32768,
+            context_extension=context_extension,
+        )
+
+        assert args[args.index("-c") + 1] == "32768"
+        assert args[args.index("--rope-scaling") + 1] == "yarn"
+        assert args[args.index("--rope-scale") + 1] == "8"
+        assert args[args.index("--yarn-orig-ctx") + 1] == "4096"
+
+        cmd = get_llamacpp_command(
+            config,
+            model_path="/opt/models/test.gguf",
+            context_size=32768,
+            context_extension=context_extension,
+        )
+        assert cmd[cmd.index("--rope-scaling") + 1] == "yarn"
+        assert cmd[cmd.index("--host") + 1] == "0.0.0.0"
+
+    def test_llamacpp_rejects_invalid_context_extension_args(self):
+        from multi_turboquant.integration import (
+            LlamaCppContextExtensionConfig,
+            get_llamacpp_args,
+        )
+
+        config = CacheConfig()
+
+        with pytest.raises(ValueError, match="rope_scale or rope_freq_scale"):
+            get_llamacpp_args(
+                config,
+                context_extension=LlamaCppContextExtensionConfig(
+                    rope_scale=8,
+                    rope_freq_scale=0.125,
+                ),
+            )
+        with pytest.raises(ValueError, match="YaRN options require"):
+            get_llamacpp_args(
+                config,
+                context_extension=LlamaCppContextExtensionConfig(
+                    rope_scaling="linear",
+                    yarn_orig_ctx=4096,
+                ),
+            )
+        with pytest.raises(ValueError, match="extra_args cannot contain blanks"):
+            get_llamacpp_args(
+                config,
+                context_extension=LlamaCppContextExtensionConfig(
+                    extra_args=("  ",),
+                ),
+            )
+
     def test_llamacpp_patched_triattention_args(self):
         from multi_turboquant.integration import get_llamacpp_args
         config = CacheConfig(
@@ -546,7 +614,7 @@ class TestIntegration:
             v_method=CacheMethod.KVARN4,
             triattention_enabled=True,
         )
-        with pytest.raises(ValueError, match="cannot be combined"):
+        with pytest.raises(ValueError, match="KVX-2"):
             get_llamacpp_args(config, fork_profile="godzilla")
 
     def test_llamacpp_godzilla_speculative_args(self):

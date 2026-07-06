@@ -311,8 +311,15 @@ def check_config(
             issues.append(CompatIssue(
                 severity="error",
                 method="triattention",
-                message="Godzilla KVarN cannot be combined with TriAttention.",
-                suggestion="Disable TriAttention or choose non-KVarN cache types.",
+                message=(
+                    "Godzilla currently rejects KVarN with TriAttention until "
+                    "KVarN-aware prune is implemented (KVX-2)."
+                ),
+                suggestion=(
+                    "Disable TriAttention, choose non-KVarN cache types, or "
+                    "wait for a Godzilla build that advertises KVarN-aware "
+                    "TriAttention pruning."
+                ),
             ))
 
     # TriAttention checks
