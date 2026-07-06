@@ -345,13 +345,17 @@ This project reimplements algorithms from published research. All original repos
 | IsoQuant / PlanarQuant / RotorQuant | scrya-com/rotorquant (ParaMind2025) |
 | CUDA + Metal kernels | johndpope/llama-cpp-turboquant |
 | TriAttention token eviction | WeianMao/triattention |
+| Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | [atomicmilkshake/godzilla-llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp) |
+| BeeLlama / DFlash lineage | [Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp) |
+| KVarN research and reference implementation | [huawei-csl/KVarN](https://github.com/huawei-csl/KVarN) |
 
-We reimplemented the algorithms in Python. Credit goes to these authors for the mathematical ideas.
+We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support is a command-generation and compatibility integration only; Multi-TurboQuant does not vendor Godzilla, BeeLlama, or KVarN code.
 
 ## Community Contributors
 
 | Contribution | Contributor | Reference |
 |--------------|-------------|-----------|
+| Suggested the Godzilla llama.cpp + KVarN integration and provided the issue context that shaped the backend-only profile design | [@jawadala](https://github.com/jawadala) | Issue [#9](https://github.com/aivrar/multi-turboquant/issues/9) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.

@@ -1344,8 +1344,12 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | RotorQuant (Cl(3,0) sandwich) | scrya-com / rotorquant (ParaMind2025) | MIT |
 | llama.cpp iso/planar CUDA+Metal kernels | johndpope / llama-cpp-turboquant | MIT |
 | TriAttention (trigonometric token eviction) | WeianMao / triattention | Apache-2.0 |
+| Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | atomicmilkshake / godzilla-llama.cpp | MIT |
+| BeeLlama / DFlash lineage | Anbeeld / beellama.cpp | MIT |
+| KVarN research and reference implementation | huawei-csl / KVarN | See upstream |
+| Godzilla + KVarN integration request and issue context | jawadala / issue #9 | Community contribution |
 
-We reimplemented these algorithms in Python under a unified API. We did not fork or copy code from these repositories. This project is an original work that stands on the mathematical foundations they established.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation and compatibility integration only; Multi-TurboQuant does not vendor Godzilla, BeeLlama, or KVarN code. Credit goes to the upstream authors for the technical work and to @jawadala for identifying the integration target in issue #9.
 
 ---
 
