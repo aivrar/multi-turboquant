@@ -33,6 +33,14 @@ class CacheMethod(str, Enum):
     ROTOR3 = "rotor3"          # 3.25-bit, no calibration
     ROTOR4 = "rotor4"          # 4.25-bit, no calibration, experimental
 
+    # --- KVarN (Hadamard + variance-normalized KV cache tiles) ---
+    KVARN2 = "kvarn2"          # 2-bit KVarN, Godzilla llama.cpp only
+    KVARN3 = "kvarn3"          # 3-bit KVarN, Godzilla llama.cpp only
+    KVARN4 = "kvarn4"          # 4-bit KVarN, Godzilla llama.cpp only
+    KVARN5 = "kvarn5"          # 5-bit KVarN, Godzilla llama.cpp only
+    KVARN6 = "kvarn6"          # 6-bit KVarN, Godzilla llama.cpp only
+    KVARN8 = "kvarn8"          # 8-bit KVarN, Godzilla llama.cpp only
+
     # --- TriAttention (token eviction) ---
     TRIATTENTION = "triattention"  # full precision, fewer tokens
 
@@ -48,6 +56,7 @@ class MethodFamily(str, Enum):
     ISOQUANT = "isoquant"
     PLANARQUANT = "planarquant"
     ROTORQUANT = "rotorquant"
+    KVARN = "kvarn"
     TRIATTENTION = "triattention"
     BASELINE = "baseline"
 
@@ -65,6 +74,12 @@ METHOD_FAMILIES: dict[CacheMethod, MethodFamily] = {
     CacheMethod.PLANAR4: MethodFamily.PLANARQUANT,
     CacheMethod.ROTOR3: MethodFamily.ROTORQUANT,
     CacheMethod.ROTOR4: MethodFamily.ROTORQUANT,
+    CacheMethod.KVARN2: MethodFamily.KVARN,
+    CacheMethod.KVARN3: MethodFamily.KVARN,
+    CacheMethod.KVARN4: MethodFamily.KVARN,
+    CacheMethod.KVARN5: MethodFamily.KVARN,
+    CacheMethod.KVARN6: MethodFamily.KVARN,
+    CacheMethod.KVARN8: MethodFamily.KVARN,
     CacheMethod.TRIATTENTION: MethodFamily.TRIATTENTION,
     CacheMethod.FP16: MethodFamily.BASELINE,
     CacheMethod.Q8_0: MethodFamily.BASELINE,
@@ -89,6 +104,12 @@ CALIBRATION_FREE: set[CacheMethod] = {
     CacheMethod.PLANAR4,
     CacheMethod.ROTOR3,
     CacheMethod.ROTOR4,
+    CacheMethod.KVARN2,
+    CacheMethod.KVARN3,
+    CacheMethod.KVARN4,
+    CacheMethod.KVARN5,
+    CacheMethod.KVARN6,
+    CacheMethod.KVARN8,
     CacheMethod.FP16,
     CacheMethod.Q8_0,
 }
@@ -106,6 +127,12 @@ METHOD_BITS: dict[CacheMethod, float] = {
     CacheMethod.PLANAR4: 4.25,
     CacheMethod.ROTOR3: 3.25,
     CacheMethod.ROTOR4: 4.25,
+    CacheMethod.KVARN2: 2.0,
+    CacheMethod.KVARN3: 3.0,
+    CacheMethod.KVARN4: 4.0,
+    CacheMethod.KVARN5: 5.0,
+    CacheMethod.KVARN6: 6.0,
+    CacheMethod.KVARN8: 8.0,
     CacheMethod.TRIATTENTION: 16.0,  # full precision, token eviction
     CacheMethod.FP16: 16.0,
     CacheMethod.Q8_0: 8.0,
@@ -123,6 +150,7 @@ SUPPORTED_HEAD_DIMS: dict[MethodFamily, tuple[int, ...]] = {
     MethodFamily.ISOQUANT: (64, 128),     # quaternion needs head_dim % 4 == 0
     MethodFamily.PLANARQUANT: (64, 128),  # givens needs head_dim % 2 == 0
     MethodFamily.ROTORQUANT: (64, 128),   # Cl(3,0) groups-of-3; padded to multiple of 3
+    MethodFamily.KVARN: (128, 256, 384, 512),  # Godzilla KVarN needs 128-slice-compatible heads
     MethodFamily.TRIATTENTION: (64, 128, 192, 256),
     MethodFamily.BASELINE: (64, 128, 192, 256),
 }

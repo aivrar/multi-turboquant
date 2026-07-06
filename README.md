@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Unified KV cache compression toolkit for LLM inference</strong><br>
-  <em>12 methods. 16 presets. GPU-validated. One API.</em>
+  <em>12 Python-native methods plus Godzilla KVarN backend aliases. 19 presets. One API.</em>
 </p>
 
 <p align="center">
@@ -54,10 +54,11 @@ Four lines. Opens a browser dashboard. See your GPUs, benchmark methods, plan de
 | `rotor3` | RotorQuant | Cl(3,0) SO(3) sandwich | 3.25 | 4.7x | **No** | Python-API only |
 | `rotor4` | RotorQuant | Cl(3,0) SO(3) sandwich | 4.25 | 3.6x | **No** | ⚠️ Experimental |
 | `triattention` | TriAttention | DFT token eviction | 16 | 10-16x | Required | Varies |
+| `kvarn2`..`kvarn8` | KVarN | Godzilla llama.cpp backend | 2-8 | 2-8x | **No** | Godzilla profile only |
 
 **Combined mode** (unique to this repo): Token eviction + quantization together. Evict unimportant tokens, compress the survivors. ~80x total KV reduction.
 
-All 12 methods run on GPU through our code. No upstream forks needed.
+The 12 Python-native methods run through this library. KVarN is exposed as a Godzilla llama.cpp command/profile extension for target KV cache types.
 
 **Note on rotor3/rotor4:** These use a Cl(3,0) Clifford-algebra rotor sandwich product on groups of 3 dimensions (head_dim is padded to a multiple of 3 internally). They work end-to-end through the Python API on CPU or GPU, but llama.cpp and vLLM do not yet register these cache types upstream — for inference-backend use, pick `iso3`/`iso4`/`planar3`/`planar4` instead. `rotor4` is gated experimental with a runtime warning: upstream's 4-bit rotor path has known dispatch crashes, and our pure-torch implementation is untested at production scale.
 
@@ -104,6 +105,7 @@ from multi_turboquant import get_preset
 config = get_preset("balanced")       # turbo3_tcq symmetric, 5x
 config = get_preset("k_only_iso")     # ISO3 K-only, zero speed cost, no calibration
 config = get_preset("extreme")        # TriAttention + turbo3_tcq, ~80x
+config = get_preset("godzilla_kvarn4")  # Godzilla llama.cpp KVarN extension
 config = get_preset("agents_8x16k")   # 8 agents at 16K context
 ```
 
@@ -156,6 +158,40 @@ llama-cli -m /opt/models/model.gguf -ngl 99 \
   --triattention-calibrate corpus.txt \
   --triattention-calibrate-out model.triattention
 ```
+
+### Godzilla KVarN and DFlash
+
+KVarN is available through `atomicmilkshake/godzilla-llama.cpp`, not upstream
+llama.cpp. Select the Godzilla profile explicitly:
+
+```python
+from multi_turboquant import get_preset
+from multi_turboquant.integration import (
+    LlamaCppProfile,
+    LlamaCppSpeculativeConfig,
+    get_llamacpp_command,
+)
+
+config = get_preset("godzilla_kvarn4")
+cmd = get_llamacpp_command(
+    config,
+    model_path="/opt/models/model.gguf",
+    fork_profile=LlamaCppProfile.GODZILLA,
+    speculative=LlamaCppSpeculativeConfig(
+        spec_type="dflash",
+        draft_model="/opt/models/draft-dflash.gguf",
+        draft_n_max=16,
+        branch_budget=0,
+        dflash_cross_ctx=512,
+        draft_gpu_layers="all",
+    ),
+)
+```
+
+The wrapper rejects KVarN unless both K and V use KVarN, the profile is
+`godzilla`, TriAttention is disabled, and `head_dim` is one of 128, 256, 384,
+or 512. Draft-cache KVarN is rejected because Godzilla accepts KVarN aliases
+for target cache types only.
 
 ### CUDA weight-share launcher
 
@@ -231,11 +267,14 @@ issues = check_config(config, platform)
 | `quality` | turbo4 symmetric | Near-lossless 3.8x |
 | `max_compression` | turbo2_tcq symmetric | Maximum 7x |
 | `extreme` | turbo3_tcq + TriAttention | ~80x total reduction |
+| `godzilla_kvarn4` | kvarn4 symmetric | Godzilla llama.cpp extension |
+| `godzilla_kvarn2_max` | kvarn2 symmetric | Aggressive Godzilla KVarN |
+| `godzilla_kvarn8_quality` | kvarn8 symmetric | Quality-focused Godzilla KVarN |
 | `agents_8x16k` | turbo4 symmetric | 8 agents at 16K context |
 | `agents_4x8k_70b` | turbo4 symmetric | 4 agents on 70B model |
 | `no_calibration_symmetric` | iso3 symmetric | No setup needed |
 
-[Full list: 16 presets](docs/manual.md#7-presets)
+[Full list: 19 presets](docs/manual.md#7-presets)
 
 ## Capacity Planner
 
@@ -260,8 +299,8 @@ IsoQuant and PlanarQuant need **no calibration** — just works.
 
 | Platform | Methods Available | Engine |
 |----------|:-----------------:|--------|
-| Linux + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
-| Windows + NVIDIA | All 10 (+rotor via Python API) | llama.cpp + vLLM |
+| Linux + NVIDIA | Python-native methods + Godzilla KVarN profile | llama.cpp + vLLM |
+| Windows + NVIDIA | Python-native methods + Godzilla KVarN profile | llama.cpp + vLLM |
 | Linux + AMD (ROCm) | iso/planar (4) + rotor (Python) | llama.cpp |
 | macOS + Apple Silicon | iso/planar (4) + rotor (Python) + fused MLX kernels (ForgeAttention) | llama.cpp (Metal) + MLX |
 | Any (CPU) | All 12 | Library only |
@@ -278,9 +317,9 @@ Browser-based UI for exploring methods, running benchmarks, planning deployments
 
 ```
 multi_turboquant/
-  config.py              CacheConfig, CacheMethod, 12 cache types
+  config.py              CacheConfig, CacheMethod, cache type metadata
   registry.py            Method registration and discovery
-  presets.py             16 named presets + auto-recommend
+  presets.py             19 named presets + auto-recommend
   planner.py             Multi-agent capacity planning, any GPU count
   hardware.py            GPU auto-detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .config import CacheMethod, MethodFamily, METHOD_FAMILIES
+from .config import CacheMethod, MethodFamily, METHOD_FAMILIES, SUPPORTED_HEAD_DIMS
 
 if TYPE_CHECKING:
     from .config import CacheConfig
@@ -64,6 +64,30 @@ VLLM_SUPPORT: set[CacheMethod] = {
     CacheMethod.PLANAR3, CacheMethod.PLANAR4,
     CacheMethod.TRIATTENTION,
 }
+
+KVARN_METHODS: set[CacheMethod] = {
+    CacheMethod.KVARN2, CacheMethod.KVARN3, CacheMethod.KVARN4,
+    CacheMethod.KVARN5, CacheMethod.KVARN6, CacheMethod.KVARN8,
+}
+
+LLAMACPP_PROFILES = {"upstream", "patched_triattention", "godzilla"}
+
+
+def _llamacpp_profile_value(fork_profile: object | None) -> str:
+    if fork_profile is None:
+        return "upstream"
+    return str(getattr(fork_profile, "value", fork_profile))
+
+
+def _llamacpp_support_for(compute: str, fork_profile: str) -> set[CacheMethod]:
+    supported = set(LLAMACPP_SUPPORT.get(compute, set()))
+    if compute == "cuda" and fork_profile == "godzilla":
+        supported.update(KVARN_METHODS)
+    return supported
+
+
+def _uses_kvarn(config: "CacheConfig") -> bool:
+    return config.k_method in KVARN_METHODS or config.v_method in KVARN_METHODS
 
 
 # ─── Build flags ────────────────────────────────────────────────────────────────
@@ -134,6 +158,7 @@ def check_config(
     config: "CacheConfig",
     plat: "PlatformInfo",
     engine: str = "llamacpp",
+    fork_profile: object | None = "upstream",
 ) -> list[CompatIssue]:
     """Check a CacheConfig against the detected platform.
 
@@ -141,13 +166,24 @@ def check_config(
     """
     issues: list[CompatIssue] = []
     compute = plat.primary_compute
+    profile = _llamacpp_profile_value(fork_profile)
+
+    if engine == "llamacpp" and profile not in LLAMACPP_PROFILES:
+        allowed = ", ".join(sorted(LLAMACPP_PROFILES))
+        issues.append(CompatIssue(
+            severity="error",
+            method="engine",
+            message=f"Unknown llama.cpp profile {profile!r}.",
+            suggestion=f"Use one of: {allowed}.",
+        ))
+        profile = "upstream"
 
     for label, method in [("K", config.k_method), ("V", config.v_method)]:
         if method == CacheMethod.FP16 or method == CacheMethod.Q8_0:
             continue
 
         if engine == "llamacpp":
-            supported = LLAMACPP_SUPPORT.get(compute, set())
+            supported = _llamacpp_support_for(compute, profile)
         else:
             supported = VLLM_SUPPORT
 
@@ -169,6 +205,46 @@ def check_config(
                                "multi_turboquant.compress(...) / decompress(...). "
                                "For inference-backend compression use iso3/iso4 or planar3/planar4.",
                 ))
+            elif family == MethodFamily.KVARN:
+                if engine != "llamacpp":
+                    issues.append(CompatIssue(
+                        severity="error",
+                        method=f"{label}={method.value}",
+                        message=(
+                            f"{method.value} is currently exposed through the "
+                            "Godzilla llama.cpp profile, not the vLLM wrapper."
+                        ),
+                        suggestion=(
+                            "Use engine='llamacpp' with fork_profile='godzilla', "
+                            "or choose a non-KVarN cache type."
+                        ),
+                    ))
+                elif profile != "godzilla":
+                    issues.append(CompatIssue(
+                        severity="error",
+                        method=f"{label}={method.value}",
+                        message=(
+                            f"{method.value} requires the Godzilla llama.cpp "
+                            "profile."
+                        ),
+                        suggestion=(
+                            "Pass fork_profile='godzilla' and run a Godzilla "
+                            "llama.cpp binary."
+                        ),
+                    ))
+                elif compute != "cuda":
+                    issues.append(CompatIssue(
+                        severity="error",
+                        method=f"{label}={method.value}",
+                        message=(
+                            f"{method.value} in Godzilla llama.cpp requires CUDA; "
+                            f"{compute} is not supported."
+                        ),
+                        suggestion=(
+                            "Run on an NVIDIA CUDA system, or choose iso3/iso4 "
+                            "or planar3/planar4 for this platform."
+                        ),
+                    ))
             elif compute == "rocm" and family in (MethodFamily.TURBOQUANT, MethodFamily.TCQ):
                 issues.append(CompatIssue(
                     severity="error",
@@ -202,9 +278,48 @@ def check_config(
                     suggestion=f"Available methods: {', '.join(available)}",
                 ))
 
+    if _uses_kvarn(config) and engine == "llamacpp" and profile == "godzilla":
+        k_is_kvarn = config.k_method in KVARN_METHODS
+        v_is_kvarn = config.v_method in KVARN_METHODS
+        if k_is_kvarn != v_is_kvarn:
+            issues.append(CompatIssue(
+                severity="error",
+                method="kvarn",
+                message="Godzilla KVarN must be configured for both K and V.",
+                suggestion=(
+                    "Use matching kvarn* methods for both cache sides, such as "
+                    "kvarn4/kvarn4."
+                ),
+            ))
+        if config.head_dim not in SUPPORTED_HEAD_DIMS[MethodFamily.KVARN]:
+            allowed = ", ".join(
+                str(dim) for dim in SUPPORTED_HEAD_DIMS[MethodFamily.KVARN]
+            )
+            issues.append(CompatIssue(
+                severity="error",
+                method="kvarn",
+                message=(
+                    f"Godzilla KVarN supports head_dim values {allowed}; "
+                    f"got {config.head_dim}."
+                ),
+                suggestion=(
+                    "Use a model with 128-slice-compatible attention heads, "
+                    "or choose a non-KVarN cache type."
+                ),
+            ))
+        if config.triattention_enabled:
+            issues.append(CompatIssue(
+                severity="error",
+                method="triattention",
+                message="Godzilla KVarN cannot be combined with TriAttention.",
+                suggestion="Disable TriAttention or choose non-KVarN cache types.",
+            ))
+
     # TriAttention checks
     if config.triattention_enabled:
-        if engine == "llamacpp":
+        if engine == "llamacpp" and _uses_kvarn(config) and profile == "godzilla":
+            pass
+        elif engine == "llamacpp":
             if getattr(config, "use_custom_triattention_llamacpp", False):
                 if not config.triattention_stats_path:
                     issues.append(CompatIssue(
@@ -257,11 +372,16 @@ def check_config(
 def get_available_methods(
     plat: "PlatformInfo",
     engine: str = "llamacpp",
+    fork_profile: object | None = "upstream",
 ) -> list[CacheMethod]:
     """Return all methods available on this platform."""
     compute = plat.primary_compute
     if engine == "llamacpp":
-        return sorted(LLAMACPP_SUPPORT.get(compute, set()), key=lambda m: m.value)
+        profile = _llamacpp_profile_value(fork_profile)
+        return sorted(
+            _llamacpp_support_for(compute, profile),
+            key=lambda m: m.value,
+        )
     elif engine == "vllm":
         if plat.can_run_vllm:
             return sorted(VLLM_SUPPORT, key=lambda m: m.value)

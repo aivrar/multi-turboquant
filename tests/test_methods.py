@@ -21,7 +21,13 @@ from multi_turboquant import (
     recommend_preset,
 )
 from multi_turboquant.methods.base import CompressedKV
-from multi_turboquant.config import METHOD_BITS, CALIBRATION_FREE
+from multi_turboquant.config import (
+    CALIBRATION_FREE,
+    METHOD_BITS,
+    METHOD_FAMILIES,
+    SUPPORTED_HEAD_DIMS,
+    MethodFamily,
+)
 
 
 # ─── Fixtures ───────────────────────────────────────────────────────────────────
@@ -364,6 +370,25 @@ class TestConfig:
         warnings = config.validate()
         assert len(warnings) > 0
 
+    def test_kvarn_metadata(self):
+        kvarn_methods = [
+            CacheMethod.KVARN2, CacheMethod.KVARN3, CacheMethod.KVARN4,
+            CacheMethod.KVARN5, CacheMethod.KVARN6, CacheMethod.KVARN8,
+        ]
+        for method in kvarn_methods:
+            assert METHOD_FAMILIES[method] == MethodFamily.KVARN
+            assert method in CALIBRATION_FREE
+            assert METHOD_BITS[method] == float(method.value.removeprefix("kvarn"))
+        assert SUPPORTED_HEAD_DIMS[MethodFamily.KVARN] == (128, 256, 384, 512)
+
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.KVARN4,
+            head_dim=64,
+        )
+        warnings = config.validate()
+        assert any("head_dim=64" in warning for warning in warnings)
+
 
 # ─── Preset tests ───────────────────────────────────────────────────────────────
 
@@ -374,11 +399,27 @@ class TestPresets:
         assert "speed" in presets
         assert "k_only_iso" in presets
         assert "extreme" in presets
+        assert "godzilla_kvarn4" in presets
+        assert "godzilla_kvarn2_max" in presets
+        assert "godzilla_kvarn8_quality" in presets
 
     def test_get_preset(self):
         config = get_preset("balanced")
         assert config.k_method == CacheMethod.TURBO3_TCQ
         assert config.v_method == CacheMethod.TURBO3_TCQ
+
+    def test_godzilla_kvarn_presets(self):
+        config = get_preset("godzilla_kvarn4")
+        assert config.k_method == CacheMethod.KVARN4
+        assert config.v_method == CacheMethod.KVARN4
+
+        config = get_preset("godzilla_kvarn2_max")
+        assert config.k_method == CacheMethod.KVARN2
+        assert config.v_method == CacheMethod.KVARN2
+
+        config = get_preset("godzilla_kvarn8_quality")
+        assert config.k_method == CacheMethod.KVARN8
+        assert config.v_method == CacheMethod.KVARN8
 
     def test_recommend_preset(self):
         name = recommend_preset(
@@ -462,6 +503,139 @@ class TestIntegration:
         )
         with pytest.raises(ValueError, match="token eviction"):
             get_llamacpp_args(config)
+
+    def test_llamacpp_godzilla_kvarn_args(self):
+        from multi_turboquant.integration import LlamaCppProfile, get_llamacpp_args
+
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.KVARN4,
+        )
+        args = get_llamacpp_args(config, fork_profile=LlamaCppProfile.GODZILLA)
+        assert args == [
+            "--cache-type-k", "kvarn4",
+            "--cache-type-v", "kvarn4",
+            "-fa", "on",
+        ]
+
+    def test_llamacpp_rejects_kvarn_without_godzilla_profile(self):
+        from multi_turboquant.integration import get_llamacpp_args
+
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.KVARN4,
+        )
+        with pytest.raises(ValueError, match="fork_profile='godzilla'"):
+            get_llamacpp_args(config)
+
+    def test_llamacpp_rejects_mixed_kvarn_config(self):
+        from multi_turboquant.integration import get_llamacpp_args
+
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.FP16,
+        )
+        with pytest.raises(ValueError, match="both K and V"):
+            get_llamacpp_args(config, fork_profile="godzilla")
+
+    def test_llamacpp_rejects_kvarn_with_triattention(self):
+        from multi_turboquant.integration import get_llamacpp_args
+
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.KVARN4,
+            triattention_enabled=True,
+        )
+        with pytest.raises(ValueError, match="cannot be combined"):
+            get_llamacpp_args(config, fork_profile="godzilla")
+
+    def test_llamacpp_godzilla_speculative_args(self):
+        from multi_turboquant.integration import (
+            LlamaCppSpeculativeConfig,
+            get_llamacpp_args,
+        )
+
+        config = CacheConfig(k_method=CacheMethod.ISO3, v_method=CacheMethod.FP16)
+        speculative = LlamaCppSpeculativeConfig(
+            spec_type="dflash",
+            draft_model="draft.gguf",
+            draft_gpu_layers="all",
+            draft_n_max=16,
+            branch_budget=0,
+            dflash_cross_ctx=512,
+        )
+        args = get_llamacpp_args(
+            config,
+            fork_profile="godzilla",
+            speculative=speculative,
+        )
+        assert "--spec-type" in args
+        assert "dflash" in args
+        assert "--spec-draft-model" in args
+        assert "draft.gguf" in args
+        assert "--spec-draft-n-max" in args
+        assert "16" in args
+        assert "--spec-branch-budget" in args
+        assert "0" in args
+        assert "--spec-dflash-cross-ctx" in args
+        assert "512" in args
+
+    def test_llamacpp_rejects_invalid_speculative_args(self):
+        from multi_turboquant.integration import (
+            LlamaCppSpeculativeConfig,
+            get_llamacpp_args,
+        )
+
+        config = CacheConfig(k_method=CacheMethod.ISO3, v_method=CacheMethod.FP16)
+        with pytest.raises(ValueError, match="DFlash requires"):
+            get_llamacpp_args(
+                config,
+                fork_profile="godzilla",
+                speculative=LlamaCppSpeculativeConfig(spec_type="dflash"),
+            )
+        with pytest.raises(ValueError, match="draft cache type cannot use KVarN"):
+            get_llamacpp_args(
+                config,
+                fork_profile="godzilla",
+                speculative=LlamaCppSpeculativeConfig(
+                    spec_type="dflash",
+                    draft_model="draft.gguf",
+                    draft_cache_type_k=CacheMethod.KVARN4,
+                ),
+            )
+
+    def test_compatibility_godzilla_kvarn(self):
+        from multi_turboquant.compatibility import check_config, get_available_methods
+        from multi_turboquant.hardware import GPU, PlatformInfo
+
+        cuda = PlatformInfo(
+            os="linux",
+            arch="x86_64",
+            gpus=[GPU(0, "cuda", 24576, vendor="nvidia", compute="cuda")],
+            cuda_available=True,
+        )
+        rocm = PlatformInfo(
+            os="linux",
+            arch="x86_64",
+            gpus=[GPU(0, "amd", 24576, vendor="amd", compute="rocm")],
+            rocm_available=True,
+        )
+        config = CacheConfig(
+            k_method=CacheMethod.KVARN4,
+            v_method=CacheMethod.KVARN4,
+        )
+
+        assert any("Godzilla" in i.message for i in check_config(config, cuda))
+        assert check_config(config, cuda, fork_profile="godzilla") == []
+        assert CacheMethod.KVARN4 not in get_available_methods(cuda)
+        assert CacheMethod.KVARN4 in get_available_methods(
+            cuda,
+            fork_profile="godzilla",
+        )
+        assert any(
+            "requires CUDA" in i.message
+            for i in check_config(config, rocm, fork_profile="godzilla")
+        )
 
     def test_llamacpp_cuda_weight_share_wrapper(self):
         from multi_turboquant.integration import (
