@@ -26,6 +26,12 @@ from .weight_share import (
     get_cuda_weight_share_env,
     wrap_cuda_weight_share_command,
 )
+from .lmcache import (
+    LMCacheIntegrationConfig,
+    LMCacheLaunchPlan,
+    LMCacheMode,
+    build_lmcache_launch_plan,
+)
 from .bridge_adapter import BridgeAdapter
 
 __all__ = [
@@ -43,5 +49,9 @@ __all__ = [
     "CudaWeightShareConfig",
     "get_cuda_weight_share_env",
     "wrap_cuda_weight_share_command",
+    "LMCacheIntegrationConfig",
+    "LMCacheLaunchPlan",
+    "LMCacheMode",
+    "build_lmcache_launch_plan",
     "BridgeAdapter",
 ]

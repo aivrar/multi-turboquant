@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-87%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-138%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
 </p>
@@ -82,17 +82,20 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-87 automated tests: 78 CPU + 9 GPU.
+149 automated test cases: 138 pass in the current Windows CPU environment and
+11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
 |-------|:-----:|----------------|
-| `test_methods.py` | 50 | All 12 methods encode/decode, config, presets, integration |
-| `test_integration.py` | 31 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
+| `test_methods.py` | 64 | All 12 methods encode/decode, config, presets, integration |
+| `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
+| `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
+| `test_optimizations.py` | 9 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 
 ```bash
-pytest tests/                              # all 77 tests
-pytest tests/ --ignore=tests/test_gpu.py   # CPU only (68 tests)
+pytest tests/                              # full suite
+pytest tests/ --ignore=tests/test_gpu.py   # skip real-GPU validation
 ```
 
 ## Quick Start
@@ -243,6 +246,36 @@ cmd = get_llamacpp_command(
 # env LD_PRELOAD=/opt/cuda-llm-weight-share.so MODEL_SIZE=32060375552 ...
 ```
 
+### Optional optimization planner and LMCache
+
+External inference optimizations are cataloged separately from the compression
+methods and remain disabled unless explicitly selected. Inspect requirements,
+platform support, KV-format validation, and conflicts without importing the
+third-party projects:
+
+```bash
+mtq-optimizations --engine vllm --kv-format fp16 --select lmcache
+```
+
+The LMCache integration generates its documented vLLM connector configuration
+and optional multiprocess server command without launching processes or changing
+the current environment:
+
+```python
+from multi_turboquant.integration import (
+    LMCacheIntegrationConfig,
+    build_lmcache_launch_plan,
+)
+
+plan = build_lmcache_launch_plan(LMCacheIntegrationConfig(server_l1_size_gb=20))
+server_command = plan.server_command
+vllm_command = plan.extend_vllm_command(["vllm", "serve", "Qwen/Qwen3-8B"])
+```
+
+This integration is currently limited to validated standard FP16, BF16, and
+FP8 cache layouts. It does not claim that LMCache can serialize custom
+Multi-TurboQuant or KVarN layouts. See [the optimization integration notes](docs/optimizations.md).
+
 ### Plan a multi-agent deployment
 
 ```python
@@ -352,6 +385,7 @@ multi_turboquant/
   planner.py             Multi-agent capacity planning, any GPU count
   hardware.py            GPU auto-detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks
+  optimizations/         Optional plugin manifests, probes, conflict planner
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, frequency stats, auto-calibrate
@@ -365,6 +399,9 @@ Full manual with 23 chapters: **[docs/manual.md](docs/manual.md)**
 
 Context extension research and implementation notes:
 **[docs/context-extension.md](docs/context-extension.md)**
+
+Optional optimization catalog, compatibility planner, and LMCache integration:
+**[docs/optimizations.md](docs/optimizations.md)**
 
 ## Attribution
 
@@ -394,6 +431,7 @@ RoPE, LongRoPE, or llama.cpp code.
 |--------------|-------------|-----------|
 | Suggested the Godzilla llama.cpp + KVarN integration and provided the issue context that shaped the backend-only profile design | [@jawadala](https://github.com/jawadala) | Issue [#9](https://github.com/aivrar/multi-turboquant/issues/9) |
 | Suggested context-extension support, Resonance RoPE research, UI capability scanning, and the KVarN/TriAttention compatibility review | [@jawadala](https://github.com/jawadala) | Issue [#11](https://github.com/aivrar/multi-turboquant/issues/11) |
+| Suggested the modular optimization catalog, LMCache/Maru investigation, attention alternatives, and compatibility planning | [@jawadala](https://github.com/jawadala) | Issue [#13](https://github.com/aivrar/multi-turboquant/issues/13) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
