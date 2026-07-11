@@ -48,6 +48,7 @@ setup(
             "mtq-calibrate=multi_turboquant.calibration.generate_metadata:main",
             "mtq-triattention-stats=multi_turboquant.calibration.generate_stats:main",
             "mtq-benchmark=multi_turboquant.benchmark.run_benchmark:main",
+            "mtq-optimizations=multi_turboquant.optimizations.cli:main",
         ],
     },
     classifiers=[
