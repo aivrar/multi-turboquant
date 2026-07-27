@@ -55,6 +55,50 @@ def test_lmcache_does_not_claim_llamacpp_support():
     assert any(issue.code == "unsupported_engine" for issue in plan.issues)
 
 
+def test_flashattention_is_optional_linux_cuda_backend():
+    ready = plan_optimizations(
+        ["flashattention"],
+        context(
+            engine="python",
+            installed_modules=frozenset({"flash_attn"}),
+        ),
+    )
+    assert ready.ready
+
+    unsupported = plan_optimizations(
+        ["flashattention"],
+        context(
+            engine="python",
+            os="windows",
+            installed_modules=frozenset({"flash_attn"}),
+        ),
+    )
+    assert not unsupported.ready
+    assert any(issue.code == "unsupported_os" for issue in unsupported.issues)
+
+
+def test_fastdms_declares_flashattention_dependency():
+    missing = plan_optimizations(
+        ["fastdms"],
+        context(
+            engine="fastdms",
+            installed_modules=frozenset({"fastdms", "flash_attn"}),
+            installed_executables=frozenset(),
+        ),
+    )
+    assert any(issue.code == "missing_optimization_dependency" for issue in missing.issues)
+
+    ready = plan_optimizations(
+        ["flashattention", "fastdms"],
+        context(
+            engine="fastdms",
+            installed_modules=frozenset({"fastdms", "flash_attn"}),
+            installed_executables=frozenset(),
+        ),
+    )
+    assert ready.ready
+
+
 def test_maru_requires_lmcache_cxl_and_python_312():
     base = context(
         installed_modules=frozenset({"lmcache", "maru_lmcache"}),
