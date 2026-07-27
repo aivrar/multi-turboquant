@@ -304,6 +304,10 @@ mtq-env plan rocketkv  # reports its research/license block; changes nothing
 mtq-env create fastdms --yes
 mtq-env check fastdms
 
+# Preview and force a local FlashAttention build when a wheel is unsuitable
+mtq-env plan fastdms --build-from-source
+mtq-env create fastdms --build-from-source --yes
+
 # Run the standalone engine without activating or modifying the current environment
 mtq-env run fastdms -- python -c "import fastdms; print(fastdms.__version__)"
 ```
@@ -313,7 +317,10 @@ install or use Multi-TurboQuant normally. `pyenv` is optional: select one of its
 interpreters with `--python /path/from/pyenv`. Profiles never install drivers,
 modify the system CUDA toolkit, clone an unreviewed moving branch, or perform
 privileged host installation. Native builds are announced in the read-only plan,
-and creation always requires the explicit `--yes` flag. See
+and creation always requires the explicit `--yes` flag. The optional
+`--build-from-source` switch is available for the `flashattention` and `fastdms`
+profiles. It forces a fresh local FlashAttention compilation without changing
+the normal wheel-first behavior of either profile. See
 [the dependency-profile table and validation record](docs/optimizations.md#built-in-profiles).
 
 ### Plan a multi-agent deployment
@@ -474,6 +481,7 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested context-extension support, Resonance RoPE research, UI capability scanning, and the KVarN/TriAttention compatibility review | [@jawadala](https://github.com/jawadala) | Issue [#11](https://github.com/aivrar/multi-turboquant/issues/11) |
 | Suggested the modular optimization catalog, LMCache/Maru investigation, attention alternatives, and compatibility planning | [@jawadala](https://github.com/jawadala) | Issue [#13](https://github.com/aivrar/multi-turboquant/issues/13) |
 | Suggested isolated dependency handling for FastDMS, FlashAttention, and the other optional add-ons, including pyenv-compatible interpreter selection | [@jawadala](https://github.com/jawadala) | Issue [#15](https://github.com/aivrar/multi-turboquant/issues/15) |
+| Suggested an explicit local source-build option for projects that depend on FlashAttention | [@jawadala](https://github.com/jawadala) | Issue [#17](https://github.com/aivrar/multi-turboquant/issues/17) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue

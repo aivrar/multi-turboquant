@@ -71,3 +71,21 @@ def test_list_json_distinguishes_installable_and_blocked_profiles(capsys):
     assert profiles["lmcache"]["blocked_reason"] is None
     assert profiles["rocketkv"]["status"] == "blocked"
     assert "non-commercial" in profiles["rocketkv"]["blocked_reason"]
+
+
+def test_plan_forwards_source_build_request(tmp_path: Path, monkeypatch):
+    plan = ready_plan(tmp_path)
+    calls = []
+
+    def capture_plan(*args, **kwargs):
+        calls.append((args, kwargs))
+        return plan
+
+    monkeypatch.setattr(env_cli, "plan_environment", capture_plan)
+
+    result = env_cli.main(
+        ["plan", "fastdms", "--root", str(tmp_path), "--build-from-source"]
+    )
+
+    assert result == 0
+    assert calls[0][1]["build_from_source"] is True

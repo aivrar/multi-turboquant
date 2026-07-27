@@ -96,6 +96,20 @@ def test_rendered_flashattention_project_is_lockable_toml():
     }
 
 
+@pytest.mark.parametrize("profile_id", ["flashattention", "fastdms"])
+def test_source_build_forces_flashattention_sdist_for_dependent_profiles(profile_id: str):
+    profile = get_environment_profile(profile_id)
+    default_project = tomllib.loads(render_profile_project(profile))
+    source_project = tomllib.loads(render_profile_project(profile, build_from_source=True))
+
+    assert profile.source_build_packages == ("flash-attn",)
+    assert dict(profile.source_build_environment) == {
+        "FLASH_ATTENTION_FORCE_BUILD": "TRUE",
+    }
+    assert "no-binary-package" not in default_project["tool"]["uv"]
+    assert source_project["tool"]["uv"]["no-binary-package"] == ["flash-attn"]
+
+
 def test_lmcache_uses_matching_prebuilt_cuda_runtime_without_requiring_nvcc(tmp_path: Path):
     profile = get_environment_profile("lmcache")
     rendered = tomllib.loads(render_profile_project(profile))
@@ -211,6 +225,34 @@ def test_plan_rejects_wrong_cuda_toolkit_major(tmp_path: Path):
     assert any(issue.code == "unsupported_cuda_toolkit" for issue in plan.issues)
 
 
+def test_plan_forces_a_cache_safe_flashattention_source_rebuild(tmp_path: Path):
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path,
+        build_from_source=True,
+        context=linux_cuda_context(),
+    )
+
+    assert plan.ready
+    assert plan.build_from_source
+    assert plan.to_dict()["source_build_packages"] == ["flash-attn"]
+    assert "--no-cache" in plan.commands[0].argv
+    assert plan.commands[0].argv[-2:] == ("--reinstall-package", "flash-attn")
+    assert any(issue.code == "source_build_forced" for issue in plan.issues)
+
+
+def test_plan_rejects_source_build_without_a_reviewed_profile_path(tmp_path: Path):
+    plan = plan_environment(
+        "lmcache",
+        root=tmp_path,
+        build_from_source=True,
+        context=linux_cuda_context("uv"),
+    )
+
+    assert not plan.ready
+    assert any(issue.code == "source_build_unavailable" for issue in plan.issues)
+
+
 def test_materialize_refuses_to_overwrite_foreign_project(tmp_path: Path):
     plan = plan_environment(
         "fastdms",
@@ -247,6 +289,26 @@ def test_sync_materializes_owned_project_and_uses_argv(tmp_path: Path):
     assert calls[0][1]["cwd"] == plan.target
     assert calls[0][1]["check"] is False
     assert calls[0][1]["env"]["MAX_JOBS"] == "4"
+    assert "FLASH_ATTENTION_FORCE_BUILD" not in calls[0][1]["env"]
+
+
+def test_sync_sets_flashattention_force_build_only_when_requested(tmp_path: Path):
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path,
+        build_from_source=True,
+        context=linux_cuda_context(),
+    )
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0)
+
+    synchronize_environment(plan, runner=runner)
+
+    assert calls[0][0][-2:] == ["--reinstall-package", "flash-attn"]
+    assert calls[0][1]["env"]["FLASH_ATTENTION_FORCE_BUILD"] == "TRUE"
 
 
 def test_check_uses_only_the_isolated_interpreter(tmp_path: Path):

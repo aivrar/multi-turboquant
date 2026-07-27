@@ -125,6 +125,24 @@ mtq-env check fastdms
 mtq-env run fastdms -- python -c "from fastdms import LLM"
 ```
 
+If the upstream FlashAttention wheel is unavailable or unsuitable, preview and
+request a local build explicitly:
+
+```bash
+mtq-env plan flashattention --build-from-source
+mtq-env create flashattention --build-from-source --yes
+
+mtq-env plan fastdms --build-from-source
+mtq-env create fastdms --build-from-source --yes
+```
+
+Source mode is opt-in and is currently reviewed only for the `flashattention`
+and `fastdms` profiles. It tells `uv` not to install a binary distribution for
+`flash-attn`, sets FlashAttention's own `FLASH_ATTENTION_FORCE_BUILD=TRUE`
+switch, and reinstalls that package so an existing environment or cached
+artifact cannot bypass the request. Other profiles reject the option rather
+than applying an unreviewed source-build procedure.
+
 Each profile lives under `.mtq/environments/<profile>/` by default and owns a
 separate `pyproject.toml`, `uv.lock`, and `.venv`. This intentionally avoids a
 shared workspace lock: FastDMS, FlashAttention, vLLM-related integrations, and
@@ -158,10 +176,12 @@ Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible
 wheel is available, uv may compile a native extension. The plan reports that
 possibility before creation and limits native build parallelism to avoid
-exhausting memory on smaller hosts. The pinned SageAttention and MInference Git
-sources also have explicit static package metadata because their legacy
-`setup.py` files import build dependencies before uv can otherwise resolve the
-projects.
+exhausting memory on smaller hosts. Forced source mode always performs the
+FlashAttention CUDA/C++ compilation and can therefore take substantially
+longer than the default wheel-first path. The pinned SageAttention and
+MInference Git sources also have explicit static package metadata because their
+legacy `setup.py` files import build dependencies before uv can otherwise
+resolve the projects.
 
 FastDMS remains a standalone engine and requires a DMS-trained checkpoint. The
 environment profile makes its dependencies reproducible; it does not claim to
