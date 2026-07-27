@@ -14,10 +14,33 @@ from .core import (
     OptimizationProbe,
     OptimizationRegistry,
 )
+from .environments import (
+    BUILTIN_ENVIRONMENT_PROFILES,
+    DEFAULT_ENVIRONMENT_ROOT,
+    DependencyProfile,
+    EnvironmentCommand,
+    EnvironmentContext,
+    EnvironmentIssue,
+    EnvironmentPlan,
+    check_environment,
+    detect_environment_context,
+    get_environment_profile,
+    plan_environment,
+    render_profile_project,
+    run_in_environment,
+    synchronize_environment,
+)
 from .planner import OptimizationPlan, detect_optimization_context, plan_optimizations
 
 __all__ = [
     "BUILTIN_DESCRIPTORS",
+    "BUILTIN_ENVIRONMENT_PROFILES",
+    "DEFAULT_ENVIRONMENT_ROOT",
+    "DependencyProfile",
+    "EnvironmentCommand",
+    "EnvironmentContext",
+    "EnvironmentIssue",
+    "EnvironmentPlan",
     "IntegrationMode",
     "ManifestPlugin",
     "OptimizationContext",
@@ -30,6 +53,13 @@ __all__ = [
     "OptimizationProbe",
     "OptimizationRegistry",
     "create_builtin_registry",
+    "check_environment",
     "detect_optimization_context",
+    "detect_environment_context",
+    "get_environment_profile",
+    "plan_environment",
     "plan_optimizations",
+    "render_profile_project",
+    "run_in_environment",
+    "synchronize_environment",
 ]

@@ -16,7 +16,8 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-138%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-158%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
 </p>
@@ -28,6 +29,11 @@
 A Python toolkit that compresses the KV cache in large language models. The KV cache is the #1 memory bottleneck during inference — a 32B model at 32K context uses 8+ GB just for the cache. This library gives you 12 different ways to compress it, all under one API.
 
 Install it, pick a preset, and get the exact launch command for llama.cpp or vLLM with optimal compression. Or use it directly in your own inference code.
+
+Optional runtimes such as FastDMS, FlashAttention, LMCache, MInference, and
+SageAttention are managed through `mtq-env`. Each receives its own reviewed,
+locked `uv` project and virtual environment, so experimenting with an add-on
+does not replace packages in the core Multi-TurboQuant environment.
 
 ```bash
 git clone https://github.com/aivrar/multi-turboquant
@@ -82,7 +88,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-149 automated test cases: 138 pass in the current Windows CPU environment and
+169 automated test cases: 158 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -90,7 +96,8 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_methods.py` | 64 | All 12 methods encode/decode, config, presets, integration |
 | `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
-| `test_optimizations.py` | 9 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
+| `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
+| `test_environments.py` + `test_env_cli.py` | 18 | Locked profile rendering, read-only plans, overwrite safety, opt-in creation, isolated validation |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 
 ```bash
@@ -276,6 +283,39 @@ This integration is currently limited to validated standard FP16, BF16, and
 FP8 cache layouts. It does not claim that LMCache can serialize custom
 Multi-TurboQuant or KVarN layouts. See [the optimization integration notes](docs/optimizations.md).
 
+### Isolated add-on environments
+
+FastDMS, FlashAttention, LMCache, MInference, and SageAttention have stricter or
+mutually incompatible runtime stacks. Their dependencies remain completely
+optional and are managed in separate, locked environments. Reviewed research
+projects also appear in the list with an explicit reason when automatic
+installation would be unsafe or incomplete:
+
+```bash
+# Read-only: shows requirements, compatibility errors, and build warnings
+mtq-env list
+mtq-env plan fastdms
+mtq-env plan flashattention
+mtq-env plan lmcache
+mtq-env plan minference
+mtq-env plan rocketkv  # reports its research/license block; changes nothing
+
+# Explicitly create .mtq/environments/fastdms/{pyproject.toml,uv.lock,.venv}
+mtq-env create fastdms --yes
+mtq-env check fastdms
+
+# Run the standalone engine without activating or modifying the current environment
+mtq-env run fastdms -- python -c "import fastdms; print(fastdms.__version__)"
+```
+
+`uv` must be installed to create an environment, but it is not required to
+install or use Multi-TurboQuant normally. `pyenv` is optional: select one of its
+interpreters with `--python /path/from/pyenv`. Profiles never install drivers,
+modify the system CUDA toolkit, clone an unreviewed moving branch, or perform
+privileged host installation. Native builds are announced in the read-only plan,
+and creation always requires the explicit `--yes` flag. See
+[the dependency-profile table and validation record](docs/optimizations.md#built-in-profiles).
+
 ### Plan a multi-agent deployment
 
 ```python
@@ -385,7 +425,7 @@ multi_turboquant/
   planner.py             Multi-agent capacity planning, any GPU count
   hardware.py            GPU auto-detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks
-  optimizations/         Optional plugin manifests, probes, conflict planner
+  optimizations/         Optional manifests, conflict planner, isolated env manager
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, frequency stats, auto-calibrate
@@ -400,7 +440,8 @@ Full manual with 23 chapters: **[docs/manual.md](docs/manual.md)**
 Context extension research and implementation notes:
 **[docs/context-extension.md](docs/context-extension.md)**
 
-Optional optimization catalog, compatibility planner, and LMCache integration:
+Optional optimization catalog, isolated add-on environments, compatibility
+planner, and LMCache integration:
 **[docs/optimizations.md](docs/optimizations.md)**
 
 ## Attribution
@@ -432,7 +473,13 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested the Godzilla llama.cpp + KVarN integration and provided the issue context that shaped the backend-only profile design | [@jawadala](https://github.com/jawadala) | Issue [#9](https://github.com/aivrar/multi-turboquant/issues/9) |
 | Suggested context-extension support, Resonance RoPE research, UI capability scanning, and the KVarN/TriAttention compatibility review | [@jawadala](https://github.com/jawadala) | Issue [#11](https://github.com/aivrar/multi-turboquant/issues/11) |
 | Suggested the modular optimization catalog, LMCache/Maru investigation, attention alternatives, and compatibility planning | [@jawadala](https://github.com/jawadala) | Issue [#13](https://github.com/aivrar/multi-turboquant/issues/13) |
+| Suggested isolated dependency handling for FastDMS, FlashAttention, and the other optional add-ons, including pyenv-compatible interpreter selection | [@jawadala](https://github.com/jawadala) | Issue [#15](https://github.com/aivrar/multi-turboquant/issues/15) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
+
+Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue
+reports and feature suggestions that informed the Godzilla/KVarN support,
+context-extension tooling, optimization catalog, and isolated dependency
+system.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 
