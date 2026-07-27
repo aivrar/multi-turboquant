@@ -51,6 +51,8 @@ class DependencyProfile:
     build_may_compile: bool = False
     installable: bool = True
     blocked_reason: str | None = None
+    source_build_packages: tuple[str, ...] = ()
+    source_build_environment: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not _PROFILE_ID.fullmatch(self.id):
@@ -63,6 +65,8 @@ class DependencyProfile:
             raise ValueError("Installable dependency profiles cannot have a blocked reason")
         if not self.installable and not self.blocked_reason:
             raise ValueError("Blocked dependency profiles must explain why they are blocked")
+        if self.source_build_environment and not self.source_build_packages:
+            raise ValueError("Source-build environment variables require source-build packages")
 
     def to_dict(self) -> dict:
         return {
@@ -78,6 +82,8 @@ class DependencyProfile:
             "required_executables": list(self.required_executables),
             "no_build_isolation_packages": list(self.no_build_isolation_packages),
             "build_environment": dict(self.build_environment),
+            "source_build_packages": list(self.source_build_packages),
+            "source_build_environment": dict(self.source_build_environment),
             "package_sources": dict(self.package_sources),
             "package_indexes": dict(self.package_indexes),
             "dependency_metadata": [
@@ -120,6 +126,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         required_executables=("nvcc",),
         no_build_isolation_packages=("flash-attn",),
         build_environment=(("MAX_JOBS", "4"),),
+        source_build_packages=("flash-attn",),
+        source_build_environment=(("FLASH_ATTENTION_FORCE_BUILD", "TRUE"),),
         package_sources=(("torch", "pytorch-cu126"),),
         package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
         cuda_toolkit_major=12,
@@ -153,6 +161,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         required_executables=("nvcc",),
         no_build_isolation_packages=("flash-attn",),
         build_environment=(("MAX_JOBS", "4"),),
+        source_build_packages=("flash-attn",),
+        source_build_environment=(("FLASH_ATTENTION_FORCE_BUILD", "TRUE"),),
         package_sources=(("torch", "pytorch-cu126"),),
         package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
         cuda_toolkit_major=12,
@@ -457,6 +467,7 @@ class EnvironmentPlan:
     project_toml: str
     commands: tuple[EnvironmentCommand, ...]
     issues: tuple[EnvironmentIssue, ...]
+    build_from_source: bool = False
 
     @property
     def ready(self) -> bool:
@@ -467,6 +478,10 @@ class EnvironmentPlan:
             "profile": self.profile.to_dict(),
             "target": str(self.target),
             "python_request": self.python_request,
+            "build_from_source": self.build_from_source,
+            "source_build_packages": (
+                list(self.profile.source_build_packages) if self.build_from_source else []
+            ),
             "ready": self.ready,
             "commands": [command.to_dict() for command in self.commands],
             "issues": [issue.to_dict() for issue in self.issues],
@@ -478,7 +493,11 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def render_profile_project(profile: DependencyProfile) -> str:
+def render_profile_project(
+    profile: DependencyProfile,
+    *,
+    build_from_source: bool = False,
+) -> str:
     """Render the independent uv project used to lock one profile."""
     if not profile.installable:
         raise ValueError(f"Dependency profile {profile.id!r} is blocked")
@@ -499,6 +518,9 @@ def render_profile_project(profile: DependencyProfile) -> str:
     if profile.no_build_isolation_packages:
         rendered = ", ".join(_toml_string(item) for item in profile.no_build_isolation_packages)
         lines.append(f"no-build-isolation-package = [{rendered}]")
+    if build_from_source and profile.source_build_packages:
+        rendered = ", ".join(_toml_string(item) for item in profile.source_build_packages)
+        lines.append(f"no-binary-package = [{rendered}]")
     if profile.package_sources:
         lines.extend(["", "[tool.uv.sources]"])
         for package, index in profile.package_sources:
@@ -541,6 +563,7 @@ def plan_environment(
     *,
     root: str | Path = DEFAULT_ENVIRONMENT_ROOT,
     python: str | None = None,
+    build_from_source: bool = False,
     context: EnvironmentContext | None = None,
 ) -> EnvironmentPlan:
     """Plan environment creation without writing files or running commands."""
@@ -564,6 +587,7 @@ def plan_environment(
             profile=profile,
             target=target,
             python_request=python_request,
+            build_from_source=build_from_source,
             project_toml="",
             commands=(),
             issues=tuple(issues),
@@ -629,6 +653,24 @@ def plan_environment(
                 "Installation may compile CUDA/C++ extensions and can take several minutes.",
             )
         )
+    if build_from_source:
+        if not profile.source_build_packages:
+            issues.append(
+                EnvironmentIssue(
+                    "error",
+                    "source_build_unavailable",
+                    f"{profile.name} does not declare a reviewed source-build path.",
+                )
+            )
+        else:
+            packages = ", ".join(profile.source_build_packages)
+            issues.append(
+                EnvironmentIssue(
+                    "warning",
+                    "source_build_forced",
+                    f"Source compilation is forced for: {packages}.",
+                )
+            )
     if "pyenv" in context.available_executables:
         issues.append(
             EnvironmentIssue(
@@ -638,15 +680,21 @@ def plan_environment(
             )
         )
 
+    command_argv = ["uv", "sync", "--project", str(target), "--python", python_request]
+    if build_from_source:
+        command_argv.append("--no-cache")
+        for package in profile.source_build_packages:
+            command_argv.extend(("--reinstall-package", package))
     command = EnvironmentCommand(
         "Resolve, lock, and synchronize the isolated environment",
-        ("uv", "sync", "--project", str(target), "--python", python_request),
+        tuple(command_argv),
     )
     return EnvironmentPlan(
         profile=profile,
         target=target,
         python_request=python_request,
-        project_toml=render_profile_project(profile),
+        build_from_source=build_from_source,
+        project_toml=render_profile_project(profile, build_from_source=build_from_source),
         commands=(command,),
         issues=tuple(issues),
     )
@@ -707,6 +755,8 @@ def synchronize_environment(
         argv.append("--upgrade")
     child_environment = dict(os.environ)
     child_environment.update(dict(plan.profile.build_environment))
+    if plan.build_from_source:
+        child_environment.update(dict(plan.profile.source_build_environment))
     result = runner(argv, cwd=plan.target, env=child_environment, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"uv sync failed with exit code {result.returncode}")

@@ -18,13 +18,23 @@ from .environments import (
 )
 
 
-def _add_common_profile_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_common_profile_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    allow_source_build: bool = False,
+) -> None:
     parser.add_argument("profile", choices=[item.id for item in BUILTIN_ENVIRONMENT_PROFILES])
     parser.add_argument("--root", type=Path, default=DEFAULT_ENVIRONMENT_ROOT)
     parser.add_argument(
         "--python",
         help="Python version or interpreter path; pyenv interpreter paths are accepted",
     )
+    if allow_source_build:
+        parser.add_argument(
+            "--build-from-source",
+            action="store_true",
+            help="Force the profile's reviewed native packages to build locally",
+        )
 
 
 def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
@@ -35,6 +45,9 @@ def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
     print(f"Status:  {'installable' if plan.profile.installable else 'blocked'}")
     print(f"Target:  {plan.target}")
     print(f"Python:  {plan.python_request} ({plan.profile.python_spec})")
+    if plan.build_from_source:
+        packages = ", ".join(plan.profile.source_build_packages) or "unavailable"
+        print(f"Source:  forced ({packages})")
     if plan.profile.packages:
         print("Packages:")
         for package in plan.profile.packages:
@@ -55,11 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument("--json", action="store_true")
 
     plan_parser = subparsers.add_parser("plan", help="Inspect an environment without changing it")
-    _add_common_profile_arguments(plan_parser)
+    _add_common_profile_arguments(plan_parser, allow_source_build=True)
     plan_parser.add_argument("--json", action="store_true")
 
     create_parser = subparsers.add_parser("create", help="Create and lock an isolated environment")
-    _add_common_profile_arguments(create_parser)
+    _add_common_profile_arguments(create_parser, allow_source_build=True)
     create_parser.add_argument("--yes", action="store_true", help="Confirm downloads/builds")
     create_parser.add_argument("--upgrade", action="store_true", help="Refresh locked versions")
     create_parser.add_argument("--no-check", action="store_true", help="Skip post-install imports")
@@ -86,7 +99,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{profile.id:22} {status:11} {profile.name}")
         return 0
 
-    plan = plan_environment(args.profile, root=args.root, python=args.python)
+    plan = plan_environment(
+        args.profile,
+        root=args.root,
+        python=args.python,
+        build_from_source=getattr(args, "build_from_source", False),
+    )
     if args.action == "plan":
         _print_plan(plan, as_json=args.json)
         return 0 if plan.ready else 2
