@@ -978,9 +978,11 @@ for issue in issues:
 
 ---
 
-## 15. Web Dashboard
+## 15. Local UI Workspace
 
-The included `run_ui.py` provides a browser-based dashboard for exploring the library without writing code.
+The included `run_ui.py` provides a persistent localhost workspace for
+exploring, configuring, and launching the supported local tools without writing
+code.
 
 ### Starting the dashboard
 
@@ -988,7 +990,10 @@ The included `run_ui.py` provides a browser-based dashboard for exploring the li
 python run_ui.py
 ```
 
-Opens `http://localhost:9092` in your browser automatically. Use `--port 8080` for a different port, or `--no-browser` to suppress auto-open.
+Opens `http://localhost:9092` in your browser automatically. Use `--port 8080`
+for a different port, `--no-browser` to suppress auto-open,
+`--settings-file PATH` to select an alternate settings document, or
+`--read-only` to disable every mutating control.
 
 ### What the dashboard shows
 
@@ -997,13 +1002,31 @@ Opens `http://localhost:9092` in your browser automatically. Use `--port 8080` f
 - **Presets list**: All 19 named presets
 - **Capacity planner**: Enter model size, agents, context -- get instant feasibility report
 - **Benchmark runner**: Run encode/decode on all methods (CPU or GPU), see cosine similarity and timing
-- **Command generator**: Pick K/V methods, model path, context -- get the exact llama.cpp command to copy-paste
+- **Command generator**: Pick K/V methods, model path, context, CUDA
+  weight-sharing, and RoPE/YaRN options -- get the exact llama.cpp command
+- **Model library and launcher**: Scan a configured folder, select a GGUF model,
+  and start or stop one managed `llama-server` process
+- **Setup & Add-ons**: Save workspace paths, inspect configured add-on and
+  FlashAttention source folders, and create reviewed isolated dependency
+  profiles after explicit confirmation
 
 ### How it works
 
-The dashboard is a single Python file using stdlib `http.server`. No Flask, no npm, no build step. The HTML/CSS/JS is embedded in the Python file. It calls the same `multi_turboquant` API functions that your code would call -- `detect_gpus()`, `plan_agents()`, `get_method()`, etc.
+The dashboard uses stdlib `http.server`. No Flask, npm, or frontend build step
+is required. The HTML/CSS/JS is embedded in `run_ui.py`; persistence, bounded
+discovery, and process controls live in `multi_turboquant.ui`. It calls the same
+library APIs and `mtq-env` profiles used by the command-line tools.
 
-The dashboard does not run models or serve inference. It is a configuration and planning tool.
+Settings and form defaults are stored in a versioned JSON file at
+`~/.multi-turboquant/ui-settings.json` unless overridden. Model and add-on scans
+stay within explicitly configured roots, do not follow directory symlinks, and
+do not import discovered code. Managed model launching accepts only an existing
+`.gguf` file inside the saved model root and executes an argument list without a
+shell.
+
+See [the UI workspace guide](ui-workspace.md) for the complete workflow,
+supported discovery formats, launch boundary, settings import/export, and
+localhost security model.
 
 ---
 
@@ -1413,8 +1436,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Context extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | ggml-org / llama.cpp, sheryc / resonance_rope, published papers | See upstream |
 | Godzilla + KVarN integration request and issue context | jawadala / issue #9 | Community contribution |
 | Context extension, Resonance RoPE review, UI scanner, and KVarN/TriAttention compatibility request | jawadala / issue #11 | Community contribution |
+| Local UI workspace, persistent defaults, model/add-on discovery, and recent option exposure | jawadala / issue #19 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation and compatibility integration only; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for identifying the Godzilla/KVarN integration target in issue #9 and the context-extension/UI scanner work in issue #11.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation and compatibility integration only; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for the sustained issue reports that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, and consolidated UI workspace.
 
 ---
 

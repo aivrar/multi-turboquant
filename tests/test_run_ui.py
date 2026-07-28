@@ -4,6 +4,8 @@
 import pytest
 
 from multi_turboquant import CacheMethod
+from multi_turboquant.ui import UISettingsStore
+import run_ui
 from run_ui import (
     _command_config,
     _command_context_extension_config,
@@ -227,3 +229,92 @@ def test_api_generate_command_rejects_kvarn_without_godzilla_profile():
 
     assert result["command"] == ""
     assert any(issue["method"] == "command" for issue in result["issues"])
+
+
+def test_api_settings_persist_workspace_and_form_values(tmp_path, monkeypatch):
+    store = UISettingsStore(tmp_path / "ui.json")
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    state = run_ui.api_save_settings(
+        {
+            "schema": 1,
+            "model_root": str(tmp_path / "models"),
+            "environment_root": str(tmp_path / "envs"),
+            "flashattention_source": "",
+            "addon_roots": [str(tmp_path / "addons")],
+            "form_values": {"cmd-k": "f16", "cmd-context": "8192"},
+        }
+    )
+
+    assert state["settings"]["form_values"]["cmd-k"] == "f16"
+    assert run_ui.api_settings()["settings"] == state["settings"]
+
+
+def test_api_runtime_launch_is_bounded_to_saved_model_root(tmp_path, monkeypatch):
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    model = model_root / "model.gguf"
+    model.write_bytes(b"gguf")
+    outside = tmp_path / "outside.gguf"
+    outside.write_bytes(b"gguf")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            "schema": 1,
+            "model_root": str(model_root),
+            "environment_root": str(tmp_path / "envs"),
+            "flashattention_source": "",
+            "addon_roots": [],
+            "form_values": {},
+        }
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    with pytest.raises(ValueError, match="inside the configured model root"):
+        run_ui.api_runtime_start({"model_path": str(outside)})
+
+
+def test_api_runtime_start_uses_generated_argv_without_shell(tmp_path, monkeypatch):
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    model = model_root / "model.gguf"
+    model.write_bytes(b"gguf")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            "schema": 1,
+            "model_root": str(model_root),
+            "environment_root": str(tmp_path / "envs"),
+            "flashattention_source": "",
+            "addon_roots": [],
+            "form_values": {},
+        }
+    )
+    calls = []
+
+    class FakeProcess:
+        def start(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            return {"running": True, "pid": 123, "log": []}
+
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "MODEL_PROCESS", FakeProcess())
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+    monkeypatch.setattr(
+        run_ui,
+        "api_generate_command",
+        lambda params: {"command": "fake", "argv": ["llama-server", "--model", params["model_path"]], "issues": []},
+    )
+
+    status = run_ui.api_runtime_start({"model_path": str(model)})
+
+    assert status["running"] is True
+    assert calls[0][0] == ["llama-server", "--model", str(model.resolve())]
+    assert calls[0][1]["cwd"] == model.parent.resolve()
+
+
+def test_environment_creation_requires_explicit_ui_confirmation():
+    with pytest.raises(ValueError, match="explicit confirmation"):
+        run_ui.api_create_environment({"profile": "fastdms", "confirm": False})

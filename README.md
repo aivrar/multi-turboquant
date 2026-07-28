@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-158%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-176%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -88,7 +88,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-169 automated test cases: 158 pass in the current Windows CPU environment and
+187 automated test cases: 176 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -97,8 +97,11 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
-| `test_environments.py` + `test_env_cli.py` | 18 | Locked profile rendering, read-only plans, overwrite safety, opt-in creation, isolated validation |
+| `test_environments.py` + `test_env_cli.py` | 24 | Locked profile rendering, read-only plans, overwrite safety, opt-in creation, isolated validation |
+| `test_run_ui.py` + `test_ui_workspace.py` | 25 | Command generation, persistent settings, bounded discovery, managed processes, and explicit environment creation |
+| `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
+| `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
 
 ```bash
 pytest tests/                              # full suite
@@ -414,13 +417,28 @@ IsoQuant and PlanarQuant need **no calibration** — just works.
 | macOS + Apple Silicon | iso/planar (4) + rotor (Python) + fused MLX kernels (ForgeAttention) | llama.cpp (Metal) + MLX |
 | Any (CPU) | All 12 | Library only |
 
-## Web Dashboard
+## Local UI Workspace
 
 ```bash
 python run_ui.py
 ```
 
-Browser-based UI for exploring methods, running benchmarks, planning deployments, and generating commands. No dependencies beyond the library itself.
+The browser UI now has two focused views:
+
+- **Quick Run** keeps hardware detection, cache-method benchmarking, capacity
+  planning, presets, and llama.cpp command generation together. It can discover
+  models under a configured folder and start or stop a selected GGUF model with
+  the generated argument list.
+- **Setup & Add-ons** stores the model, environment, add-on, and optional
+  FlashAttention source folders; scans only those configured folders; and can
+  create the reviewed isolated `mtq-env` dependency profiles after explicit
+  confirmation.
+
+Settings and form defaults persist in
+`~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
+and neither the UI nor its settings require an npm or frontend build. See the
+**[UI workspace guide](docs/ui-workspace.md)** for model formats, launch safety,
+settings import/export, and command-line options.
 
 ## Architecture
 
@@ -450,6 +468,9 @@ Context extension research and implementation notes:
 Optional optimization catalog, isolated add-on environments, compatibility
 planner, and LMCache integration:
 **[docs/optimizations.md](docs/optimizations.md)**
+
+Persistent local UI, model discovery and launching, and add-on setup:
+**[docs/ui-workspace.md](docs/ui-workspace.md)**
 
 ## Attribution
 
@@ -482,12 +503,14 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested the modular optimization catalog, LMCache/Maru investigation, attention alternatives, and compatibility planning | [@jawadala](https://github.com/jawadala) | Issue [#13](https://github.com/aivrar/multi-turboquant/issues/13) |
 | Suggested isolated dependency handling for FastDMS, FlashAttention, and the other optional add-ons, including pyenv-compatible interpreter selection | [@jawadala](https://github.com/jawadala) | Issue [#15](https://github.com/aivrar/multi-turboquant/issues/15) |
 | Suggested an explicit local source-build option for projects that depend on FlashAttention | [@jawadala](https://github.com/jawadala) | Issue [#17](https://github.com/aivrar/multi-turboquant/issues/17) |
+| Suggested separating quick-run controls from advanced setup, persisting defaults, discovering models and add-ons, and exposing the recent KV, weight-sharing, and RoPE/YaRN options in the UI | [@jawadala](https://github.com/jawadala) | Issue [#19](https://github.com/aivrar/multi-turboquant/issues/19) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue
 reports and feature suggestions that informed the Godzilla/KVarN support,
 context-extension tooling, optimization catalog, and isolated dependency
-system.
+system, including the practical UI workflow that brings those additions
+together.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

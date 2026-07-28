@@ -12,11 +12,13 @@ import argparse
 import http.server
 import json
 import os
+import shlex
 import sys
 import threading
 import time
 import webbrowser
-from urllib.parse import urlparse, parse_qs
+from pathlib import Path
+from urllib.parse import urlparse
 
 # Ensure the package is importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,17 +27,24 @@ import torch
 from multi_turboquant import (
     __version__, CacheConfig, CacheMethod,
     get_method, get_preset, list_presets, registered_methods,
-    plan_agents, plan_scenarios,
+    plan_agents,
 )
 from multi_turboquant.hardware import detect_platform, detect_gpus
-from multi_turboquant.compatibility import (
-    check_config, get_available_methods, get_recommended_config,
-)
+from multi_turboquant.compatibility import check_config
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
 from multi_turboquant.integration import (
     CudaWeightShareConfig,
     LlamaCppContextExtensionConfig,
     scan_llamacpp_binary,
+)
+from multi_turboquant.ui import (
+    EnvironmentJobManager,
+    ManagedProcess,
+    UISettingsStore,
+    inspect_flashattention_source,
+    scan_addon_roots,
+    scan_environment_profiles,
+    scan_models,
 )
 
 
@@ -47,6 +56,11 @@ BACKEND_ONLY_METHODS = (
     CacheMethod.KVARN6,
     CacheMethod.KVARN8,
 )
+
+SETTINGS_STORE = UISettingsStore()
+MODEL_PROCESS = ManagedProcess()
+ENVIRONMENT_JOBS = EnvironmentJobManager()
+UI_MUTATIONS_ENABLED = True
 
 
 # ─── API Handlers ───────────────────────────────────────────────────────────────
@@ -336,6 +350,7 @@ def api_generate_command(params):
     context_extension = _command_context_extension_config(params)
     issues = []
     command = ""
+    command_argv = []
     missing_patched_triattention_stats = (
         config.triattention_enabled
         and config.use_custom_triattention_llamacpp
@@ -347,8 +362,10 @@ def api_generate_command(params):
                 config,
                 binary=params.get("binary") or "llama-server",
                 model_path=params.get("model_path", "/opt/models/model.gguf"),
+                host=params.get("host") or "127.0.0.1",
                 port=int(params.get("port", 8080)),
                 context_size=int(params.get("context", 4096)),
+                gpu_layers=_optional_int(params.get("gpu_layers"), 99),
                 tensor_split=params.get("tensor_split"),
                 parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
                 cuda_weight_share=cuda_weight_share,
@@ -356,7 +373,8 @@ def api_generate_command(params):
                 context_extension=context_extension,
                 speculative=speculative,
             )
-            command = " ".join(cmd)
+            command_argv = cmd
+            command = shlex.join(cmd)
         except ValueError as e:
             issues.append({"severity": "error", "method": "command",
                            "message": str(e), "suggestion": "Fix the command inputs."})
@@ -369,7 +387,131 @@ def api_generate_command(params):
         for warning in cuda_weight_share.validate():
             issues.append({"severity": "error", "method": "cuda_weight_share",
                            "message": warning, "suggestion": "Fix weight-share inputs."})
-    return {"command": command, "issues": issues}
+    return {"command": command, "argv": command_argv, "issues": issues}
+
+
+def api_settings():
+    return SETTINGS_STORE.public_state()
+
+
+def api_save_settings(params):
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    return {
+        "path": str(SETTINGS_STORE.path.resolve()),
+        "settings": SETTINGS_STORE.save(params),
+    }
+
+
+def api_reset_settings():
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    return {
+        "path": str(SETTINGS_STORE.path.resolve()),
+        "settings": SETTINGS_STORE.reset(),
+    }
+
+
+def _saved_settings():
+    return SETTINGS_STORE.load()
+
+
+def api_scan_models(params):
+    settings = _saved_settings()
+    root = params.get("root") or settings["model_root"]
+    return scan_models(
+        root,
+        max_depth=int(params.get("max_depth", 3)),
+        limit=int(params.get("limit", 500)),
+    )
+
+
+def api_scan_addons(params):
+    settings = _saved_settings()
+    roots = params.get("roots") or settings["addon_roots"]
+    if not isinstance(roots, list):
+        raise ValueError("roots must be a list")
+    return scan_addon_roots(
+        roots,
+        max_depth=int(params.get("max_depth", 2)),
+        limit=int(params.get("limit", 200)),
+    )
+
+
+def api_scan_flashattention(params):
+    settings = _saved_settings()
+    path = params.get("path") or settings["flashattention_source"]
+    return inspect_flashattention_source(path)
+
+
+def api_scan_environments(params):
+    settings = _saved_settings()
+    root = params.get("root") or settings["environment_root"]
+    return scan_environment_profiles(root)
+
+
+def api_create_environment(params):
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    if params.get("confirm") is not True:
+        raise ValueError("Environment creation requires explicit confirmation")
+    settings = _saved_settings()
+    profile = _optional_text(params.get("profile"))
+    if profile is None:
+        raise ValueError("An environment profile is required")
+    return ENVIRONMENT_JOBS.start_create(
+        profile,
+        root=params.get("root") or settings["environment_root"],
+        python=_optional_text(params.get("python")),
+        build_from_source=_truthy(params.get("build_from_source")),
+    )
+
+
+def api_environment_jobs():
+    return {"jobs": ENVIRONMENT_JOBS.list()}
+
+
+def _validated_launch_model(model_path: str) -> Path:
+    settings = _saved_settings()
+    model_root = str(settings["model_root"])
+    if not model_root:
+        raise ValueError("Configure and save a model root before launching")
+    root = Path(model_root).expanduser().resolve()
+    if not root.is_dir():
+        raise ValueError(f"Configured model root is not available: {root}")
+    model = Path(model_path).expanduser().resolve()
+    if not model.is_file() or model.suffix.lower() != ".gguf":
+        raise ValueError("Quick Run launches existing .gguf files only")
+    if not model.is_relative_to(root):
+        raise ValueError("The selected model must be inside the configured model root")
+    return model
+
+
+def api_runtime_start(params):
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    model = _validated_launch_model(str(params.get("model_path", "")))
+    payload = dict(params)
+    payload["model_path"] = str(model)
+    payload["host"] = payload.get("host") or "127.0.0.1"
+    result = api_generate_command(payload)
+    errors = [issue for issue in result["issues"] if issue["severity"] == "error"]
+    if errors:
+        raise ValueError("; ".join(str(issue["message"]) for issue in errors))
+    argv = result["argv"]
+    if not argv:
+        raise ValueError("The current settings did not produce a launch command")
+    return MODEL_PROCESS.start(argv, cwd=model.parent)
+
+
+def api_runtime_stop():
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    return MODEL_PROCESS.stop()
+
+
+def api_runtime_status():
+    return MODEL_PROCESS.status()
 
 
 # ─── HTML UI ────────────────────────────────────────────────────────────────────
@@ -386,7 +528,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
        background: #0d1117; color: #c9d1d9; line-height: 1.5; }
 .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
 h1 { color: #58a6ff; font-size: 24px; margin-bottom: 4px; }
-.subtitle { color: #8b949e; font-size: 13px; margin-bottom: 20px; }
+.subtitle { color: #8b949e; font-size: 13px; margin-bottom: 10px; }
+.topbar { display:flex; justify-content:space-between; gap:12px; align-items:center;
+          margin-bottom:16px; flex-wrap:wrap; }
+.view-tabs { display:flex; gap:6px; padding:4px; border:1px solid #30363d;
+             background:#161b22; border-radius:8px; }
+.view-tabs button { background:transparent; color:#8b949e; padding:7px 12px; }
+.view-tabs button.active { background:#1f6feb; color:#fff; }
+.save-state { font-size:12px; color:#8b949e; }
+.save-state.ok { color:#3fb950; }
+.save-state.error { color:#ff7b72; }
+.view { display:none; }
+.view.active { display:block; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
 .card h2 { color: #58a6ff; font-size: 14px; margin-bottom: 12px; text-transform: uppercase;
@@ -420,8 +573,9 @@ th { text-align: left; color: #8b949e; font-weight: 600; padding: 8px 6px;
      border-bottom: 2px solid #30363d; }
 td { padding: 6px; border-bottom: 1px solid #21262d; }
 .num { text-align: right; font-family: 'SF Mono', Monaco, monospace; }
-input, select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
-                padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 100%; }
+input, select, textarea { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+                 padding: 6px 10px; border-radius: 4px; font-size: 13px; width: 100%; }
+textarea { resize:vertical; font-family:inherit; }
 label { font-size: 12px; color: #8b949e; display: block; margin-bottom: 4px; }
 .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px;
             margin-bottom: 12px; }
@@ -430,6 +584,23 @@ button { background: #238636; color: #fff; border: none; padding: 8px 16px;
 button:hover { background: #2ea043; }
 button.secondary { background: #30363d; }
 button.secondary:hover { background: #3d444d; }
+button.danger { background:#8e2424; }
+button.danger:hover { background:#a83232; }
+button:disabled { opacity:0.55; cursor:not-allowed; }
+.button-row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+.muted { color:#8b949e; font-size:12px; }
+.setup-note { border-left:3px solid #1f6feb; background:#0d1117; padding:10px 12px;
+              color:#8b949e; font-size:12px; margin-bottom:12px; }
+.item-list { display:grid; gap:8px; margin-top:10px; }
+.item { border:1px solid #30363d; background:#0d1117; border-radius:6px; padding:10px; }
+.item-title { display:flex; justify-content:space-between; gap:10px; font-weight:600; }
+.status-pill { display:inline-block; border:1px solid #30363d; border-radius:999px;
+               padding:2px 8px; font-size:10px; text-transform:uppercase; }
+.status-ready,.status-installed,.status-completed { color:#3fb950; border-color:#238636; }
+.status-configured,.status-running,.status-queued { color:#d29922; border-color:#d29922; }
+.status-blocked,.status-incompatible,.status-failed { color:#ff7b72; border-color:#f85149; }
+.runtime-actions { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:end; }
+.runtime-log { min-height:70px; }
 .result-box { background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
               padding: 12px; font-family: 'SF Mono', Monaco, monospace; font-size: 12px;
               margin-top: 10px; white-space: pre-wrap; overflow-x: auto; max-height: 300px;
@@ -441,13 +612,27 @@ button.secondary:hover { background: #3d444d; }
 .dot-red { background: #f85149; }
 .cos-bar { display: inline-block; height: 6px; border-radius: 3px; background: #238636; }
 #loading { text-align: center; padding: 40px; color: #8b949e; }
+@media (max-width: 760px) {
+  .grid,.form-row { grid-template-columns:1fr; }
+  .card.full { grid-column:1; }
+  .runtime-actions { grid-template-columns:1fr; }
+  [style*="grid-column"] { grid-column:1 !important; }
+}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Multi-TurboQuant</h1>
   <div class="subtitle" id="version-info">Loading...</div>
+  <div class="topbar">
+    <div class="view-tabs" role="tablist" aria-label="Workspace views">
+      <button id="tab-quick" class="active" onclick="showView('quick')">Quick Run</button>
+      <button id="tab-setup" onclick="showView('setup')">Setup &amp; Add-ons</button>
+    </div>
+    <div id="save-state" class="save-state">Loading saved settings...</div>
+  </div>
 
+  <section id="view-quick" class="view active">
   <div class="grid">
     <!-- GPU Status -->
     <div class="card">
@@ -554,10 +739,24 @@ button.secondary:hover { background: #3d444d; }
         </div></div>
       </div>
       <div class="form-row">
+        <div style="grid-column:1/3"><label>Discovered Model</label>
+          <select id="cmd-model-select" onchange="selectDiscoveredModel()">
+            <option value="">Configure a model root in Setup</option>
+          </select>
+        </div>
+        <div><label>&nbsp;</label><button class="secondary" onclick="scanModels()">Refresh Models</button></div>
+        <div><label>GPU Layers</label><input type="number" id="cmd-gpu-layers" value="99" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
         <div style="grid-column:1/4"><label>Model Path</label>
           <input type="text" id="cmd-model" value="/opt/models/model.gguf" onchange="generateCommand()">
         </div>
         <div><label>Parallel Slots</label><input type="number" id="cmd-parallel" value="1" onchange="generateCommand()"></div>
+      </div>
+      <div class="form-row">
+        <div style="grid-column:1/3"><label>Server Host</label><input type="text" id="cmd-host" value="127.0.0.1" onchange="generateCommand()"></div>
+        <div><label>Server Port</label><input type="number" id="cmd-port" value="8080" onchange="generateCommand()"></div>
+        <div><label>Tensor Split</label><input type="text" id="cmd-tensor-split" value="" placeholder="0.7,0.3" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-spec-dflash" onchange="generateCommand()"> DFlash</label></div>
@@ -595,18 +794,208 @@ button.secondary:hover { background: #3d444d; }
         <div><label><input type="checkbox" id="cmd-ws-trace" onchange="generateCommand()"> Trace</label></div>
       </div>
       <div class="result-box" id="cmd-result">Select methods above...</div>
+      <div class="mini-label">Managed llama-server</div>
+      <div class="runtime-actions">
+        <div id="runtime-summary" class="muted">Not running</div>
+        <button id="runtime-start" onclick="startRuntime()">Start</button>
+        <button id="runtime-stop" class="danger" onclick="stopRuntime()" disabled>Stop</button>
+      </div>
+      <div class="result-box runtime-log" id="runtime-log">No process output.</div>
     </div>
   </div>
+  </section>
+
+  <section id="view-setup" class="view">
+    <div class="grid">
+      <div class="card full">
+        <h2>Persistent Workspace</h2>
+        <div class="setup-note">Settings are stored in a versioned JSON file. Scanners only inspect the roots configured here; they never search entire disks.</div>
+        <div class="form-row">
+          <div style="grid-column:1/3"><label>Default Model Root</label><input type="text" id="setup-model-root" placeholder="D:\\models or /opt/models"></div>
+          <div style="grid-column:3/5"><label>Dependency Environment Root</label><input type="text" id="setup-environment-root" value=".mtq/environments"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:1/3"><label>FlashAttention Source Folder</label><input type="text" id="setup-flash-source" placeholder="/path/to/flash-attention"></div>
+          <div style="grid-column:3/5"><label>Add-on Roots (one per line)</label><textarea id="setup-addon-roots" rows="3" placeholder="/opt/addons"></textarea></div>
+        </div>
+        <div class="button-row">
+          <button onclick="saveSettingsNow()">Save Settings</button>
+          <button class="secondary" onclick="resetSettings()">Reset</button>
+          <button class="secondary" onclick="exportSettings()">Export</button>
+          <button class="secondary" onclick="document.getElementById('settings-import').click()">Import</button>
+          <input id="settings-import" type="file" accept="application/json" style="display:none" onchange="importSettings(this)">
+          <span class="muted" id="settings-path"></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Model Library</h2>
+        <p class="muted">Finds GGUF files for Quick Run and reports other recognized model formats.</p>
+        <div class="button-row"><button onclick="scanModels()">Scan Models</button></div>
+        <div id="model-scan-result" class="item-list"><div class="muted">Not scanned.</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Add-on Sources</h2>
+        <p class="muted">Recognizes FlashAttention, FastDMS, LMCache, MInference, SageAttention, and llama.cpp checkouts.</p>
+        <div class="button-row">
+          <button onclick="scanAddons()">Scan Add-ons</button>
+          <button class="secondary" onclick="scanFlashAttention()">Check FlashAttention</button>
+        </div>
+        <div id="addon-scan-result" class="item-list"><div class="muted">Not scanned.</div></div>
+      </div>
+
+      <div class="card full">
+        <h2>Dependency Environments</h2>
+        <div class="setup-note">Creation reuses the reviewed <code>mtq-env</code> profiles. Downloads and native builds start only after explicit confirmation.</div>
+        <div class="form-row">
+          <div><label>Python override</label><input type="text" id="env-python" placeholder="3.11 or interpreter path"></div>
+          <div><label><input type="checkbox" id="env-build-source"> Force reviewed source build</label></div>
+          <div><label><input type="checkbox" id="env-confirm"> Confirm downloads/builds</label></div>
+          <div><label>&nbsp;</label><button onclick="scanEnvironments()">Refresh Profiles</button></div>
+        </div>
+        <div id="environment-result" class="item-list"><div class="muted">Not scanned.</div></div>
+      </div>
+
+      <div class="card full">
+        <h2>Background Jobs</h2>
+        <div id="environment-jobs" class="item-list"><div class="muted">No environment jobs.</div></div>
+      </div>
+    </div>
+  </section>
 </div>
 
 <script>
 const API = '';
 let llamaCppCapabilities = null;
+let currentSettings = null;
+let discoveredModels = [];
+let saveTimer = null;
+let statusTimer = null;
 
 async function api(path, body) {
   const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
   const r = await fetch(API + path, opts);
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+  return data;
+}
+
+function showView(name) {
+  document.querySelectorAll('.view').forEach(el => el.classList.toggle('active', el.id === `view-${name}`));
+  document.querySelectorAll('.view-tabs button').forEach(el => el.classList.toggle('active', el.id === `tab-${name}`));
+  if (currentSettings) {
+    currentSettings.form_values.active_view = name;
+    scheduleSave();
+  }
+}
+
+function setSaveState(message, kind='') {
+  const el = document.getElementById('save-state');
+  el.textContent = message;
+  el.className = `save-state ${kind}`;
+}
+
+function persistentControls() {
+  return [...document.querySelectorAll('input[id], select[id], textarea[id]')].filter(el =>
+    !['settings-import', 'env-confirm', 'setup-model-root', 'setup-environment-root',
+      'setup-flash-source', 'setup-addon-roots'].includes(el.id)
+  );
+}
+
+function collectFormValues() {
+  const values = {};
+  persistentControls().forEach(el => {
+    values[el.id] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  values.active_view = document.getElementById('view-setup').classList.contains('active') ? 'setup' : 'quick';
+  return values;
+}
+
+function applyFormValues(values={}) {
+  Object.entries(values).forEach(([id, value]) => {
+    if (id === 'active_view') return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.type === 'checkbox') el.checked = Boolean(value);
+    else el.value = value ?? '';
+  });
+  if (values.active_view === 'setup') showView('setup');
+}
+
+function settingsPayload() {
+  return {
+    schema: 1,
+    model_root: document.getElementById('setup-model-root').value.trim(),
+    environment_root: document.getElementById('setup-environment-root').value.trim() || '.mtq/environments',
+    flashattention_source: document.getElementById('setup-flash-source').value.trim(),
+    addon_roots: document.getElementById('setup-addon-roots').value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    form_values: collectFormValues(),
+  };
+}
+
+async function loadSettings() {
+  const state = await api('/api/settings');
+  currentSettings = state.settings;
+  document.getElementById('settings-path').textContent = state.path;
+  document.getElementById('setup-model-root').value = currentSettings.model_root || '';
+  document.getElementById('setup-environment-root').value = currentSettings.environment_root || '.mtq/environments';
+  document.getElementById('setup-flash-source').value = currentSettings.flashattention_source || '';
+  document.getElementById('setup-addon-roots').value = (currentSettings.addon_roots || []).join('\n');
+  setSaveState('Settings loaded', 'ok');
+  return currentSettings;
+}
+
+async function saveSettingsNow() {
+  clearTimeout(saveTimer);
+  setSaveState('Saving...');
+  try {
+    const state = await api('/api/settings', settingsPayload());
+    currentSettings = state.settings;
+    document.getElementById('settings-path').textContent = state.path;
+    setSaveState('Settings saved', 'ok');
+  } catch (error) {
+    setSaveState(error.message, 'error');
+    throw error;
+  }
+}
+
+function scheduleSave() {
+  if (!currentSettings) return;
+  setSaveState('Unsaved changes');
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveSettingsNow().catch(() => {}), 500);
+}
+
+async function resetSettings() {
+  if (!confirm('Reset all remembered UI settings?')) return;
+  const state = await api('/api/settings/reset', {});
+  currentSettings = state.settings;
+  location.reload();
+}
+
+function exportSettings() {
+  const payload = JSON.stringify(settingsPayload(), null, 2);
+  const url = URL.createObjectURL(new Blob([payload], {type:'application/json'}));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'multi-turboquant-ui-settings.json';
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importSettings(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    const imported = JSON.parse(await file.text());
+    await api('/api/settings', imported);
+    location.reload();
+  } catch (error) {
+    setSaveState(`Import failed: ${error.message}`, 'error');
+  } finally {
+    input.value = '';
+  }
 }
 
 function escapeHtml(value) {
@@ -656,6 +1045,7 @@ async function scanLlamaCpp() {
 }
 
 async function init() {
+  const saved = await loadSettings();
   const [status, methods, presets] = await Promise.all([
     api('/api/status'), api('/api/methods'), api('/api/presets')
   ]);
@@ -712,6 +1102,195 @@ async function init() {
     cmdK.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
     cmdV.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
   });
+  applyFormValues(saved.form_values || {});
+  persistentControls().forEach(el => {
+    el.addEventListener('input', scheduleSave);
+    el.addEventListener('change', scheduleSave);
+  });
+  ['setup-model-root', 'setup-environment-root', 'setup-flash-source', 'setup-addon-roots']
+    .forEach(id => document.getElementById(id).addEventListener('input', scheduleSave));
+  await Promise.allSettled([scanModels(), scanEnvironments(), refreshRuntime(), refreshJobs()]);
+  await generateCommand();
+  statusTimer = setInterval(() => {
+    refreshRuntime().catch(() => {});
+    refreshJobs().catch(() => {});
+  }, 2000);
+}
+
+function renderFailure(target, error) {
+  document.getElementById(target).innerHTML = `<div class="item"><span class="cap-bad">${escapeHtml(error.message)}</span></div>`;
+}
+
+function selectDiscoveredModel() {
+  const selected = document.getElementById('cmd-model-select').value;
+  if (!selected) return;
+  document.getElementById('cmd-model').value = selected;
+  scheduleSave();
+  generateCommand();
+}
+
+async function scanModels() {
+  const target = document.getElementById('model-scan-result');
+  target.innerHTML = '<div class="muted">Scanning configured model root...</div>';
+  try {
+    const result = await api('/api/discovery/models', {
+      root: document.getElementById('setup-model-root').value,
+    });
+    discoveredModels = result.models;
+    const selector = document.getElementById('cmd-model-select');
+    const current = document.getElementById('cmd-model').value;
+    selector.innerHTML = '<option value="">Select a discovered GGUF model</option>';
+    result.models.filter(model => model.launchable).forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.path;
+      option.textContent = model.relative_path;
+      option.selected = model.path === current;
+      selector.appendChild(option);
+    });
+    if (!result.models.length) {
+      target.innerHTML = '<div class="muted">No recognized model files found.</div>';
+      return;
+    }
+    target.innerHTML = result.models.slice(0, 100).map(model =>
+      `<div class="item"><div class="item-title"><span>${escapeHtml(model.relative_path)}</span>` +
+      `<span class="status-pill ${model.launchable ? 'status-ready' : 'status-configured'}">${escapeHtml(model.format)}</span></div>` +
+      `<div class="muted">${model.launchable ? 'Available in Quick Run' : 'Discovered; not launchable by llama-server'}</div></div>`
+    ).join('');
+  } catch (error) {
+    discoveredModels = [];
+    renderFailure('model-scan-result', error);
+  }
+}
+
+async function scanAddons() {
+  const target = document.getElementById('addon-scan-result');
+  target.innerHTML = '<div class="muted">Scanning configured add-on roots...</div>';
+  try {
+    const roots = document.getElementById('setup-addon-roots').value
+      .split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+    const result = await api('/api/discovery/addons', {roots});
+    let html = result.addons.map(addon =>
+      `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
+      `<span class="status-pill status-ready">${escapeHtml(addon.kind)}</span></div>` +
+      `<div class="muted">${escapeHtml(addon.path)}</div>` +
+      `${addon.git_remote ? `<div class="muted">${escapeHtml(addon.git_remote)}</div>` : ''}</div>`
+    ).join('');
+    result.errors.forEach(error => { html += `<div class="item cap-bad">${escapeHtml(error)}</div>`; });
+    target.innerHTML = html || '<div class="muted">No recognized add-ons found.</div>';
+  } catch (error) {
+    renderFailure('addon-scan-result', error);
+  }
+}
+
+async function scanFlashAttention() {
+  const target = document.getElementById('addon-scan-result');
+  target.innerHTML = '<div class="muted">Inspecting FlashAttention source...</div>';
+  try {
+    const result = await api('/api/discovery/flashattention', {
+      path: document.getElementById('setup-flash-source').value,
+    });
+    const status = result.valid ? 'status-ready' : 'status-failed';
+    target.innerHTML = `<div class="item"><div class="item-title"><span>FlashAttention source</span>` +
+      `<span class="status-pill ${status}">${result.valid ? 'valid' : 'invalid'}</span></div>` +
+      `<div class="muted">${escapeHtml(result.path)}</div>` +
+      `${result.version ? `<div class="muted">Version ${escapeHtml(result.version)}</div>` : ''}` +
+      `${(result.issues || []).map(issue => `<div class="cap-bad">${escapeHtml(issue)}</div>`).join('')}</div>`;
+  } catch (error) {
+    renderFailure('addon-scan-result', error);
+  }
+}
+
+async function scanEnvironments() {
+  const target = document.getElementById('environment-result');
+  target.innerHTML = '<div class="muted">Inspecting dependency profiles...</div>';
+  try {
+    const result = await api('/api/environments/scan', {
+      root: document.getElementById('setup-environment-root').value,
+    });
+    target.innerHTML = result.profiles.map(profile => {
+      const errors = profile.issues.filter(issue => issue.severity === 'error');
+      const canCreate = profile.ready && !['installed', 'blocked'].includes(profile.status);
+      return `<div class="item"><div class="item-title"><span>${escapeHtml(profile.name)}</span>` +
+        `<span class="status-pill status-${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span></div>` +
+        `<div class="muted">${escapeHtml(profile.target)}</div>` +
+        `${errors.slice(0, 2).map(issue => `<div class="cap-bad">${escapeHtml(issue.message)}</div>`).join('')}` +
+        `<div class="button-row"><button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">Create</button>` +
+        `${profile.source_build_available ? '<span class="muted">Reviewed source build available</span>' : ''}</div></div>`;
+    }).join('');
+  } catch (error) {
+    renderFailure('environment-result', error);
+  }
+}
+
+async function createEnvironment(profile) {
+  if (!document.getElementById('env-confirm').checked) {
+    alert('Confirm downloads/builds before creating an environment.');
+    return;
+  }
+  try {
+    await api('/api/environments/create', {
+      profile,
+      root: document.getElementById('setup-environment-root').value,
+      python: document.getElementById('env-python').value,
+      build_from_source: document.getElementById('env-build-source').checked,
+      confirm: true,
+    });
+    document.getElementById('env-confirm').checked = false;
+    await refreshJobs();
+  } catch (error) {
+    alert(`Environment creation failed: ${error.message}`);
+  }
+}
+
+async function refreshJobs() {
+  const result = await api('/api/environments/jobs');
+  const target = document.getElementById('environment-jobs');
+  if (!result.jobs.length) {
+    target.innerHTML = '<div class="muted">No environment jobs.</div>';
+    return;
+  }
+  target.innerHTML = result.jobs.map(job =>
+    `<div class="item"><div class="item-title"><span>${escapeHtml(job.profile)}</span>` +
+    `<span class="status-pill status-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span></div>` +
+    `<div class="muted">${escapeHtml(job.target)}</div>` +
+    `${job.error ? `<div class="cap-bad">${escapeHtml(job.error)}</div>` : ''}` +
+    `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
+    `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\n'))}</div>` : ''}</div>`
+  ).join('');
+}
+
+function renderRuntime(status) {
+  const summary = document.getElementById('runtime-summary');
+  const start = document.getElementById('runtime-start');
+  const stop = document.getElementById('runtime-stop');
+  summary.textContent = status.running ? `Running as PID ${status.pid}` :
+    (status.returncode === null ? 'Not running' : `Stopped with exit code ${status.returncode}`);
+  summary.className = `muted ${status.running ? 'status-ready' : ''}`;
+  start.disabled = status.running;
+  stop.disabled = !status.running;
+  document.getElementById('runtime-log').textContent = status.log?.length ? status.log.join('\n') : 'No process output.';
+}
+
+async function refreshRuntime() {
+  renderRuntime(await api('/api/runtime/status'));
+}
+
+async function startRuntime() {
+  if (!confirm('Start llama-server with the current Quick Run settings?')) return;
+  try {
+    renderRuntime(await api('/api/runtime/start', commandPayload()));
+  } catch (error) {
+    alert(`Launch failed: ${error.message}`);
+  }
+}
+
+async function stopRuntime() {
+  if (!confirm('Stop the llama-server process started by this UI?')) return;
+  try {
+    renderRuntime(await api('/api/runtime/stop', {}));
+  } catch (error) {
+    alert(`Stop failed: ${error.message}`);
+  }
 }
 
 async function runPlanner() {
@@ -763,7 +1342,11 @@ function commandPayload() {
     k_method: document.getElementById('cmd-k').value,
     v_method: document.getElementById('cmd-v').value,
     model_path: document.getElementById('cmd-model').value,
+    host: document.getElementById('cmd-host').value,
+    port: document.getElementById('cmd-port').value,
     context: document.getElementById('cmd-ctx').value,
+    gpu_layers: document.getElementById('cmd-gpu-layers').value,
+    tensor_split: document.getElementById('cmd-tensor-split').value,
     parallel: document.getElementById('cmd-parallel').value,
     rope_scaling: document.getElementById('cmd-rope-scaling').value,
     rope_scale: document.getElementById('cmd-rope-scale').value,
@@ -834,25 +1417,29 @@ function scannerWarnings(payload) {
 }
 
 async function generateCommand() {
-  const payload = commandPayload();
-  const result = await api('/api/command', payload);
-  let txt = result.command || 'Fix errors below to generate a command.';
-  if (result.issues?.length) {
-    txt += '\\n\\nIssues:';
-    result.issues.forEach(i => {
-      txt += `\\n  [${i.severity}] ${i.message}`;
-      if (i.suggestion) txt += `\\n    Fix: ${i.suggestion}`;
-    });
+  try {
+    const payload = commandPayload();
+    const result = await api('/api/command', payload);
+    let txt = result.command || 'Fix errors below to generate a command.';
+    if (result.issues?.length) {
+      txt += '\\n\\nIssues:';
+      result.issues.forEach(i => {
+        txt += `\\n  [${i.severity}] ${i.message}`;
+        if (i.suggestion) txt += `\\n    Fix: ${i.suggestion}`;
+      });
+    }
+    const warnings = scannerWarnings(payload);
+    if (warnings.length) {
+      txt += '\\n\\nScanner warnings:';
+      warnings.forEach(w => { txt += `\\n  [warning] ${w}`; });
+    }
+    document.getElementById('cmd-result').textContent = txt;
+  } catch (error) {
+    document.getElementById('cmd-result').textContent = `Could not generate command: ${error.message}`;
   }
-  const warnings = scannerWarnings(payload);
-  if (warnings.length) {
-    txt += '\\n\\nScanner warnings:';
-    warnings.forEach(w => { txt += `\\n  [warning] ${w}`; });
-  }
-  document.getElementById('cmd-result').textContent = txt;
 }
 
-init();
+init().catch(error => setSaveState(`UI initialization failed: ${error.message}`, 'error'));
 </script>
 </body>
 </html>"""
@@ -861,6 +1448,8 @@ init();
 # ─── HTTP Server ────────────────────────────────────────────────────────────────
 
 class UIHandler(http.server.BaseHTTPRequestHandler):
+    MAX_REQUEST_BYTES = 2 * 1024 * 1024
+
     def log_message(self, fmt, *args):
         pass
 
@@ -868,57 +1457,111 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
         payload = json.dumps(data).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(payload)
 
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length < 0 or length > self.MAX_REQUEST_BYTES:
+            raise ValueError("Request body is too large")
+        if length == 0:
+            return {}
+        body = json.loads(self.rfile.read(length))
+        if not isinstance(body, dict):
+            raise ValueError("Request body must be a JSON object")
+        return body
+
     def do_GET(self):
-        path = urlparse(self.path).path
-        if path in ("/", "/ui"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(UI_HTML.encode())
-        elif path == "/api/status":
-            self._json(api_status())
-        elif path == "/api/methods":
-            self._json(api_methods())
-        elif path == "/api/presets":
-            self._json(api_presets())
-        else:
-            self.send_error(404)
+        try:
+            path = urlparse(self.path).path
+            if path in ("/", "/ui"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header(
+                    "Content-Security-Policy",
+                    "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                    "script-src 'self' 'unsafe-inline'",
+                )
+                self.end_headers()
+                self.wfile.write(UI_HTML.encode())
+            elif path == "/api/status":
+                self._json(api_status())
+            elif path == "/api/methods":
+                self._json(api_methods())
+            elif path == "/api/presets":
+                self._json(api_presets())
+            elif path == "/api/settings":
+                self._json(api_settings())
+            elif path == "/api/runtime/status":
+                self._json(api_runtime_status())
+            elif path == "/api/environments/jobs":
+                self._json(api_environment_jobs())
+            else:
+                self.send_error(404)
+        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+            self._json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            self._json({"error": f"Unexpected server error: {exc}"}, status=500)
 
     def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length > 0 else {}
-        path = urlparse(self.path).path
-        if path == "/api/plan":
-            self._json(api_plan(body))
-        elif path == "/api/benchmark":
-            self._json(api_benchmark(body))
-        elif path == "/api/llamacpp/scan":
-            self._json(api_scan_llamacpp(body))
-        elif path == "/api/command":
-            self._json(api_generate_command(body))
-        else:
-            self.send_error(404)
+        try:
+            body = self._read_json()
+            path = urlparse(self.path).path
+            routes = {
+                "/api/plan": lambda: api_plan(body),
+                "/api/benchmark": lambda: api_benchmark(body),
+                "/api/llamacpp/scan": lambda: api_scan_llamacpp(body),
+                "/api/command": lambda: api_generate_command(body),
+                "/api/settings": lambda: api_save_settings(body),
+                "/api/settings/reset": api_reset_settings,
+                "/api/discovery/models": lambda: api_scan_models(body),
+                "/api/discovery/addons": lambda: api_scan_addons(body),
+                "/api/discovery/flashattention": lambda: api_scan_flashattention(body),
+                "/api/environments/scan": lambda: api_scan_environments(body),
+                "/api/environments/create": lambda: api_create_environment(body),
+                "/api/runtime/start": lambda: api_runtime_start(body),
+                "/api/runtime/stop": api_runtime_stop,
+            }
+            action = routes.get(path)
+            if action is None:
+                self.send_error(404)
+                return
+            self._json(action())
+        except PermissionError as exc:
+            self._json({"error": str(exc)}, status=403)
+        except (KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            self._json({"error": str(exc)}, status=400)
+        except Exception as exc:
+            self._json({"error": f"Unexpected server error: {exc}"}, status=500)
 
     def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+        self.send_error(403)
 
 
 def main():
+    global SETTINGS_STORE, UI_MUTATIONS_ENABLED
     parser = argparse.ArgumentParser(description="Multi-TurboQuant Web UI")
     parser.add_argument("--port", type=int, default=9092)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--settings-file", type=Path)
+    parser.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Disable settings writes, environment creation, and model process controls",
+    )
     args = parser.parse_args()
+    SETTINGS_STORE = UISettingsStore(args.settings_file)
+    UI_MUTATIONS_ENABLED = not args.read_only
 
     print(f"Multi-TurboQuant v{__version__}")
     print(f"Starting UI on http://localhost:{args.port}")
+    print(f"Settings: {SETTINGS_STORE.path.resolve()}")
+    if args.read_only:
+        print("Mode: read-only")
 
     # Detect hardware
     plat = detect_platform()
@@ -929,7 +1572,7 @@ def main():
         print("  No GPUs detected (benchmarks will use CPU)")
     print()
 
-    server = http.server.HTTPServer(("127.0.0.1", args.port), UIHandler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), UIHandler)
 
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(f"http://localhost:{args.port}")).start()
@@ -938,6 +1581,8 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
+    finally:
+        MODEL_PROCESS.shutdown()
         server.server_close()
 
 
