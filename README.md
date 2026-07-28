@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-176%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-178%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -88,7 +88,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-187 automated test cases: 176 pass in the current Windows CPU environment and
+189 automated test cases: 178 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -98,7 +98,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 24 | Locked profile rendering, read-only plans, overwrite safety, opt-in creation, isolated validation |
-| `test_run_ui.py` + `test_ui_workspace.py` | 25 | Command generation, persistent settings, bounded discovery, managed processes, and explicit environment creation |
+| `test_run_ui.py` + `test_ui_workspace.py` | 27 | Command generation, rendered JavaScript, absent/default settings, bounded discovery, managed processes, and explicit environment creation |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |

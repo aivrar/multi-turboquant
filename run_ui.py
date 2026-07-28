@@ -929,7 +929,7 @@ function settingsPayload() {
     model_root: document.getElementById('setup-model-root').value.trim(),
     environment_root: document.getElementById('setup-environment-root').value.trim() || '.mtq/environments',
     flashattention_source: document.getElementById('setup-flash-source').value.trim(),
-    addon_roots: document.getElementById('setup-addon-roots').value.split(/\r?\n/).map(v => v.trim()).filter(Boolean),
+    addon_roots: document.getElementById('setup-addon-roots').value.split(/\\r?\\n/).map(v => v.trim()).filter(Boolean),
     form_values: collectFormValues(),
   };
 }
@@ -941,7 +941,7 @@ async function loadSettings() {
   document.getElementById('setup-model-root').value = currentSettings.model_root || '';
   document.getElementById('setup-environment-root').value = currentSettings.environment_root || '.mtq/environments';
   document.getElementById('setup-flash-source').value = currentSettings.flashattention_source || '';
-  document.getElementById('setup-addon-roots').value = (currentSettings.addon_roots || []).join('\n');
+  document.getElementById('setup-addon-roots').value = (currentSettings.addon_roots || []).join('\\n');
   setSaveState('Settings loaded', 'ok');
   return currentSettings;
 }
@@ -1167,7 +1167,7 @@ async function scanAddons() {
   target.innerHTML = '<div class="muted">Scanning configured add-on roots...</div>';
   try {
     const roots = document.getElementById('setup-addon-roots').value
-      .split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      .split(/\\r?\\n/).map(value => value.trim()).filter(Boolean);
     const result = await api('/api/discovery/addons', {roots});
     let html = result.addons.map(addon =>
       `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
@@ -1255,7 +1255,7 @@ async function refreshJobs() {
     `<div class="muted">${escapeHtml(job.target)}</div>` +
     `${job.error ? `<div class="cap-bad">${escapeHtml(job.error)}</div>` : ''}` +
     `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
-    `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\n'))}</div>` : ''}</div>`
+    `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\\n'))}</div>` : ''}</div>`
   ).join('');
 }
 
@@ -1268,7 +1268,7 @@ function renderRuntime(status) {
   summary.className = `muted ${status.running ? 'status-ready' : ''}`;
   start.disabled = status.running;
   stop.disabled = !status.running;
-  document.getElementById('runtime-log').textContent = status.log?.length ? status.log.join('\n') : 'No process output.';
+  document.getElementById('runtime-log').textContent = status.log?.length ? status.log.join('\\n') : 'No process output.';
 }
 
 async function refreshRuntime() {

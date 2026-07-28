@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: MIT
 """Tests for the lightweight web UI command API."""
 
+import re
+import shutil
+import subprocess
+
 import pytest
 
 from multi_turboquant import CacheMethod
-from multi_turboquant.ui import UISettingsStore
+from multi_turboquant.ui import DEFAULT_UI_SETTINGS, UISettingsStore
 import run_ui
 from run_ui import (
     _command_config,
@@ -249,6 +253,39 @@ def test_api_settings_persist_workspace_and_form_values(tmp_path, monkeypatch):
 
     assert state["settings"]["form_values"]["cmd-k"] == "f16"
     assert run_ui.api_settings()["settings"] == state["settings"]
+
+
+def test_api_settings_returns_defaults_when_file_is_absent(tmp_path, monkeypatch):
+    store = UISettingsStore(tmp_path / "missing" / "ui.json")
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+
+    state = run_ui.api_settings()
+
+    assert state["settings"] == DEFAULT_UI_SETTINGS
+    assert state["path"] == str(store.path.resolve())
+    assert not store.path.exists()
+
+
+def test_evaluated_ui_javascript_has_valid_syntax():
+    match = re.search(r"(?s)<script>(.*?)</script>", run_ui.UI_HTML)
+    assert match is not None
+    script = match.group(1)
+    assert r".split(/\r?\n/)" in script
+    assert r".join('\n')" in script
+    assert "\r" not in script
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not available for embedded JavaScript syntax validation")
+    result = subprocess.run(
+        [node, "--check", "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_api_runtime_launch_is_bounded_to_saved_model_root(tmp_path, monkeypatch):
