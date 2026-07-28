@@ -108,6 +108,14 @@ llama.cpp. The Godzilla code path rejects the pair until KVarN-aware
 TriAttention pruning is implemented (KVX-2). Multi-TurboQuant mirrors that
 guardrail in command generation, compatibility checks, and UI warnings.
 
+Godzilla TriAttention calibration is a separate, per-model offline step. Its
+runtime `.triattention` file is produced by a compatible Python calibrator from
+the matching Hugging Face checkpoint, not from the GGUF or a `llama-cli`
+calibration flag. Multi-TurboQuant therefore accepts and validates the finished
+stats path but does not claim that every discovered GGUF can be calibrated
+automatically. A reliable batch workflow needs an explicit GGUF-to-source-model
+mapping plus architecture support in the selected calibrator.
+
 ## Sources
 
 - llama.cpp server documentation:

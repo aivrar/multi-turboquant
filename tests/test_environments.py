@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,7 @@ from multi_turboquant.optimizations import (
     render_profile_project,
     synchronize_environment,
 )
+from multi_turboquant.optimizations import environments
 from multi_turboquant.optimizations.environments import (
     environment_python,
     materialize_environment_project,
@@ -222,7 +224,39 @@ def test_plan_rejects_wrong_cuda_toolkit_major(tmp_path: Path):
     )
 
     assert not plan.ready
-    assert any(issue.code == "unsupported_cuda_toolkit" for issue in plan.issues)
+    mismatch = next(issue for issue in plan.issues if issue.code == "unsupported_cuda_toolkit")
+    assert "side-by-side toolkit" in mismatch.message
+
+
+def test_detect_context_uses_explicit_side_by_side_cuda_toolkit(tmp_path: Path, monkeypatch):
+    toolkit = tmp_path / "cuda-12.6"
+    nvcc = toolkit / "bin" / ("nvcc.exe" if environments.os.name == "nt" else "nvcc")
+    nvcc.parent.mkdir(parents=True)
+    nvcc.write_text("test executable placeholder", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(
+        "multi_turboquant.hardware.detect_platform",
+        lambda: SimpleNamespace(os="linux", primary_compute="cuda"),
+    )
+    monkeypatch.setattr(
+        environments.shutil,
+        "which",
+        lambda name: "/usr/bin/uv" if name == "uv" else None,
+    )
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout="Cuda compilation tools, release 12.6")
+
+    monkeypatch.setattr(environments.subprocess, "run", fake_run)
+
+    context = environments.detect_environment_context(cuda_toolkit=toolkit)
+
+    assert context.cuda_toolkit_version == (12, 6)
+    assert context.cuda_toolkit_root == str(toolkit.resolve())
+    assert "nvcc" in context.available_executables
+    assert calls[0][0] == [str(nvcc.resolve()), "--version"]
 
 
 def test_plan_forces_a_cache_safe_flashattention_source_rebuild(tmp_path: Path):
@@ -309,6 +343,33 @@ def test_sync_sets_flashattention_force_build_only_when_requested(tmp_path: Path
 
     assert calls[0][0][-2:] == ["--reinstall-package", "flash-attn"]
     assert calls[0][1]["env"]["FLASH_ATTENTION_FORCE_BUILD"] == "TRUE"
+
+
+def test_sync_exports_selected_cuda_toolkit_to_native_build(tmp_path: Path):
+    toolkit = (tmp_path / "cuda-12.6").resolve()
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path / "envs",
+        context=EnvironmentContext(
+            os="linux",
+            compute="cuda",
+            available_executables=frozenset({"uv", "nvcc"}),
+            cuda_toolkit_version=(12, 6),
+            cuda_toolkit_root=str(toolkit),
+        ),
+    )
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0)
+
+    synchronize_environment(plan, runner=runner)
+
+    child_environment = calls[0][1]["env"]
+    assert child_environment["CUDA_HOME"] == str(toolkit)
+    assert child_environment["CUDA_PATH"] == str(toolkit)
+    assert child_environment["PATH"].split(environments.os.pathsep)[0] == str(toolkit / "bin")
 
 
 def test_check_uses_only_the_isolated_interpreter(tmp_path: Path):

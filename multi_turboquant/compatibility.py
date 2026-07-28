@@ -249,26 +249,26 @@ def check_config(
                 issues.append(CompatIssue(
                     severity="error",
                     method=f"{label}={method.value}",
-                    message=f"TurboQuant/TCQ requires CUDA flash attention kernels — "
-                            f"not available on AMD/ROCm.",
-                    suggestion=f"Use IsoQuant or PlanarQuant instead: "
-                               f"iso3, iso4, planar3, planar4",
+                    message="TurboQuant/TCQ requires CUDA flash attention kernels — "
+                            "not available on AMD/ROCm.",
+                    suggestion="Use IsoQuant or PlanarQuant instead: "
+                               "iso3, iso4, planar3, planar4",
                 ))
             elif compute == "metal" and family in (MethodFamily.TURBOQUANT, MethodFamily.TCQ):
                 issues.append(CompatIssue(
                     severity="error",
                     method=f"{label}={method.value}",
-                    message=f"TurboQuant/TCQ requires CUDA — "
-                            f"not available on Apple Metal.",
-                    suggestion=f"Use IsoQuant or PlanarQuant which have Metal kernels: "
-                               f"iso3, iso4, planar3, planar4",
+                    message="TurboQuant/TCQ requires CUDA — "
+                            "not available on Apple Metal.",
+                    suggestion="Use IsoQuant or PlanarQuant which have Metal kernels: "
+                               "iso3, iso4, planar3, planar4",
                 ))
             elif compute == "cpu":
                 issues.append(CompatIssue(
                     severity="error",
                     method=f"{label}={method.value}",
-                    message=f"No GPU detected — KV cache compression requires a GPU.",
-                    suggestion=f"Use FP16 or Q8_0 for CPU-only inference.",
+                    message="No GPU detected — KV cache compression requires a GPU.",
+                    suggestion="Use FP16 or Q8_0 for CPU-only inference.",
                 ))
             else:
                 issues.append(CompatIssue(
@@ -337,9 +337,9 @@ def check_config(
                             "file in TriAttention Stats Path."
                         ),
                         suggestion=(
-                            "Generate one with the patched llama-cli "
-                            "--triattention-calibrate command, then paste the "
-                            "generated .triattention file path."
+                            "Run the fork's compatible Python calibrator against the "
+                            "matching Hugging Face checkpoint, then paste the generated "
+                            ".triattention file path. A GGUF alone is not sufficient."
                         ),
                     ))
                 else:

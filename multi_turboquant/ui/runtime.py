@@ -147,6 +147,7 @@ class EnvironmentJobManager:
         *,
         root: str | Path,
         python: str | None = None,
+        cuda_toolkit: str | Path | None = None,
         build_from_source: bool = False,
     ) -> dict[str, object]:
         from ..optimizations.environments import plan_environment
@@ -155,6 +156,7 @@ class EnvironmentJobManager:
             profile_id,
             root=root,
             python=python,
+            cuda_toolkit=cuda_toolkit,
             build_from_source=build_from_source,
         )
         if not plan.ready:
@@ -168,6 +170,9 @@ class EnvironmentJobManager:
             "profile": profile_id,
             "status": "queued",
             "build_from_source": build_from_source,
+            "cuda_toolkit_root": (
+                str(plan.cuda_toolkit_root) if plan.cuda_toolkit_root is not None else None
+            ),
             "target": str(plan.target),
             "created_at": time.time(),
             "finished_at": None,

@@ -217,7 +217,11 @@ def scan_addon_roots(
     }
 
 
-def scan_environment_profiles(root: str | Path) -> dict[str, object]:
+def scan_environment_profiles(
+    root: str | Path,
+    *,
+    cuda_toolkit: str | Path | None = None,
+) -> dict[str, object]:
     """Report dependency profile readiness and materialization without imports."""
     from ..optimizations.environments import (
         BUILTIN_ENVIRONMENT_PROFILES,
@@ -226,7 +230,7 @@ def scan_environment_profiles(root: str | Path) -> dict[str, object]:
         plan_environment,
     )
 
-    context = detect_environment_context()
+    context = detect_environment_context(cuda_toolkit=cuda_toolkit)
     profiles: list[dict[str, object]] = []
     for profile in BUILTIN_ENVIRONMENT_PROFILES:
         plan = plan_environment(profile.id, root=root, context=context)
@@ -259,6 +263,7 @@ def scan_environment_profiles(root: str | Path) -> dict[str, object]:
             "os": context.os,
             "compute": context.compute,
             "cuda_toolkit_version": context.cuda_toolkit_version,
+            "cuda_toolkit_root": context.cuda_toolkit_root,
         },
         "profiles": profiles,
     }
