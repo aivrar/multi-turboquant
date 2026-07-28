@@ -268,6 +268,24 @@ def test_api_settings_returns_defaults_when_file_is_absent(tmp_path, monkeypatch
     assert not store.path.exists()
 
 
+def test_api_addon_scan_respects_explicit_empty_roots(tmp_path, monkeypatch):
+    saved_root = tmp_path / "addons"
+    saved_root.mkdir()
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            **DEFAULT_UI_SETTINGS,
+            "addon_roots": [str(saved_root)],
+        }
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+
+    result = run_ui.api_scan_addons({"roots": []})
+
+    assert result["roots"] == []
+    assert "No add-on roots" in result["warnings"][0]
+
+
 def test_evaluated_ui_javascript_has_valid_syntax():
     match = re.search(r"(?s)<script>(.*?)</script>", run_ui.UI_HTML)
     assert match is not None
@@ -288,6 +306,42 @@ def test_evaluated_ui_javascript_has_valid_syntax():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_json_response_treats_client_disconnect_as_cancelled_request():
+    class DisconnectedWriter:
+        def write(self, payload):
+            raise BrokenPipeError("client closed the socket")
+
+    handler = object.__new__(run_ui.UIHandler)
+    handler.send_response = lambda status: None
+    handler.send_header = lambda name, value: None
+    handler.end_headers = lambda: None
+    handler.wfile = DisconnectedWriter()
+    handler.close_connection = False
+
+    assert handler._json({"ok": True}) is False
+    assert handler.close_connection is True
+
+
+def test_post_disconnect_does_not_attempt_a_second_response(monkeypatch):
+    handler = object.__new__(run_ui.UIHandler)
+    handler.path = "/api/settings"
+    handler._read_json = lambda: {}
+    calls = []
+
+    def disconnected_response(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise BrokenPipeError("client closed the socket")
+
+    handler._json = disconnected_response
+    handler.close_connection = False
+    monkeypatch.setattr(run_ui, "api_save_settings", lambda params: {"ok": True})
+
+    handler.do_POST()
+
+    assert len(calls) == 1
+    assert handler.close_connection is True
 
 
 def test_api_runtime_launch_is_bounded_to_saved_model_root(tmp_path, monkeypatch):

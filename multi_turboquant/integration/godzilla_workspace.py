@@ -98,8 +98,13 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
         "issues": issues,
         "notes": [
             "KVarN is a runtime cache-type selection and does not use a calibration file.",
-            "TriAttention calibration is model-specific and may download the matching source model.",
-            "Godzilla currently expects TRIATTENTION_PYTHON and TRIATTENTION_CALIBRATE_PY.",
+            "TriAttention is experimental, opt-in, and not recommended by the current Godzilla lab policy.",
+            "TriAttention calibration is a separate manual, model-specific operation that may download the matching source model.",
+            (
+                "This checkout bundles a calibration script."
+                if bundled_calibrator.is_file()
+                else "This checkout does not bundle calibrate-triattention.py; a separately validated compatible script is required."
+            ),
         ],
     }
 
@@ -170,13 +175,24 @@ def plan_godzilla_triattention(
         if output is not None and str(output).strip()
         else checkout_path / "calibrations" / f"{gguf_path.stem}.triattention"
     )
-    python_value = python or os.environ.get("TRIATTENTION_PYTHON")
-    calibrator_value = calibrator or os.environ.get("TRIATTENTION_CALIBRATE_PY")
-    python_path = Path(python_value).expanduser().resolve() if python_value else None
-    calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
     normalized_hf = hf_model.strip() if hf_model and hf_model.strip() else None
     normalized_device = device.strip().lower()
     inspection = inspect_godzilla_checkout(checkout_path)
+    python_value = python or os.environ.get("TRIATTENTION_PYTHON")
+    inspection_paths = inspection.get("paths")
+    bundled_calibrator = (
+        inspection_paths.get("bundled_calibrator")
+        if isinstance(inspection_paths, dict)
+        else None
+    )
+    calibrator_value = (
+        calibrator
+        or os.environ.get("TRIATTENTION_CALIBRATE_PY")
+        or bundled_calibrator
+    )
+    python_path = Path(python_value).expanduser().resolve() if python_value else None
+    calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
+    output_exists = output_path.is_file()
     issues: list[GodzillaIssue] = []
 
     if not inspection["valid"]:
@@ -207,7 +223,7 @@ def plan_godzilla_triattention(
                 "Godzilla TriAttention output must end in .triattention.",
             )
         )
-    if python_path is None or not python_path.is_file():
+    if not output_exists and (python_path is None or not python_path.is_file()):
         issues.append(
             GodzillaIssue(
                 "error",
@@ -215,12 +231,14 @@ def plan_godzilla_triattention(
                 "Select TRIATTENTION_PYTHON: a Python executable with Torch and calibrator dependencies.",
             )
         )
-    if calibrator_path is None or not calibrator_path.is_file():
+    if not output_exists and (calibrator_path is None or not calibrator_path.is_file()):
         issues.append(
             GodzillaIssue(
                 "error",
                 "missing_calibrator",
-                "Select a Godzilla-compatible calibrate-triattention.py script.",
+                "This Godzilla checkout does not provide calibrate-triattention.py. Select a "
+                "separately validated script compatible with this checkout's binary format; "
+                "Multi-TurboQuant will not fabricate unverified model statistics.",
             )
         )
     if not 128 <= n_tokens <= 32_768:
@@ -229,7 +247,7 @@ def plan_godzilla_triattention(
         )
     if normalized_device not in {"cuda", "cpu"}:
         issues.append(GodzillaIssue("error", "invalid_device", "Device must be 'cuda' or 'cpu'."))
-    if normalized_hf is None:
+    if not output_exists and normalized_hf is None:
         if resolver_script.is_file():
             issues.append(
                 GodzillaIssue(
@@ -254,7 +272,15 @@ def plan_godzilla_triattention(
             "KVarN does not require calibration; select its target K/V cache types at launch.",
         )
     )
-    if output_path.is_file():
+    issues.append(
+        GodzillaIssue(
+            "warning",
+            "triattention_experimental",
+            "Current Godzilla documentation treats TriAttention as experimental, opt-in, and "
+            "manually calibrated; validate retrieval quality before relying on it.",
+        )
+    )
+    if output_exists:
         issues.append(
             GodzillaIssue(
                 "info",
@@ -272,7 +298,7 @@ def plan_godzilla_triattention(
         )
 
     shell = shell_executable or shutil.which("pwsh") or shutil.which("powershell")
-    if shell is None:
+    if not output_exists and shell is None:
         issues.append(
             GodzillaIssue(
                 "error",
@@ -281,7 +307,7 @@ def plan_godzilla_triattention(
             )
         )
     command: list[str] = []
-    if shell is not None:
+    if not output_exists and shell is not None:
         command = [
             shell,
             "-NoProfile",
@@ -330,6 +356,13 @@ def run_godzilla_triattention(
     if not plan.ready:
         errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")
         raise RuntimeError(f"Godzilla calibration plan is not ready: {errors}")
+    if plan.output.is_file():
+        return {
+            "output": str(plan.output),
+            "reused": True,
+            "stdout": "",
+            "stderr": "",
+        }
     existed = plan.output.is_file()
     environment: Mapping[str, str] = {**os.environ, **dict(plan.environment)}
     result = runner(

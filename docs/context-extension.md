@@ -110,11 +110,15 @@ guardrail in command generation, compatibility checks, and UI warnings.
 
 Godzilla TriAttention calibration is a separate, per-model offline step. Its
 runtime `.triattention` file is produced by a compatible Python calibrator from
-the matching Hugging Face checkpoint, not from the GGUF or a `llama-cli`
-calibration flag. Multi-TurboQuant therefore accepts and validates the finished
-stats path but does not claim that every discovered GGUF can be calibrated
-automatically. A reliable batch workflow needs an explicit GGUF-to-source-model
-mapping plus architecture support in the selected calibrator.
+the matching Hugging Face checkpoint, not from the GGUF. The current Godzilla
+checkout does not bundle `calibrate-triattention.py`, and its current lab policy
+treats TriAttention as experimental, opt-in, and manually calibrated. The
+llama-cpp-turboquant repository cited by older documentation also does not
+currently contain the documented Python script or an implemented native
+calibration flag, so it is not a safe implementation source. Multi-TurboQuant
+reuses a finished stats file and automatically selects a bundled calibrator if
+a compatible future checkout ships one; it does not synthesize unverified
+model statistics.
 
 ## Sources
 

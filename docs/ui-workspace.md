@@ -56,13 +56,14 @@ alone does not contain the required pre-RoPE query statistics. The UI does not
 mislabel Multi-TurboQuant's Python `.pt` stats as Godzilla-compatible data.
 
 The Setup view can prepare this file through a recognized Godzilla checkout's
-own `scripts/ensure-triattention.ps1`. The plan requires an existing GGUF in
-the saved model root, a Python executable with the required packages, and a
-compatible `calibrate-triattention.py`. A matching Hugging Face model can be
-entered explicitly; when Godzilla's resolver is present, it can instead try
-the GGUF metadata mapping. The UI warns that this may download and load the
-source checkpoint. KVarN is not calibrated: it remains a launch-time K/V cache
-selection and is reported separately.
+own `scripts/ensure-triattention.ps1`. Unless the expected output already
+exists, the plan requires a GGUF in the saved model root, a Python executable
+with the required packages, and a validated compatible
+`calibrate-triattention.py`. The current checkout does not bundle that script.
+A matching Hugging Face model can be entered explicitly; when Godzilla's
+resolver is present, it can instead try the GGUF metadata mapping. The UI warns
+that this may download and load the source checkpoint. KVarN is not calibrated:
+it remains a launch-time K/V cache selection and is reported separately.
 
 ## Setup & Add-ons
 
@@ -75,12 +76,16 @@ Setup & Add-ons holds configuration that is changed less often:
 - an optional FlashAttention source checkout;
 - environment profile status and explicit creation controls.
 
-The scanners are bounded and inspect only configured roots. They do not search
-an entire drive, follow directory symlinks, import third-party packages, or run
-source code. Recognized add-ons currently include FlashAttention, FastDMS,
-LMCache, MInference, SageAttention, Godzilla, and llama.cpp checkouts. FlashAttention
-inspection checks the expected source markers and reports version and Git
-remote metadata when available.
+The scanners are bounded and inspect only configured roots. Add-on scanning
+runs at UI startup and shortly after its root list changes, while the manual
+button remains available. Results report the resolved roots, scan depth,
+directory count, invalid roots, and missing source markers. The scanner does
+not search an entire drive, follow directory symlinks, import third-party
+packages, or run source code. Recognized add-ons currently include
+FlashAttention, FastDMS, LMCache, MInference, SageAttention, Godzilla, and
+llama.cpp checkouts. Renamed Godzilla trees are recognized by
+`scripts/godzilla-paths.ps1`. FlashAttention inspection checks the expected
+source markers and reports version and Git remote metadata when available.
 
 For the five reviewed Python add-ons, a recognized checkout has a **Use for
 profile** action. It fills the local-source profile and path controls. Refresh
@@ -89,12 +94,21 @@ then `uv` builds that package and resolves its dependencies in the selected
 isolated environment. The scanner never imports or executes the checkout, and
 unrecognized folders cannot be substituted into a profile.
 
+A local checkout changes only the selected package's source. It does not relax
+the profile's operating-system, Python, PyTorch, or CUDA ABI requirements. In
+particular, native extensions must still use an `nvcc` toolkit whose major
+matches the profile's PyTorch CUDA build; the plan now displays this explicitly.
+
 A recognized Godzilla tree has a separate action. Inspection reports its known
-source markers, KVarN and TriAttention flags, preparation/resolver scripts, and
-known `llama-server` build locations. Multi-TurboQuant does not configure or
-compile the CMake project automatically; use Godzilla's documented build
-process. The preparation control only runs the checkout's reviewed
-`ensure-triattention.ps1` entry point after an explicit plan and confirmation.
+source markers, KVarN and TriAttention flags, preparation/resolver scripts,
+bundled-calibrator status, and known `llama-server` build locations.
+Multi-TurboQuant does not configure or compile the CMake project automatically;
+use Godzilla's documented build process. Current Godzilla policy treats
+TriAttention as experimental and manually calibrated. Its checkout does not
+currently bundle `calibrate-triattention.py`, so the UI reports that prerequisite
+instead of inventing model statistics. If a compatible checkout later bundles
+one, it is selected automatically. Existing `.triattention` output is reused
+without requiring Python, a calibrator, or PowerShell.
 
 Creating a dependency environment reuses the reviewed `mtq-env` profiles and
 runs as a background job. The UI requires explicit confirmation because the

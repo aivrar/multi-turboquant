@@ -746,19 +746,27 @@ python /path/to/calibrate-triattention.py \
 
 Then put the generated `model.triattention` path into the web UI's
 `TriAttention Stats Path` field or `CacheConfig.triattention_stats_path`.
-Use the calibrator configured for the selected Godzilla build. Calibration
-cannot be made universal from GGUF files alone: each output is model-specific,
-the original checkpoint mapping is not guaranteed in GGUF metadata, and the
-calibrator only supports architectures it knows how to instrument.
+The current Godzilla checkout does not bundle the script shown above, and its
+current lab policy treats TriAttention as experimental, opt-in, and manually
+calibrated. The older llama-cpp-turboquant documentation references the same
+script, but the current repository does not contain it or implement the
+advertised native calibration flags. Multi-TurboQuant therefore requires a
+separately validated compatible script rather than generating unverified model
+statistics. Calibration cannot be made universal from GGUF files alone: each
+output is model-specific, the original checkpoint mapping is not guaranteed in
+GGUF metadata, and a calibrator only supports architectures it knows how to
+instrument.
 
-The web UI's Setup view can inspect a configured `godzilla-llama.cpp` checkout
-and plan its own `scripts/ensure-triattention.ps1` workflow. Select the GGUF,
-calibration Python, and compatible calibrator; optionally enter the exact
-Hugging Face source model. The UI reports missing prerequisites before it can
-start a confirmed background preparation job and verifies the output artifact.
-It does not build the Godzilla CMake project or assume that an arbitrary GGUF
-can be calibrated. KVarN requires no calibration and remains a launch-time
-cache-type choice.
+The web UI's Setup view automatically inspects a configured
+`godzilla-llama.cpp` checkout and plans its own
+`scripts/ensure-triattention.ps1` workflow. It selects a bundled calibrator if
+one exists; otherwise select a separately validated script and the calibration
+Python, plus the GGUF and optional exact Hugging Face source model. The UI
+reports missing prerequisites before it can start a confirmed background job,
+verifies the output artifact, and reuses an existing stats file without
+requiring the calibration toolchain. It does not build the Godzilla CMake
+project or assume that an arbitrary GGUF can be calibrated. KVarN requires no
+calibration and remains a launch-time cache-type choice.
 
 `mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
 Python/vLLM integration. That file is not binary-compatible with Godzilla's

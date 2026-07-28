@@ -432,12 +432,12 @@ def api_scan_models(params):
 
 def api_scan_addons(params):
     settings = _saved_settings()
-    roots = params.get("roots") or settings["addon_roots"]
+    roots = params["roots"] if "roots" in params else settings["addon_roots"]
     if not isinstance(roots, list):
         raise ValueError("roots must be a list")
     return scan_addon_roots(
         roots,
-        max_depth=int(params.get("max_depth", 2)),
+        max_depth=int(params.get("max_depth", 3)),
         limit=int(params.get("limit", 200)),
     )
 
@@ -860,7 +860,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div style="grid-column:1/-1"><label>TriAttention Stats Path</label>
           <input type="text" id="cmd-tri-stats" value="" placeholder="model.triattention" onchange="generateCommand()">
         </div>
-        <div class="setup-note" style="grid-column:1/-1">Godzilla calibration is model-specific and runs offline with a compatible Python calibrator plus the matching Hugging Face checkpoint. A GGUF file alone cannot supply the required pre-RoPE query statistics; Multi-TurboQuant's Python <code>.pt</code> stats are a different format.</div>
+        <div class="setup-note" style="grid-column:1/-1">Godzilla's current policy treats TriAttention as experimental, opt-in, and manually calibrated. Its checkout may not include a calibrator. A GGUF file alone cannot supply the required pre-RoPE query statistics; Multi-TurboQuant's Python <code>.pt</code> stats are a different format.</div>
       </div>
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri-log" onchange="generateCommand()"> TriAttn Log</label></div>
@@ -918,7 +918,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 
       <div class="card">
         <h2>Add-on Sources</h2>
-        <p class="muted">Recognizes reviewed Python package checkouts and Godzilla/llama.cpp source trees. A recognized checkout can be selected below without executing scanner-discovered code.</p>
+        <p class="muted">Automatically scans configured roots for reviewed Python package checkouts and Godzilla/llama.cpp source trees. A recognized checkout can be selected below without executing scanner-discovered code.</p>
         <div class="button-row">
           <button onclick="scanAddons()">Scan Add-ons</button>
           <button class="secondary" onclick="scanFlashAttention()">Check FlashAttention</button>
@@ -928,7 +928,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 
       <div class="card full">
         <h2>Dependency Environments</h2>
-        <div class="setup-note">Creation reuses the reviewed <code>mtq-env</code> profiles. A newer NVIDIA driver can run older CUDA applications, but native extensions must be compiled with a toolkit matching the profile's PyTorch CUDA major. Select a side-by-side toolkit here; downloads and builds still require confirmation.</div>
+        <div class="setup-note">Creation reuses the reviewed <code>mtq-env</code> profiles. A local checkout changes the package source, not its CUDA ABI. A newer NVIDIA driver can run older CUDA applications, but native extensions must be compiled with a toolkit matching the profile's PyTorch CUDA major. Select a side-by-side toolkit here; downloads and builds still require confirmation.</div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Python override</label><input type="text" id="env-python" placeholder="3.11 or interpreter path"></div>
           <div style="grid-column:span 2"><label>CUDA toolkit override</label><input type="text" id="env-cuda-toolkit" placeholder="/usr/local/cuda-12.6 or /path/to/nvcc"></div>
@@ -953,14 +953,14 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 
       <div class="card full">
         <h2>Godzilla Source Setup</h2>
-        <div class="setup-note">The scanner checks Godzilla's known source markers, KVarN/TriAttention features, preparation script, and existing llama-server builds. KVarN is selected at launch and needs no calibration. TriAttention is model-specific: it requires Godzilla's preparation script, a Python environment with its dependencies, a compatible calibrator, and the matching Hugging Face source model. Preparation may download that model.</div>
+        <div class="setup-note">The scanner checks Godzilla's known source markers, KVarN/TriAttention features, preparation script, bundled-calibrator status, and existing llama-server builds. KVarN is selected at launch and needs no calibration. TriAttention is experimental and manually calibrated: a missing calibrator is reported rather than synthesized, while an existing stats file is reused without the calibration toolchain.</div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Godzilla checkout</label><input type="text" id="godzilla-checkout" placeholder="Select a recognized Godzilla checkout above"></div>
           <div style="grid-column:span 2"><label>GGUF model</label><input type="text" id="godzilla-gguf" placeholder="Model inside the saved model root"></div>
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Calibration Python</label><input type="text" id="godzilla-python" placeholder="Python executable with Torch/calibrator dependencies"></div>
-          <div style="grid-column:span 2"><label>Compatible calibrator script</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/calibrate-triattention.py"></div>
+          <div style="grid-column:span 2"><label>Validated external calibrator (if not bundled)</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/calibrate-triattention.py"></div>
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Matching Hugging Face model (optional)</label><input type="text" id="godzilla-hf-model" placeholder="org/model; blank lets Godzilla try metadata resolution"></div>
@@ -994,6 +994,7 @@ let llamaCppCapabilities = null;
 let currentSettings = null;
 let discoveredModels = [];
 let saveTimer = null;
+let addonScanTimer = null;
 let statusTimer = null;
 
 async function api(path, body) {
@@ -1230,10 +1231,15 @@ async function init() {
     el.addEventListener('input', scheduleSave);
     el.addEventListener('change', scheduleSave);
   });
-  ['setup-model-root', 'setup-environment-root', 'setup-flash-source', 'setup-addon-roots']
+  ['setup-model-root', 'setup-environment-root', 'setup-flash-source']
     .forEach(id => document.getElementById(id).addEventListener('input', scheduleSave));
+  document.getElementById('setup-addon-roots').addEventListener('input', () => {
+    scheduleSave();
+    clearTimeout(addonScanTimer);
+    addonScanTimer = setTimeout(() => scanAddons().catch(() => {}), 700);
+  });
   await Promise.allSettled([
-    scanModels(), scanEnvironments(), refreshRuntime(), refreshJobs(), refreshGodzillaJobs()
+    scanModels(), scanAddons(), scanEnvironments(), refreshRuntime(), refreshJobs(), refreshGodzillaJobs()
   ]);
   await generateCommand();
   statusTimer = setInterval(() => {
@@ -1296,7 +1302,11 @@ async function scanAddons() {
     const roots = document.getElementById('setup-addon-roots').value
       .split(/\\r?\\n/).map(value => value.trim()).filter(Boolean);
     const result = await api('/api/discovery/addons', {roots});
-    let html = result.addons.map(addon => {
+    let html = '<div class="item"><div class="muted">Scanned ' +
+      escapeHtml(result.scanned_directories) + ' directories under ' +
+      escapeHtml(result.roots.length) + ' configured root(s), up to depth ' +
+      escapeHtml(result.max_depth) + '.</div></div>';
+    html += result.addons.map(addon => {
       const encodedPath = encodeURIComponent(addon.path).replace(/'/g, '%27');
       const encodedBinary = encodeURIComponent(addon.source?.preferred_binary || '').replace(/'/g, '%27');
       let action = '';
@@ -1306,17 +1316,30 @@ async function scanAddons() {
       if (addon.kind === 'godzilla' && addon.source?.valid) {
         action += `<button onclick="useGodzillaSource('${encodedPath}','${encodedBinary}')">Use Godzilla checkout</button>`;
       }
-      const features = addon.kind === 'godzilla' && addon.source?.features
+      let features = addon.kind === 'godzilla' && addon.source?.features
         ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
         : '';
+      if (addon.kind === 'godzilla' && addon.source?.features) {
+        features += '<div class="muted">Calibrator ' +
+          (addon.source.features.bundled_calibrator ? 'bundled' : 'not bundled; external manual tool required') +
+          '.</div>';
+      }
+      const inspection = addon.source || addon.local_source;
+      (inspection?.issues || []).forEach(issue => {
+        features += '<div class="cap-bad">' + escapeHtml(issue) + '</div>';
+      });
+      const statusClass = inspection && !inspection.valid ? 'status-failed' : 'status-ready';
       return `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
-        `<span class="status-pill status-ready">${escapeHtml(addon.kind)}</span></div>` +
+        `<span class="status-pill ${statusClass}">${escapeHtml(addon.kind)}</span></div>` +
         `<div class="muted">${escapeHtml(addon.path)}</div>` +
         `${addon.git_remote ? `<div class="muted">${escapeHtml(addon.git_remote)}</div>` : ''}` +
         features + (action ? `<div class="button-row">${action}</div>` : '') + '</div>';
     }).join('');
+    (result.warnings || []).forEach(warning => {
+      html += '<div class="item cap-warn">' + escapeHtml(warning) + '</div>';
+    });
     result.errors.forEach(error => { html += `<div class="item cap-bad">${escapeHtml(error)}</div>`; });
-    target.innerHTML = html || '<div class="muted">No recognized add-ons found.</div>';
+    target.innerHTML = html;
   } catch (error) {
     renderFailure('addon-scan-result', error);
   }
@@ -1377,7 +1400,15 @@ async function scanEnvironments() {
       `<span class="status-pill status-configured">CUDA ${escapeHtml(toolkitVersion)}</span></div>` +
       `<div class="muted">${escapeHtml(toolkitRoot)}</div></div>`;
     target.innerHTML = contextHtml + result.profiles.map(profile => {
-      const errors = profile.issues.filter(issue => issue.severity === 'error');
+      const severityRank = {error: 0, warning: 1, info: 2};
+      const issueHtml = [...profile.issues]
+        .sort((left, right) => severityRank[left.severity] - severityRank[right.severity])
+        .map(issue => {
+          const cls = issue.severity === 'error'
+            ? 'cap-bad'
+            : (issue.severity === 'warning' ? 'cap-warn' : 'muted');
+          return '<div class="' + cls + '">' + escapeHtml(issue.message) + '</div>';
+        }).join('');
       const canCreate = profile.ready && !['installed', 'blocked'].includes(profile.status);
       const action = profile.status === 'blocked'
         ? '<span class="muted">Informational only; automatic installation is intentionally unavailable.</span>'
@@ -1385,7 +1416,7 @@ async function scanEnvironments() {
       return `<div class="item"><div class="item-title"><span>${escapeHtml(profile.name)}</span>` +
         `<span class="status-pill status-${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span></div>` +
         `<div class="muted">${escapeHtml(profile.target)}</div>` +
-        `${errors.slice(0, 2).map(issue => `<div class="cap-bad">${escapeHtml(issue.message)}</div>`).join('')}` +
+        `${issueHtml}` +
         `<div class="button-row">${action}` +
         `${profile.local_source_selected ? `<span class="muted">Local checkout: ${escapeHtml(profile.local_source_selected)}</span>` : ''}` +
         `${profile.source_build_available ? '<span class="muted">Reviewed source build available</span>' : ''}</div></div>`;
@@ -1700,12 +1731,21 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
 
     def _json(self, data, status=200):
         payload = json.dumps(data).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(payload)
+        except ConnectionError:
+            # Browsers can cancel an in-flight request when a view is refreshed,
+            # navigated away from, or superseded by another scan.  The response
+            # can no longer be delivered, so do not try to write a second error
+            # response to the same closed socket.
+            self.close_connection = True
+            return False
+        return True
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -1749,6 +1789,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 self._json(api_godzilla_jobs())
             else:
                 self.send_error(404)
+        except ConnectionError:
+            self.close_connection = True
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
             self._json({"error": str(exc)}, status=400)
         except Exception as exc:
@@ -1780,6 +1822,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             self._json(action())
+        except ConnectionError:
+            self.close_connection = True
         except PermissionError as exc:
             self._json({"error": str(exc)}, status=403)
         except (KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
