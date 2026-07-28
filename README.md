@@ -98,8 +98,8 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 28 | Locked profile rendering, local checkout sources, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, isolated validation |
-| `test_godzilla_workspace.py` | 7 | Checkout feature inspection, add-on recognition, prerequisite planning, reuse, and verified TriAttention preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 40 | Command generation, disconnect handling, rendered JavaScript, settings, automatic bounded discovery, managed processes, local sources, and confirmed background jobs |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 14 | Official `.pt` conversion, strict Godzilla v1 round trips, both planner modes, prerequisite checks, reuse, and verified preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 42 | Command generation, disconnect handling, rendered JavaScript, settings, bounded Godzilla/TriAttention discovery, managed processes, local sources, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
@@ -193,28 +193,37 @@ cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
 #     --triattention-stats model.triattention --triattention-budget 4096
 ```
 
-The stats file is required by the patched llama.cpp binary. Godzilla calibration
-runs offline against the matching Hugging Face checkpoint using a calibrator
-compatible with that fork's binary `.triattention` format, for example:
+The stats file is required by the patched llama.cpp binary. The recommended
+workflow runs the official `WeianMao/triattention` calibrator and then converts
+its `.pt` payload into Godzilla's distinct v1 binary format:
 
 ```bash
-python /path/to/calibrate-triattention.py \
+mtq-godzilla-triattention calibrate \
+  --calibrator /path/to/triattention/scripts/calibrate.py \
   --model organization/original-model \
-  --n-tokens 2048 \
-  --output model.triattention
+  --input calibration.txt \
+  --output model.triattention \
+  --max-length 32768 \
+  --device cuda \
+  --attn-implementation sdpa
 ```
 
-This cannot be inferred reliably for every GGUF: calibration needs the original
-model (or an exact compatible source), and the GGUF does not contain the needed
-pre-RoPE query statistics. The current Godzilla checkout does not bundle
-`calibrate-triattention.py`, and its lab policy treats TriAttention as
-experimental, opt-in, and manually calibrated. Multi-TurboQuant automatically
-uses a bundled calibrator if a future compatible checkout provides one;
-otherwise it requires a separately validated script and does not invent
-unverified statistics. An existing `.triattention` file is reused without
-requiring the calibration toolchain. The `mtq-triattention-stats` command
-instead writes PyTorch `.pt` data for Multi-TurboQuant's Python/vLLM path; it is
-not a Godzilla `.triattention` file.
+The command retains the official stats as `model.official.pt`, loads the matching
+Hugging Face config for layer/head/RoPE metadata, writes the Godzilla artifact
+atomically, and reads it back with strict shape, index, finite-value, and file-size
+validation. An existing official payload can be converted separately with
+`mtq-godzilla-triattention convert`, and a finished artifact can be checked with
+`mtq-godzilla-triattention inspect`.
+
+This route does not use `llama-cli`. A native `llama-cli` calibration choice is
+not offered because the current Godzilla binary does not expose a real calibration
+command. Calibration still needs the exact Hugging Face model or a compatible
+source; a GGUF alone does not contain the pre-RoPE query statistics. The official
+script uses `trust_remote_code=True`, so only calibrate model sources you trust.
+The older Godzilla checkout-owned PowerShell workflow remains available as an
+explicit fallback for checkouts that provide it. `mtq-triattention-stats` writes
+a different `.pt` schema for Multi-TurboQuant's Python/vLLM path and cannot be
+passed directly to Godzilla.
 
 ### Godzilla KVarN and DFlash
 
@@ -270,6 +279,25 @@ cmd = get_llamacpp_command(
 )
 # env LD_PRELOAD=/opt/cuda-llm-weight-share.so MODEL_SIZE=32060375552 ...
 ```
+
+The wrapper exposes the external helper's environment contract:
+
+| Variable | Purpose |
+|----------|---------|
+| `LD_PRELOAD` | Loads the helper `.so` before llama.cpp so it can intercept CUDA allocations. Linux only. |
+| `MODEL_SIZE` | Expected model-weight allocation in bytes. Use `0` for one discovery run, then reuse the reported allocation size; do not substitute the GGUF file size. |
+| `MODEL_SIZE_TOLERANCE` | Permitted byte difference when matching the weight allocation. Keep `0` unless a small allocator variation requires it; a broad tolerance can match the wrong allocation. |
+| `CUDA_VRAM_IPC_NAME` | Shared IPC namespace. Processes sharing one model must use the same unique name; unrelated groups should use different names. |
+| `CUDA_VRAM_IPC_SHM_SIZE_WAIT_SEC` | How long a worker waits for the master to publish shared-memory metadata. Useful for staggered startup. |
+| `CUDA_VRAM_IPC_SUPPRESS_MASTER_FREE` | Specialized option that keeps the master from freeing the shared backing allocation prematurely. Leave off unless the helper workflow requires it. |
+| `CUDA_VRAM_IPC_TRACE_CALLERS` | Enables diagnostic allocation caller tracing. |
+| `CUDA_VRAM_IPC_TRACE_DEPTH` | Maximum captured call-stack depth when tracing callers. |
+| `CUDA_VRAM_IPC_TRACE_NORMAL_ALLOCS` | Also traces allocations not classified as model weights. This adds diagnostic noise and overhead. |
+
+Weight sharing shares model weights between matching Linux/CUDA processes. It
+does not share KV caches or contexts, reduce a single process's VRAM use, or
+replace the external helper. Use the same model, build, device configuration,
+`MODEL_SIZE`, and IPC name for every process in one sharing group.
 
 ### Optional optimization planner and LMCache
 
@@ -551,13 +579,14 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested an explicit local source-build option for projects that depend on FlashAttention | [@jawadala](https://github.com/jawadala) | Issue [#17](https://github.com/aivrar/multi-turboquant/issues/17) |
 | Suggested separating quick-run controls from advanced setup, persisting defaults, discovering models and add-ons, and exposing the recent KV, weight-sharing, and RoPE/YaRN options in the UI | [@jawadala](https://github.com/jawadala) | Issue [#19](https://github.com/aivrar/multi-turboquant/issues/19) |
 | Suggested selecting local add-on source folders, resolving their dependencies, and recognizing Godzilla's KVarN/TriAttention setup needs | [@jawadala](https://github.com/jawadala) | Issue [#25](https://github.com/aivrar/multi-turboquant/issues/25) |
+| Identified the official TriAttention calibration script and requested a no-`llama-cli` workflow plus clearer CUDA weight-share guidance | [@jawadala](https://github.com/jawadala) | Issue [#29](https://github.com/aivrar/multi-turboquant/issues/29) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue
 reports and feature suggestions that informed the Godzilla/KVarN support,
 context-extension tooling, optimization catalog, and isolated dependency
-system, including the practical UI workflow that brings those additions
-together.
+system, including the practical UI workflow and official TriAttention calibration
+path that bring those additions together.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

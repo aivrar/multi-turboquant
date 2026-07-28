@@ -126,6 +126,26 @@ def test_addon_scan_recognizes_renamed_godzilla_checkout(tmp_path: Path):
     assert addon["source"]["valid"] is True
 
 
+def test_addon_scan_recognizes_official_triattention_checkout(tmp_path: Path):
+    checkout = tmp_path / "renamed-triattention"
+    (checkout / "triattention").mkdir(parents=True)
+    (checkout / "docs").mkdir()
+    (checkout / "scripts").mkdir()
+    (checkout / "docs" / "calibration.md").write_text("calibration", encoding="utf-8")
+    (checkout / "scripts" / "calibrate.py").write_text(
+        "AutoModelForCausalLM --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(checkout.resolve()))
+    assert addon["kind"] == "triattention"
+    assert addon["source"]["valid"] is True
+    assert Path(addon["source"]["calibrator"]).name == "calibrate.py"
+
+
 def test_addon_scan_explains_empty_configuration():
     result = scan_addon_roots([])
 
@@ -215,6 +235,7 @@ def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
         checkout=tmp_path / "godzilla",
         gguf=tmp_path / "model.gguf",
         output=tmp_path / "model.triattention",
+        mode="official_python",
         issues=[],
     )
     monkeypatch.setattr(

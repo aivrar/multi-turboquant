@@ -105,6 +105,11 @@ def test_api_generate_command_supports_cuda_weight_share_wrapper():
         "cuda_weight_share_model_size": 123456,
         "cuda_weight_share_tolerance": 1024,
         "cuda_weight_share_ipc_name": "/cuda_vram_ipc_test",
+        "cuda_weight_share_shm_wait_sec": 15,
+        "cuda_weight_share_suppress_master_free": True,
+        "cuda_weight_share_trace": True,
+        "cuda_weight_share_trace_depth": 8,
+        "cuda_weight_share_trace_normal_allocs": True,
     })
 
     assert result["command"].startswith(
@@ -113,6 +118,11 @@ def test_api_generate_command_supports_cuda_weight_share_wrapper():
     assert "MODEL_SIZE=123456" in result["command"]
     assert "MODEL_SIZE_TOLERANCE=1024" in result["command"]
     assert "CUDA_VRAM_IPC_NAME=/cuda_vram_ipc_test" in result["command"]
+    assert "CUDA_VRAM_IPC_SHM_SIZE_WAIT_SEC=15" in result["command"]
+    assert "CUDA_VRAM_IPC_SUPPRESS_MASTER_FREE=1" in result["command"]
+    assert "CUDA_VRAM_IPC_TRACE_CALLERS=1" in result["command"]
+    assert "CUDA_VRAM_IPC_TRACE_DEPTH=8" in result["command"]
+    assert "CUDA_VRAM_IPC_TRACE_NORMAL_ALLOCS=1" in result["command"]
     assert "llama-server" in result["command"]
 
 
@@ -541,6 +551,75 @@ def test_godzilla_plan_is_bounded_to_saved_roots(tmp_path, monkeypatch):
         )
 
 
+def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
+    tmp_path, monkeypatch
+):
+    addon_root = tmp_path / "addons"
+    checkout = addon_root / "godzilla-llama.cpp"
+    calibrator = addon_root / "triattention" / "scripts" / "calibrate.py"
+    model_root = tmp_path / "models"
+    model = model_root / "model.gguf"
+    calibration_input = model_root / "calibration.txt"
+    python = tmp_path / "python.exe"
+    (checkout / "ggml").mkdir(parents=True)
+    (checkout / "common").mkdir()
+    (checkout / "src").mkdir()
+    (checkout / "scripts").mkdir()
+    (checkout / "CMakeLists.txt").write_text("", encoding="utf-8")
+    (checkout / "GODZILLA_KING.md").write_text("", encoding="utf-8")
+    (checkout / "common" / "arg.cpp").write_text("kvarn", encoding="utf-8")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    model_root.mkdir()
+    model.write_bytes(b"gguf")
+    calibration_input.write_text("coherent calibration text", encoding="utf-8")
+    python.write_bytes(b"python")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            **DEFAULT_UI_SETTINGS,
+            "model_root": str(model_root),
+            "addon_roots": [str(addon_root)],
+        }
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+
+    result = run_ui.api_plan_godzilla(
+        {
+            "checkout": str(checkout),
+            "gguf": str(model),
+            "python": str(python),
+            "calibrator": str(calibrator),
+            "calibration_input": str(calibration_input),
+            "hf_model": "org/model",
+            "mode": "official_python",
+        }
+    )
+
+    assert result["ready"] is True
+    assert result["mode"] == "official_python"
+    assert result["calibration_input"] == str(calibration_input.resolve())
+
+    outside_hf_model = tmp_path / "outside-hf"
+    outside_hf_model.mkdir()
+    with pytest.raises(ValueError, match="local Hugging Face model"):
+        run_ui.api_plan_godzilla(
+            {
+                "checkout": str(checkout),
+                "gguf": str(model),
+                "python": str(python),
+                "calibrator": str(calibrator),
+                "calibration_input": str(calibration_input),
+                "hf_model": str(outside_hf_model),
+                "mode": "official_python",
+            }
+        )
+
+
 def test_godzilla_creation_requires_confirmation():
     with pytest.raises(ValueError, match="explicit confirmation"):
         run_ui.api_create_godzilla({"confirm": False})
@@ -553,9 +632,12 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
         output=tmp_path / "model.triattention",
         python=tmp_path / "python.exe",
         calibrator=tmp_path / "calibrator.py",
+        calibration_input=tmp_path / "calibration.txt",
         hf_model="org/model",
         n_tokens=2048,
         device="cuda",
+        mode="official_python",
+        attention_implementation="sdpa",
     )
     calls = []
 
@@ -579,9 +661,12 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
                 "output": plan.output,
                 "python": plan.python,
                 "calibrator": plan.calibrator,
+                "calibration_input": plan.calibration_input,
                 "hf_model": "org/model",
                 "n_tokens": 2048,
                 "device": "cuda",
+                "mode": "official_python",
+                "attention_implementation": "sdpa",
             },
         )
     ]

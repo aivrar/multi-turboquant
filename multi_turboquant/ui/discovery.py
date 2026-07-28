@@ -152,6 +152,8 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
     directories = {item.lower() for item in directories}
     if {"setup.py"}.issubset(files) and {"flash_attn", "csrc"}.issubset(directories):
         return "flashattention"
+    if (path / "scripts" / "calibrate.py").is_file() and "triattention" in directories:
+        return "triattention"
     if "fastdms" in directories and "pyproject.toml" in files:
         return "fastdms"
     if "lmcache" in directories and {"pyproject.toml", "setup.py"}.issubset(files):
@@ -220,6 +222,10 @@ def scan_addon_roots(
                     from ..integration import inspect_godzilla_checkout
 
                     item["source"] = inspect_godzilla_checkout(directory)
+                if kind == "triattention":
+                    from ..calibration import inspect_official_triattention_checkout
+
+                    item["source"] = inspect_official_triattention_checkout(directory)
                 if kind in {
                     "flashattention",
                     "fastdms",

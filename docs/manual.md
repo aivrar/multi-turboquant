@@ -733,40 +733,53 @@ cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
 For upstream llama.cpp, leave `use_custom_triattention_llamacpp=False`; the
 command generator will warn that TriAttention is ignored in that backend.
 
-The stats file is required before patched llama.cpp TriAttention can run.
-Godzilla-compatible calibration is an offline Python pass over the matching
-Hugging Face checkpoint, for example:
+The stats file is required before patched llama.cpp TriAttention can run. The
+recommended path uses the official `WeianMao/triattention` calibration script,
+then converts its PyTorch output to Godzilla's different v1 binary layout:
 
 ```bash
-python /path/to/calibrate-triattention.py \
+mtq-godzilla-triattention calibrate \
+  --calibrator /path/to/triattention/scripts/calibrate.py \
   --model organization/original-model \
-  --n-tokens 2048 \
-  --output model.triattention
+  --input calibration.txt \
+  --output model.triattention \
+  --max-length 32768 \
+  --device cuda \
+  --attn-implementation sdpa
 ```
 
 Then put the generated `model.triattention` path into the web UI's
 `TriAttention Stats Path` field or `CacheConfig.triattention_stats_path`.
-The current Godzilla checkout does not bundle the script shown above, and its
-current lab policy treats TriAttention as experimental, opt-in, and manually
-calibrated. The older llama-cpp-turboquant documentation references the same
-script, but the current repository does not contain it or implement the
-advertised native calibration flags. Multi-TurboQuant therefore requires a
-separately validated compatible script rather than generating unverified model
-statistics. Calibration cannot be made universal from GGUF files alone: each
-output is model-specific, the original checkpoint mapping is not guaranteed in
-GGUF metadata, and a calibrator only supports architectures it knows how to
-instrument.
+The command keeps the official intermediate payload as `model.official.pt`,
+loads the matching Hugging Face configuration, writes the final file atomically,
+and reads it back before reporting success. The converter checks head dimension,
+layer and head indices, grouped-query head divisibility, RoPE metadata, all
+vector shapes, finite values, and exact end-of-file size.
 
-The web UI's Setup view automatically inspects a configured
-`godzilla-llama.cpp` checkout and plans its own
-`scripts/ensure-triattention.ps1` workflow. It selects a bundled calibrator if
-one exists; otherwise select a separately validated script and the calibration
-Python, plus the GGUF and optional exact Hugging Face source model. The UI
-reports missing prerequisites before it can start a confirmed background job,
-verifies the output artifact, and reuses an existing stats file without
-requiring the calibration toolchain. It does not build the Godzilla CMake
-project or assume that an arbitrary GGUF can be calibrated. KVarN requires no
-calibration and remains a launch-time cache-type choice.
+To convert an existing official payload without another model forward pass:
+
+```bash
+mtq-godzilla-triattention convert official_stats.pt model.triattention \
+  --model organization/original-model
+mtq-godzilla-triattention inspect model.triattention
+```
+
+Neither command uses `llama-cli`. Multi-TurboQuant does not show a native
+`llama-cli` calibration choice because the current Godzilla binary does not
+expose a real calibration command. The original Hugging Face checkpoint is still
+required for calibration: a GGUF alone does not contain the necessary pre-RoPE
+query statistics. The official script loads models with
+`trust_remote_code=True`; inspect and trust the chosen model source first.
+
+The web UI's Setup view detects both Godzilla and official TriAttention source
+checkouts. **Official Python** is the default mode: choose the official
+`scripts/calibrate.py`, a non-empty coherent text file, the calibration Python,
+the GGUF, and the exact Hugging Face model. **Godzilla checkout script** retains
+the older `scripts/ensure-triattention.ps1` workflow for compatible checkouts.
+The UI reports missing prerequisites before it starts a confirmed background
+job, validates new and existing output artifacts, and never builds the Godzilla
+CMake project. KVarN requires no calibration and remains a launch-time cache
+type choice.
 
 `mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
 Python/vLLM integration. That file is not binary-compatible with Godzilla's
@@ -799,6 +812,23 @@ cmd = get_llamacpp_command(
 Run the external helper once in reconnaissance mode (`MODEL_SIZE=0`) to find the
 model weight allocation size, then reuse that value for the master and worker
 processes.
+
+| Environment variable | Meaning |
+|----------------------|---------|
+| `LD_PRELOAD` | Linux dynamic-linker hook that loads the external helper before llama.cpp so it can intercept CUDA allocations. |
+| `MODEL_SIZE` | Expected model-weight CUDA allocation in bytes. `0` is discovery mode, not a usable production value and not the GGUF file size. |
+| `MODEL_SIZE_TOLERANCE` | Allowed difference when matching the allocation. Start at `0`; make it only as large as measured allocator variation requires. |
+| `CUDA_VRAM_IPC_NAME` | Shared namespace for one cooperating process group. Use the same unique value for that group and a different value for unrelated models. |
+| `CUDA_VRAM_IPC_SHM_SIZE_WAIT_SEC` | Seconds a worker waits for the master to publish shared-memory size metadata. |
+| `CUDA_VRAM_IPC_SUPPRESS_MASTER_FREE` | Prevents the master from releasing the shared backing allocation in helper workflows that require it. Leave disabled normally. |
+| `CUDA_VRAM_IPC_TRACE_CALLERS` | Enables diagnostic caller/backtrace logging for intercepted allocations. |
+| `CUDA_VRAM_IPC_TRACE_DEPTH` | Limits the caller-trace stack depth. |
+| `CUDA_VRAM_IPC_TRACE_NORMAL_ALLOCS` | Includes ordinary, non-model allocations in tracing. This increases log volume and overhead. |
+
+The helper shares model weights, not KV cache entries or process context. All
+participating processes must use matching model, build, CUDA device, size, and
+IPC-name settings. The external helper ultimately defines the variable behavior;
+Multi-TurboQuant validates values and constructs the environment-prefixed command.
 
 ### Build flags
 
@@ -1350,6 +1380,7 @@ multi_turboquant/
   calibration/
     generate_metadata.py    TurboQuant weight-norm calibration
     generate_stats.py       TriAttention frequency stats
+    godzilla_triattention.py Official .pt calibration conversion and verification
     auto_calibrate.py       Unified calibration dispatcher
 
   integration/
@@ -1441,6 +1472,8 @@ multi_turboquant.hardware.get_recommended_engine(platform)
 ```python
 multi_turboquant.calibration.generate_turboquant_metadata(model_path, recipe)
 multi_turboquant.calibration.generate_triattention_stats(model, tokenizer, prompts)
+multi_turboquant.calibration.convert_official_triattention_stats(input_path, output_path, ...)
+multi_turboquant.calibration.inspect_godzilla_triattention_file(path)
 multi_turboquant.calibration.auto_calibrate(config, model_path)
 ```
 
@@ -1476,8 +1509,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Context extension, Resonance RoPE review, UI scanner, and KVarN/TriAttention compatibility request | jawadala / issue #11 | Community contribution |
 | Local UI workspace, persistent defaults, model/add-on discovery, and recent option exposure | jawadala / issue #19 | Community contribution |
 | Local checkout dependency builds and Godzilla source/setup recognition | jawadala / issue #25 | Community contribution |
+| Official TriAttention calibration discovery, no-llama-cli workflow, and CUDA weight-share documentation | jawadala / issue #29 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for the sustained issue reports that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, and consolidated UI workspace.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for the sustained issue reports that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, and official TriAttention calibration path.
 
 ---
 

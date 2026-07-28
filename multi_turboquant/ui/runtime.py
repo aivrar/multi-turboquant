@@ -274,9 +274,12 @@ class GodzillaCalibrationJobManager:
         output: str | Path | None = None,
         python: str | Path | None = None,
         calibrator: str | Path | None = None,
+        calibration_input: str | Path | None = None,
         hf_model: str | None = None,
         n_tokens: int = 2048,
         device: str = "cuda",
+        mode: str = "official_python",
+        attention_implementation: str = "sdpa",
     ) -> dict[str, object]:
         from ..integration.godzilla_workspace import plan_godzilla_triattention
 
@@ -286,9 +289,12 @@ class GodzillaCalibrationJobManager:
             output=output,
             python=python,
             calibrator=calibrator,
+            calibration_input=calibration_input,
             hf_model=hf_model,
             n_tokens=n_tokens,
             device=device,
+            mode=mode,
+            attention_implementation=attention_implementation,
         )
         if not plan.ready:
             errors = "; ".join(
@@ -304,6 +310,7 @@ class GodzillaCalibrationJobManager:
             "checkout": str(plan.checkout),
             "model": str(plan.gguf),
             "output": str(plan.output),
+            "mode": plan.mode,
             "created_at": time.time(),
             "finished_at": None,
             "report": None,

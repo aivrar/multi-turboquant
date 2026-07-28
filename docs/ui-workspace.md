@@ -52,18 +52,40 @@ UI server shuts down. A binary path can be supplied in the command controls, or
 For patched Godzilla TriAttention, the stats-path control expects the finished
 binary `.triattention` file. Producing that file is a model-specific offline
 calibration against the matching Hugging Face checkpoint; a discovered GGUF
-alone does not contain the required pre-RoPE query statistics. The UI does not
-mislabel Multi-TurboQuant's Python `.pt` stats as Godzilla-compatible data.
+alone does not contain the required pre-RoPE query statistics.
 
-The Setup view can prepare this file through a recognized Godzilla checkout's
-own `scripts/ensure-triattention.ps1`. Unless the expected output already
-exists, the plan requires a GGUF in the saved model root, a Python executable
-with the required packages, and a validated compatible
-`calibrate-triattention.py`. The current checkout does not bundle that script.
-A matching Hugging Face model can be entered explicitly; when Godzilla's
-resolver is present, it can instead try the GGUF metadata mapping. The UI warns
-that this may download and load the source checkpoint. KVarN is not calibrated:
-it remains a launch-time K/V cache selection and is reported separately.
+The default **Official Python** mode uses the official TriAttention checkout's
+`scripts/calibrate.py`, keeps its `.pt` output, converts that payload to
+Godzilla v1, and strictly reads the final artifact back. Select a non-empty
+calibration text, the exact Hugging Face model, and a Python environment with
+PyTorch and Transformers. The official script may download model data and uses
+`trust_remote_code=True`; only continue with a model source you trust.
+
+This path does not call `llama-cli`. The UI does not offer a native llama-cli
+mode because the current Godzilla binary has no implemented calibration command.
+The **Godzilla checkout script** mode retains the older
+`scripts/ensure-triattention.ps1` flow for compatible checkouts. KVarN is not
+calibrated: it remains a launch-time K/V cache selection.
+
+The CUDA weight-share controls only prepare the external Linux/CUDA helper's
+environment:
+
+- `LD_PRELOAD` loads the helper before llama.cpp so it can intercept CUDA
+  allocations.
+- `MODEL_SIZE` is the measured model-weight allocation in bytes, not the GGUF
+  file size. Use `0` for one discovery run, then reuse the reported value.
+- `MODEL_SIZE_TOLERANCE` permits a small allocation-size difference. Start at
+  zero; a broad value can match an unrelated allocation.
+- `CUDA_VRAM_IPC_NAME` identifies one sharing group. All members use the same
+  unique name; unrelated groups use different names.
+- `CUDA_VRAM_IPC_SHM_SIZE_WAIT_SEC` lets workers wait for master metadata.
+- `CUDA_VRAM_IPC_SUPPRESS_MASTER_FREE` is a specialized lifetime override;
+  leave it off unless the helper workflow requires it.
+- the caller, depth, and normal-allocation trace settings are diagnostics that
+  add log volume and overhead.
+
+The helper shares weights, not KV caches or contexts. Participating processes
+must use matching model, build, CUDA device, size, and IPC-name settings.
 
 ## Setup & Add-ons
 
@@ -82,8 +104,8 @@ button remains available. Results report the resolved roots, scan depth,
 directory count, invalid roots, and missing source markers. The scanner does
 not search an entire drive, follow directory symlinks, import third-party
 packages, or run source code. Recognized add-ons currently include
-FlashAttention, FastDMS, LMCache, MInference, SageAttention, Godzilla, and
-llama.cpp checkouts. Renamed Godzilla trees are recognized by
+FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
+Godzilla, and llama.cpp checkouts. Renamed Godzilla trees are recognized by
 `scripts/godzilla-paths.ps1`. FlashAttention inspection checks the expected
 source markers and reports version and Git remote metadata when available.
 
@@ -101,14 +123,14 @@ matches the profile's PyTorch CUDA build; the plan now displays this explicitly.
 
 A recognized Godzilla tree has a separate action. Inspection reports its known
 source markers, KVarN and TriAttention flags, preparation/resolver scripts,
-bundled-calibrator status, and known `llama-server` build locations.
+bundled-calibrator status, and known `llama-server` build locations. A recognized
+official TriAttention checkout has a separate action that fills its validated
+`scripts/calibrate.py` path.
 Multi-TurboQuant does not configure or compile the CMake project automatically;
-use Godzilla's documented build process. Current Godzilla policy treats
-TriAttention as experimental and manually calibrated. Its checkout does not
-currently bundle `calibrate-triattention.py`, so the UI reports that prerequisite
-instead of inventing model statistics. If a compatible checkout later bundles
-one, it is selected automatically. Existing `.triattention` output is reused
-without requiring Python, a calibrator, or PowerShell.
+use Godzilla's documented build process. TriAttention remains experimental and
+model-specific. Existing `.triattention` output is reused only after its v1
+header, dimensions, sampled indices, numeric arrays, and exact file length pass
+validation.
 
 Creating a dependency environment reuses the reviewed `mtq-env` profiles and
 runs as a background job. The UI requires explicit confirmation because the
