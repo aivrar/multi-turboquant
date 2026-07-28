@@ -149,6 +149,7 @@ def inspect_flashattention_source(path: str | Path) -> dict[str, object]:
 
 def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str | None:
     name = path.name.lower().replace("_", "-")
+    directories = {item.lower() for item in directories}
     if {"setup.py"}.issubset(files) and {"flash_attn", "csrc"}.issubset(directories):
         return "flashattention"
     if "fastdms" in name or "fastdms" in directories:
@@ -159,6 +160,8 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         return "minference"
     if "sageattention" in name or "sageattention" in directories:
         return "sageattention"
+    if "godzilla" in name or "GODZILLA_KING.md" in files:
+        return "godzilla"
     if "llama.cpp" in name or "llama-cpp" in name:
         return "llamacpp"
     if "CMakeLists.txt" in files and "ggml" in directories:
@@ -200,6 +203,21 @@ def scan_addon_roots(
                 }
                 if kind == "flashattention":
                     item["source"] = inspect_flashattention_source(directory)
+                if kind == "godzilla":
+                    from ..integration import inspect_godzilla_checkout
+
+                    item["source"] = inspect_godzilla_checkout(directory)
+                if kind in {
+                    "flashattention",
+                    "fastdms",
+                    "lmcache",
+                    "minference",
+                    "sageattention",
+                }:
+                    from ..optimizations.environments import inspect_profile_source
+
+                    item["environment_profile"] = kind
+                    item["local_source"] = inspect_profile_source(kind, directory)
                 results.append(item)
                 if len(results) >= limit:
                     break
@@ -221,19 +239,33 @@ def scan_environment_profiles(
     root: str | Path,
     *,
     cuda_toolkit: str | Path | None = None,
+    local_source_profile: str | None = None,
+    local_source: str | Path | None = None,
 ) -> dict[str, object]:
     """Report dependency profile readiness and materialization without imports."""
     from ..optimizations.environments import (
         BUILTIN_ENVIRONMENT_PROFILES,
         detect_environment_context,
         environment_python,
+        get_environment_profile,
         plan_environment,
     )
 
+    selected_profile = local_source_profile.strip().lower() if local_source_profile else None
+    if local_source is not None and not selected_profile:
+        raise ValueError("Choose a local source profile before selecting its checkout")
+    if selected_profile is not None:
+        get_environment_profile(selected_profile)
     context = detect_environment_context(cuda_toolkit=cuda_toolkit)
     profiles: list[dict[str, object]] = []
     for profile in BUILTIN_ENVIRONMENT_PROFILES:
-        plan = plan_environment(profile.id, root=root, context=context)
+        selected_source = local_source if profile.id == selected_profile else None
+        plan = plan_environment(
+            profile.id,
+            root=root,
+            context=context,
+            local_source=selected_source,
+        )
         project_file = plan.target / "pyproject.toml"
         interpreter = environment_python(plan.target, os_name=context.os)
         if not profile.installable:
@@ -254,11 +286,15 @@ def scan_environment_profiles(
                 "ready": plan.ready,
                 "target": str(plan.target),
                 "source_build_available": bool(profile.source_build_packages),
+                "local_source_supported": profile.local_source_package is not None,
+                "local_source_selected": str(plan.local_source) if plan.local_source else None,
                 "issues": [issue.to_dict() for issue in plan.issues],
             }
         )
     return {
         "root": str(Path(root).expanduser().resolve()),
+        "local_source_profile": selected_profile,
+        "local_source": str(Path(local_source).expanduser().resolve()) if local_source else None,
         "context": {
             "os": context.os,
             "compute": context.compute,

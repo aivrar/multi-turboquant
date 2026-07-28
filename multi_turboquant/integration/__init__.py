@@ -33,6 +33,13 @@ from .lmcache import (
     build_lmcache_launch_plan,
 )
 from .bridge_adapter import BridgeAdapter
+from .godzilla_workspace import (
+    GodzillaCalibrationPlan,
+    GodzillaIssue,
+    inspect_godzilla_checkout,
+    plan_godzilla_triattention,
+    run_godzilla_triattention,
+)
 
 __all__ = [
     "patch_vllm",
@@ -54,4 +61,9 @@ __all__ = [
     "LMCacheMode",
     "build_lmcache_launch_plan",
     "BridgeAdapter",
+    "GodzillaCalibrationPlan",
+    "GodzillaIssue",
+    "inspect_godzilla_checkout",
+    "plan_godzilla_triattention",
+    "run_godzilla_triattention",
 ]

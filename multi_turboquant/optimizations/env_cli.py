@@ -39,6 +39,11 @@ def _add_common_profile_arguments(
     )
     if allow_source_build:
         parser.add_argument(
+            "--local-source",
+            type=Path,
+            help="Build the profile's reviewed package from this validated local checkout",
+        )
+        parser.add_argument(
             "--build-from-source",
             action="store_true",
             help="Force the profile's reviewed native packages to build locally",
@@ -63,6 +68,8 @@ def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
     if plan.build_from_source:
         packages = ", ".join(plan.profile.source_build_packages) or "unavailable"
         print(f"Source:  forced ({packages})")
+    if plan.local_source is not None:
+        print(f"Checkout: {plan.local_source} ({plan.profile.local_source_package})")
     if plan.profile.packages:
         print("Packages:")
         for package in plan.profile.packages:
@@ -119,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         root=args.root,
         python=args.python,
         cuda_toolkit=args.cuda_toolkit,
+        local_source=getattr(args, "local_source", None),
         build_from_source=getattr(args, "build_from_source", False),
     )
     if args.action == "plan":

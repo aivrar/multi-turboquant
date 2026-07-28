@@ -148,6 +148,7 @@ class EnvironmentJobManager:
         root: str | Path,
         python: str | None = None,
         cuda_toolkit: str | Path | None = None,
+        local_source: str | Path | None = None,
         build_from_source: bool = False,
     ) -> dict[str, object]:
         from ..optimizations.environments import plan_environment
@@ -157,6 +158,7 @@ class EnvironmentJobManager:
             root=root,
             python=python,
             cuda_toolkit=cuda_toolkit,
+            local_source=local_source,
             build_from_source=build_from_source,
         )
         if not plan.ready:
@@ -172,6 +174,9 @@ class EnvironmentJobManager:
             "build_from_source": build_from_source,
             "cuda_toolkit_root": (
                 str(plan.cuda_toolkit_root) if plan.cuda_toolkit_root is not None else None
+            ),
+            "local_source": (
+                str(plan.local_source) if plan.local_source is not None else None
             ),
             "target": str(plan.target),
             "created_at": time.time(),
@@ -216,6 +221,132 @@ class EnvironmentJobManager:
         try:
             synchronize_environment(plan, runner=runner)  # type: ignore[arg-type]
             report = check_environment(plan)  # type: ignore[arg-type]
+        except Exception as exc:
+            with self._lock:
+                job = self._jobs[job_id]
+                job["status"] = "failed"
+                job["error"] = str(exc)
+                job["finished_at"] = time.time()
+        else:
+            with self._lock:
+                job = self._jobs[job_id]
+                job["status"] = "completed"
+                job["report"] = dict(report)
+                job["finished_at"] = time.time()
+
+    def get(self, job_id: str) -> dict[str, object]:
+        with self._lock:
+            if job_id not in self._jobs:
+                raise KeyError(f"Unknown job: {job_id}")
+            return self._snapshot(self._jobs[job_id])
+
+    def list(self) -> list[dict[str, object]]:
+        with self._lock:
+            return [
+                self._snapshot(item)
+                for item in sorted(
+                    self._jobs.values(),
+                    key=lambda value: float(value["created_at"]),
+                    reverse=True,
+                )
+            ]
+
+
+class GodzillaCalibrationJobManager:
+    """Run an explicitly confirmed Godzilla TriAttention preparation job."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._jobs: dict[str, dict[str, object]] = {}
+
+    def _snapshot(self, job: Mapping[str, object]) -> dict[str, object]:
+        return {
+            key: list(value) if isinstance(value, deque) else value
+            for key, value in job.items()
+            if not key.startswith("_")
+        }
+
+    def start(
+        self,
+        checkout: str | Path,
+        gguf: str | Path,
+        *,
+        output: str | Path | None = None,
+        python: str | Path | None = None,
+        calibrator: str | Path | None = None,
+        hf_model: str | None = None,
+        n_tokens: int = 2048,
+        device: str = "cuda",
+    ) -> dict[str, object]:
+        from ..integration.godzilla_workspace import plan_godzilla_triattention
+
+        plan = plan_godzilla_triattention(
+            checkout,
+            gguf,
+            output=output,
+            python=python,
+            calibrator=calibrator,
+            hf_model=hf_model,
+            n_tokens=n_tokens,
+            device=device,
+        )
+        if not plan.ready:
+            errors = "; ".join(
+                issue.message for issue in plan.issues if issue.severity == "error"
+            )
+            raise ValueError(errors or "Godzilla calibration plan is not ready")
+
+        job_id = uuid.uuid4().hex
+        job: dict[str, object] = {
+            "id": job_id,
+            "type": "godzilla-triattention",
+            "status": "queued",
+            "checkout": str(plan.checkout),
+            "model": str(plan.gguf),
+            "output": str(plan.output),
+            "created_at": time.time(),
+            "finished_at": None,
+            "report": None,
+            "error": None,
+            "log": deque(maxlen=500),
+        }
+        with self._lock:
+            if any(
+                item["output"] == str(plan.output)
+                and item["status"] in {"queued", "running"}
+                for item in self._jobs.values()
+            ):
+                raise RuntimeError(
+                    f"A Godzilla calibration job for {plan.output} is already running"
+                )
+            self._jobs[job_id] = job
+        threading.Thread(target=self._run, args=(job_id, plan), daemon=True).start()
+        return self.get(job_id)
+
+    def _run(self, job_id: str, plan: object) -> None:
+        from ..integration.godzilla_workspace import run_godzilla_triattention
+
+        with self._lock:
+            self._jobs[job_id]["status"] = "running"
+
+        def runner(argv: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            result = subprocess.run(
+                list(argv),
+                cwd=kwargs.get("cwd"),
+                env=kwargs.get("env"),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            with self._lock:
+                log = self._jobs[job_id]["log"]
+                assert isinstance(log, deque)
+                log.extend((result.stdout or "").splitlines())
+                log.extend((result.stderr or "").splitlines())
+            return result
+
+        try:
+            report = run_godzilla_triattention(plan, runner=runner)  # type: ignore[arg-type]
         except Exception as exc:
             with self._lock:
                 job = self._jobs[job_id]

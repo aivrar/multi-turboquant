@@ -53,6 +53,8 @@ class DependencyProfile:
     blocked_reason: str | None = None
     source_build_packages: tuple[str, ...] = ()
     source_build_environment: tuple[tuple[str, str], ...] = ()
+    local_source_package: str | None = None
+    local_source_markers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _PROFILE_ID.fullmatch(self.id):
@@ -67,6 +69,10 @@ class DependencyProfile:
             raise ValueError("Blocked dependency profiles must explain why they are blocked")
         if self.source_build_environment and not self.source_build_packages:
             raise ValueError("Source-build environment variables require source-build packages")
+        if bool(self.local_source_package) != bool(self.local_source_markers):
+            raise ValueError("Local source packages must declare reviewed checkout markers")
+        if self.local_source_package and not self.installable:
+            raise ValueError("Blocked profiles cannot accept a local source checkout")
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +90,8 @@ class DependencyProfile:
             "build_environment": dict(self.build_environment),
             "source_build_packages": list(self.source_build_packages),
             "source_build_environment": dict(self.source_build_environment),
+            "local_source_package": self.local_source_package,
+            "local_source_markers": list(self.local_source_markers),
             "package_sources": dict(self.package_sources),
             "package_indexes": dict(self.package_indexes),
             "dependency_metadata": [
@@ -128,6 +136,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         build_environment=(("MAX_JOBS", "4"),),
         source_build_packages=("flash-attn",),
         source_build_environment=(("FLASH_ATTENTION_FORCE_BUILD", "TRUE"),),
+        local_source_package="flash-attn",
+        local_source_markers=("setup.py", "flash_attn", "csrc"),
         package_sources=(("torch", "pytorch-cu126"),),
         package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
         cuda_toolkit_major=12,
@@ -163,6 +173,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         build_environment=(("MAX_JOBS", "4"),),
         source_build_packages=("flash-attn",),
         source_build_environment=(("FLASH_ATTENTION_FORCE_BUILD", "TRUE"),),
+        local_source_package="fastdms",
+        local_source_markers=("pyproject.toml", "fastdms"),
         package_sources=(("torch", "pytorch-cu126"),),
         package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
         cuda_toolkit_major=12,
@@ -193,6 +205,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         package_indexes=(("pytorch-cu130", "https://download.pytorch.org/whl/cu130"),),
         torch_cuda_major=13,
         validation_modules=("torch", "lmcache", "lmcache.c_ops", "openai"),
+        local_source_package="lmcache",
+        local_source_markers=("pyproject.toml", "setup.py", "lmcache"),
         notes=(
             "Uses the upstream CUDA 13 stable wheel and a matching official PyTorch wheel.",
             "Pins the OpenAI client imported by LMCache's CLI but omitted from its metadata.",
@@ -243,6 +257,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
             "vLLM or SGLang is deliberately not installed into this kernel profile.",
         ),
         build_may_compile=True,
+        local_source_package="minference",
+        local_source_markers=("setup.py", "minference", "csrc"),
     ),
     DependencyProfile(
         id="sageattention",
@@ -281,6 +297,8 @@ BUILTIN_ENVIRONMENT_PROFILES = (
             "Upstream supports Ampere and newer GPUs; model integration remains explicit.",
         ),
         build_may_compile=True,
+        local_source_package="sageattention",
+        local_source_markers=("setup.py", "sageattention", "csrc"),
     ),
     DependencyProfile(
         id="maru",
@@ -389,6 +407,45 @@ def get_environment_profile(profile_id: str) -> DependencyProfile:
             return profile
     available = ", ".join(profile.id for profile in BUILTIN_ENVIRONMENT_PROFILES)
     raise KeyError(f"Unknown environment profile {profile_id!r}. Available: {available}")
+
+
+def inspect_profile_source(profile_id: str, path: str | Path) -> dict[str, object]:
+    """Validate a local checkout against one reviewed dependency profile."""
+    profile = get_environment_profile(profile_id)
+    raw_path = str(path).strip()
+    supported = profile.installable and profile.local_source_package is not None
+    if not raw_path:
+        return {
+            "profile": profile.id,
+            "package": profile.local_source_package,
+            "path": raw_path,
+            "supported": supported,
+            "valid": False,
+            "markers": {},
+            "issues": ["Local source checkout is not configured."],
+        }
+
+    resolved = Path(raw_path).expanduser().resolve()
+    markers = {
+        marker: (resolved / marker).exists()
+        for marker in profile.local_source_markers
+    }
+    issues: list[str] = []
+    if not supported:
+        issues.append(f"{profile.name} does not support installation from a local checkout.")
+    if not resolved.is_dir():
+        issues.append(f"Local source checkout is not a directory: {resolved}")
+    else:
+        issues.extend(f"Missing reviewed marker: {marker}" for marker, found in markers.items() if not found)
+    return {
+        "profile": profile.id,
+        "package": profile.local_source_package,
+        "path": str(resolved),
+        "supported": supported,
+        "valid": supported and not issues,
+        "markers": markers,
+        "issues": issues,
+    }
 
 
 @dataclass(frozen=True)
@@ -503,6 +560,7 @@ class EnvironmentPlan:
     issues: tuple[EnvironmentIssue, ...]
     cuda_toolkit_root: Path | None = None
     cuda_toolkit_version: tuple[int, int] | None = None
+    local_source: Path | None = None
     build_from_source: bool = False
 
     @property
@@ -522,6 +580,10 @@ class EnvironmentPlan:
                 if self.cuda_toolkit_version is not None
                 else None
             ),
+            "local_source": str(self.local_source) if self.local_source is not None else None,
+            "local_source_package": (
+                self.profile.local_source_package if self.local_source is not None else None
+            ),
             "build_from_source": self.build_from_source,
             "source_build_packages": (
                 list(self.profile.source_build_packages) if self.build_from_source else []
@@ -537,15 +599,31 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _normalized_package_name(value: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9_.-]+)", value)
+    return re.sub(r"[-_.]+", "-", match.group(1)).lower() if match else ""
+
+
 def render_profile_project(
     profile: DependencyProfile,
     *,
     build_from_source: bool = False,
+    local_source: str | Path | None = None,
 ) -> str:
     """Render the independent uv project used to lock one profile."""
     if not profile.installable:
         raise ValueError(f"Dependency profile {profile.id!r} is blocked")
-    dependency_lines = "\n".join(f"    {_toml_string(item)}," for item in profile.packages)
+    selected_source = Path(local_source).expanduser().resolve() if local_source is not None else None
+    if selected_source is not None and profile.local_source_package is None:
+        raise ValueError(f"Dependency profile {profile.id!r} has no reviewed local source")
+    local_package = _normalized_package_name(profile.local_source_package or "")
+    dependencies = [
+        profile.local_source_package
+        if selected_source is not None and _normalized_package_name(item) == local_package
+        else item
+        for item in profile.packages
+    ]
+    dependency_lines = "\n".join(f"    {_toml_string(item)}," for item in dependencies)
     lines = [
         "# Generated by Multi-TurboQuant. Edit the dependency profile, not this file.",
         "[project]",
@@ -565,10 +643,15 @@ def render_profile_project(
     if build_from_source and profile.source_build_packages:
         rendered = ", ".join(_toml_string(item) for item in profile.source_build_packages)
         lines.append(f"no-binary-package = [{rendered}]")
-    if profile.package_sources:
+    if profile.package_sources or selected_source is not None:
         lines.extend(["", "[tool.uv.sources]"])
         for package, index in profile.package_sources:
             lines.append(f"{package} = {{ index = {_toml_string(index)} }}")
+        if selected_source is not None and profile.local_source_package is not None:
+            lines.append(
+                f"{profile.local_source_package} = "
+                f"{{ path = {_toml_string(str(selected_source))} }}"
+            )
     for name, url in profile.package_indexes:
         lines.extend(
             [
@@ -596,9 +679,11 @@ def render_profile_project(
             "[tool.multi-turboquant]",
             f"profile = {_toml_string(profile.id)}",
             f"schema = {PROFILE_SCHEMA_VERSION}",
-            "",
         ]
     )
+    if selected_source is not None:
+        lines.append(f"local-source = {_toml_string(str(selected_source))}")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -608,6 +693,7 @@ def plan_environment(
     root: str | Path = DEFAULT_ENVIRONMENT_ROOT,
     python: str | None = None,
     cuda_toolkit: str | Path | None = None,
+    local_source: str | Path | None = None,
     build_from_source: bool = False,
     context: EnvironmentContext | None = None,
 ) -> EnvironmentPlan:
@@ -624,6 +710,29 @@ def plan_environment(
         raise ValueError("Python request must not be empty")
     target = (Path(root).expanduser() / profile.id).resolve()
     issues: list[EnvironmentIssue] = []
+    local_source_path: Path | None = None
+    if local_source is not None:
+        inspection = inspect_profile_source(profile.id, local_source)
+        inspected_path = str(inspection["path"])
+        if inspected_path:
+            local_source_path = Path(inspected_path)
+        if not inspection["valid"]:
+            issues.append(
+                EnvironmentIssue(
+                    "error",
+                    "invalid_local_source",
+                    "; ".join(str(item) for item in inspection["issues"]),
+                )
+            )
+        else:
+            issues.append(
+                EnvironmentIssue(
+                    "warning",
+                    "local_source_selected",
+                    f"The isolated environment will build {profile.local_source_package} from "
+                    f"the reviewed local checkout at {local_source_path}.",
+                )
+            )
 
     if not profile.installable:
         issues.append(
@@ -643,6 +752,7 @@ def plan_environment(
             issues=tuple(issues),
             cuda_toolkit_root=toolkit_root,
             cuda_toolkit_version=context.cuda_toolkit_version,
+            local_source=local_source_path,
         )
 
     if context.os not in profile.supported_os:
@@ -749,9 +859,14 @@ def plan_environment(
         )
 
     command_argv = ["uv", "sync", "--project", str(target), "--python", python_request]
+    reinstall_packages: list[str] = []
     if build_from_source:
+        reinstall_packages.extend(profile.source_build_packages)
+    if local_source_path is not None and profile.local_source_package is not None:
+        reinstall_packages.append(profile.local_source_package)
+    if reinstall_packages:
         command_argv.append("--no-cache")
-        for package in profile.source_build_packages:
+        for package in dict.fromkeys(reinstall_packages):
             command_argv.extend(("--reinstall-package", package))
     command = EnvironmentCommand(
         "Resolve, lock, and synchronize the isolated environment",
@@ -762,11 +877,16 @@ def plan_environment(
         target=target,
         python_request=python_request,
         build_from_source=build_from_source,
-        project_toml=render_profile_project(profile, build_from_source=build_from_source),
+        project_toml=render_profile_project(
+            profile,
+            build_from_source=build_from_source,
+            local_source=local_source_path,
+        ),
         commands=(command,),
         issues=tuple(issues),
         cuda_toolkit_root=toolkit_root,
         cuda_toolkit_version=context.cuda_toolkit_version,
+        local_source=local_source_path,
     )
 
 
