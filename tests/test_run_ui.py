@@ -4,6 +4,7 @@
 import re
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -372,7 +373,14 @@ def test_environment_scan_forwards_cuda_toolkit_selection(monkeypatch):
 
     assert result == {"profiles": []}
     assert calls == [
-        ("/tmp/envs", {"cuda_toolkit": "/usr/local/cuda-12.6"})
+        (
+            "/tmp/envs",
+            {
+                "cuda_toolkit": "/usr/local/cuda-12.6",
+                "local_source_profile": None,
+                "local_source": None,
+            },
+        )
     ]
 
 
@@ -405,7 +413,121 @@ def test_environment_creation_forwards_cuda_toolkit_selection(monkeypatch):
                 "root": "/tmp/envs",
                 "python": "3.11",
                 "cuda_toolkit": "/usr/local/cuda-12.6",
+                "local_source": None,
                 "build_from_source": False,
+            },
+        )
+    ]
+
+
+def test_environment_creation_forwards_matching_local_source(monkeypatch):
+    calls = []
+
+    class FakeJobs:
+        def start_create(self, profile, **kwargs):
+            calls.append((profile, kwargs))
+            return {"id": "job", "status": "queued"}
+
+    monkeypatch.setattr(run_ui, "ENVIRONMENT_JOBS", FakeJobs())
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    run_ui.api_create_environment(
+        {
+            "profile": "fastdms",
+            "root": "/tmp/envs",
+            "local_source_profile": "fastdms",
+            "local_source": "/tmp/addons/fastdms",
+            "confirm": True,
+        }
+    )
+
+    assert calls[0][1]["local_source"] == "/tmp/addons/fastdms"
+
+
+def test_godzilla_plan_is_bounded_to_saved_roots(tmp_path, monkeypatch):
+    addon_root = tmp_path / "addons"
+    checkout = addon_root / "godzilla-llama.cpp"
+    model_root = tmp_path / "models"
+    model = model_root / "model.gguf"
+    (checkout / "ggml").mkdir(parents=True)
+    (checkout / "common").mkdir()
+    (checkout / "scripts").mkdir()
+    (checkout / "CMakeLists.txt").write_text("", encoding="utf-8")
+    (checkout / "GODZILLA_KING.md").write_text("", encoding="utf-8")
+    (checkout / "common" / "arg.cpp").write_text("kvarn", encoding="utf-8")
+    (checkout / "scripts" / "ensure-triattention.ps1").write_text("", encoding="utf-8")
+    model_root.mkdir()
+    model.write_bytes(b"gguf")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            **DEFAULT_UI_SETTINGS,
+            "model_root": str(model_root),
+            "addon_roots": [str(addon_root)],
+        }
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+
+    result = run_ui.api_plan_godzilla({"checkout": str(checkout), "gguf": str(model)})
+
+    assert result["checkout"] == str(checkout.resolve())
+    assert result["gguf"] == str(model.resolve())
+    assert result["kvarn_calibration_required"] is False
+    with pytest.raises(ValueError, match="saved add-on root"):
+        run_ui.api_plan_godzilla(
+            {"checkout": str(tmp_path / "outside"), "gguf": str(model)}
+        )
+    with pytest.raises(ValueError, match="checkout or model folder"):
+        run_ui.api_plan_godzilla(
+            {
+                "checkout": str(checkout),
+                "gguf": str(model),
+                "output": str(tmp_path / "outside.triattention"),
+            }
+        )
+
+
+def test_godzilla_creation_requires_confirmation():
+    with pytest.raises(ValueError, match="explicit confirmation"):
+        run_ui.api_create_godzilla({"confirm": False})
+
+
+def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
+    plan = SimpleNamespace(
+        checkout=tmp_path / "godzilla",
+        gguf=tmp_path / "model.gguf",
+        output=tmp_path / "model.triattention",
+        python=tmp_path / "python.exe",
+        calibrator=tmp_path / "calibrator.py",
+        hf_model="org/model",
+        n_tokens=2048,
+        device="cuda",
+    )
+    calls = []
+
+    class FakeJobs:
+        def start(self, checkout, gguf, **kwargs):
+            calls.append((checkout, gguf, kwargs))
+            return {"id": "godzilla-job", "status": "queued"}
+
+    monkeypatch.setattr(run_ui, "_godzilla_plan_from_params", lambda params: plan)
+    monkeypatch.setattr(run_ui, "GODZILLA_JOBS", FakeJobs())
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    result = run_ui.api_create_godzilla({"confirm": True})
+
+    assert result["status"] == "queued"
+    assert calls == [
+        (
+            plan.checkout,
+            plan.gguf,
+            {
+                "output": plan.output,
+                "python": plan.python,
+                "calibrator": plan.calibrator,
+                "hf_model": "org/model",
+                "n_tokens": 2048,
+                "device": "cuda",
             },
         )
     ]

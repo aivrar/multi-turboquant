@@ -13,7 +13,12 @@ from multi_turboquant.ui.discovery import (
     scan_addon_roots,
     scan_models,
 )
-from multi_turboquant.ui.runtime import EnvironmentJobManager, ManagedProcess, _split_env_wrapper
+from multi_turboquant.ui.runtime import (
+    EnvironmentJobManager,
+    GodzillaCalibrationJobManager,
+    ManagedProcess,
+    _split_env_wrapper,
+)
 from multi_turboquant.ui.settings import DEFAULT_UI_SETTINGS, UISettingsStore, validate_ui_settings
 
 
@@ -95,6 +100,8 @@ def test_addon_scan_finds_flashattention_under_explicit_root(tmp_path: Path):
     assert result["count"] == 1
     assert result["addons"][0]["kind"] == "flashattention"
     assert result["addons"][0]["source"]["valid"] is True
+    assert result["addons"][0]["environment_profile"] == "flashattention"
+    assert result["addons"][0]["local_source"]["valid"] is True
 
 
 def test_env_wrapper_is_split_without_a_shell():
@@ -135,6 +142,7 @@ def test_environment_job_reports_completion(tmp_path: Path, monkeypatch):
         target=tmp_path / "fastdms",
         issues=[],
         cuda_toolkit_root=None,
+        local_source=None,
     )
     monkeypatch.setattr(environments, "plan_environment", lambda *args, **kwargs: plan)
     monkeypatch.setattr(environments, "synchronize_environment", lambda *args, **kwargs: None)
@@ -154,3 +162,36 @@ def test_environment_job_reports_completion(tmp_path: Path, monkeypatch):
     completed = manager.get(job["id"])
     assert completed["status"] == "completed"
     assert completed["report"] == {"fastdms": "0.2.0"}
+
+
+def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
+    from multi_turboquant.integration import godzilla_workspace
+
+    plan = SimpleNamespace(
+        ready=True,
+        checkout=tmp_path / "godzilla",
+        gguf=tmp_path / "model.gguf",
+        output=tmp_path / "model.triattention",
+        issues=[],
+    )
+    monkeypatch.setattr(
+        godzilla_workspace,
+        "plan_godzilla_triattention",
+        lambda *args, **kwargs: plan,
+    )
+    monkeypatch.setattr(
+        godzilla_workspace,
+        "run_godzilla_triattention",
+        lambda *args, **kwargs: {"output": str(plan.output), "reused": False},
+    )
+    manager = GodzillaCalibrationJobManager()
+
+    job = manager.start(plan.checkout, plan.gguf)
+    deadline = time.time() + 5
+    while manager.get(job["id"])["status"] not in {"completed", "failed"}:
+        assert time.time() < deadline
+        time.sleep(0.02)
+
+    completed = manager.get(job["id"])
+    assert completed["status"] == "completed"
+    assert completed["report"] == {"output": str(plan.output), "reused": False}

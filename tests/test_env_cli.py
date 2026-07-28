@@ -91,6 +91,8 @@ def test_plan_forwards_source_build_request(tmp_path: Path, monkeypatch):
             str(tmp_path),
             "--cuda-toolkit",
             str(tmp_path / "cuda-12.6"),
+            "--local-source",
+            str(tmp_path / "FastDMS"),
             "--build-from-source",
         ]
     )
@@ -98,3 +100,4 @@ def test_plan_forwards_source_build_request(tmp_path: Path, monkeypatch):
     assert result == 0
     assert calls[0][1]["build_from_source"] is True
     assert calls[0][1]["cuda_toolkit"] == tmp_path / "cuda-12.6"
+    assert calls[0][1]["local_source"] == tmp_path / "FastDMS"

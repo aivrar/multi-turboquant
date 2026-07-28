@@ -8,12 +8,13 @@ from .discovery import (
     scan_environment_profiles,
     scan_models,
 )
-from .runtime import EnvironmentJobManager, ManagedProcess
+from .runtime import EnvironmentJobManager, GodzillaCalibrationJobManager, ManagedProcess
 from .settings import DEFAULT_UI_SETTINGS, UISettingsStore, validate_ui_settings
 
 __all__ = [
     "DEFAULT_UI_SETTINGS",
     "EnvironmentJobManager",
+    "GodzillaCalibrationJobManager",
     "MODEL_FILE_SUFFIXES",
     "ManagedProcess",
     "UISettingsStore",

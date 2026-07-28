@@ -134,6 +134,10 @@ mtq-env create flashattention --build-from-source --yes
 
 mtq-env plan fastdms --build-from-source
 mtq-env create fastdms --build-from-source --yes
+
+# Use an already checked-out, reviewed package instead of the default source
+mtq-env plan fastdms --local-source /opt/addons/FastDMS
+mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
 ```
 
 Source mode is opt-in and is currently reviewed only for the `flashattention`
@@ -142,6 +146,23 @@ and `fastdms` profiles. It tells `uv` not to install a binary distribution for
 switch, and reinstalls that package so an existing environment or cached
 artifact cannot bypass the request. Other profiles reject the option rather
 than applying an unreviewed source-build procedure.
+
+`--local-source PATH` addresses a different case: installing the profile's
+primary package from an existing checkout. It is available for
+`flashattention`, `fastdms`, `lmcache`, `minference`, and `sageattention`.
+Planning resolves the path and verifies a profile-specific marker set (for
+example `setup.py`, the import package, and `csrc` where applicable). The
+generated project replaces only that package requirement with a
+`[tool.uv.sources]` local path and asks `uv` to rebuild it without cache; every
+other reviewed pin, Python constraint, CUDA check, validation import, and
+isolation boundary stays in force. A missing marker or unsupported profile is
+an error before any write.
+
+Local paths are non-editable by default, matching `uv` project-source
+semantics. Scanner discovery remains read-only: choosing and creating the
+environment is a separate, confirmed action. This is dependency build
+orchestration for known Python packages, not arbitrary script execution or a
+generic plugin loader.
 
 Each profile lives under `.mtq/environments/<profile>/` by default and owns a
 separate `pyproject.toml`, `uv.lock`, and `.venv`. This intentionally avoids a

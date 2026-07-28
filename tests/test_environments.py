@@ -12,6 +12,7 @@ from multi_turboquant.optimizations import (
     EnvironmentContext,
     check_environment,
     get_environment_profile,
+    inspect_profile_source,
     plan_environment,
     render_profile_project,
     synchronize_environment,
@@ -273,6 +274,49 @@ def test_plan_forces_a_cache_safe_flashattention_source_rebuild(tmp_path: Path):
     assert "--no-cache" in plan.commands[0].argv
     assert plan.commands[0].argv[-2:] == ("--reinstall-package", "flash-attn")
     assert any(issue.code == "source_build_forced" for issue in plan.issues)
+
+
+def test_plan_builds_reviewed_package_from_validated_local_checkout(tmp_path: Path):
+    source = tmp_path / "FastDMS local checkout"
+    (source / "fastdms").mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[project]\nname='fastdms'\n", encoding="utf-8")
+
+    inspection = inspect_profile_source("fastdms", source)
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path / "envs",
+        local_source=source,
+        context=linux_cuda_context(),
+    )
+    project = tomllib.loads(plan.project_toml)
+
+    assert inspection["valid"] is True
+    assert plan.ready
+    assert plan.local_source == source.resolve()
+    assert "fastdms" in project["project"]["dependencies"]
+    assert not any(item.startswith("fastdms>=") for item in project["project"]["dependencies"])
+    assert project["tool"]["uv"]["sources"]["fastdms"]["path"] == str(source.resolve())
+    assert project["tool"]["multi-turboquant"]["local-source"] == str(source.resolve())
+    assert "--no-cache" in plan.commands[0].argv
+    assert plan.commands[0].argv[-2:] == ("--reinstall-package", "fastdms")
+    assert any(issue.code == "local_source_selected" for issue in plan.issues)
+
+
+def test_plan_rejects_local_checkout_with_missing_reviewed_markers(tmp_path: Path):
+    source = tmp_path / "not-fastdms"
+    source.mkdir()
+
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path / "envs",
+        local_source=source,
+        context=linux_cuda_context(),
+    )
+
+    assert not plan.ready
+    issue = next(item for item in plan.issues if item.code == "invalid_local_source")
+    assert "pyproject.toml" in issue.message
+    assert "fastdms" in issue.message
 
 
 def test_plan_rejects_source_build_without_a_reviewed_profile_path(tmp_path: Path):

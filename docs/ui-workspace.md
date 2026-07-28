@@ -24,7 +24,7 @@ python run_ui.py --read-only
 
 `--read-only` retains planning, benchmark, command-generation, and discovery
 features while disabling settings writes, dependency-environment creation, and
-model process controls.
+Godzilla preparation and model process controls.
 
 ## Quick Run
 
@@ -55,6 +55,15 @@ calibration against the matching Hugging Face checkpoint; a discovered GGUF
 alone does not contain the required pre-RoPE query statistics. The UI does not
 mislabel Multi-TurboQuant's Python `.pt` stats as Godzilla-compatible data.
 
+The Setup view can prepare this file through a recognized Godzilla checkout's
+own `scripts/ensure-triattention.ps1`. The plan requires an existing GGUF in
+the saved model root, a Python executable with the required packages, and a
+compatible `calibrate-triattention.py`. A matching Hugging Face model can be
+entered explicitly; when Godzilla's resolver is present, it can instead try
+the GGUF metadata mapping. The UI warns that this may download and load the
+source checkpoint. KVarN is not calibrated: it remains a launch-time K/V cache
+selection and is reported separately.
+
 ## Setup & Add-ons
 
 Setup & Add-ons holds configuration that is changed less often:
@@ -69,9 +78,23 @@ Setup & Add-ons holds configuration that is changed less often:
 The scanners are bounded and inspect only configured roots. They do not search
 an entire drive, follow directory symlinks, import third-party packages, or run
 source code. Recognized add-ons currently include FlashAttention, FastDMS,
-LMCache, MInference, SageAttention, and llama.cpp checkouts. FlashAttention
+LMCache, MInference, SageAttention, Godzilla, and llama.cpp checkouts. FlashAttention
 inspection checks the expected source markers and reports version and Git
 remote metadata when available.
+
+For the five reviewed Python add-ons, a recognized checkout has a **Use for
+profile** action. It fills the local-source profile and path controls. Refresh
+the profile plan before creation: the plan validates the checkout markers,
+then `uv` builds that package and resolves its dependencies in the selected
+isolated environment. The scanner never imports or executes the checkout, and
+unrecognized folders cannot be substituted into a profile.
+
+A recognized Godzilla tree has a separate action. Inspection reports its known
+source markers, KVarN and TriAttention flags, preparation/resolver scripts, and
+known `llama-server` build locations. Multi-TurboQuant does not configure or
+compile the CMake project automatically; use Godzilla's documented build
+process. The preparation control only runs the checkout's reviewed
+`ensure-triattention.ps1` entry point after an explicit plan and confirmation.
 
 Creating a dependency environment reuses the reviewed `mtq-env` profiles and
 runs as a background job. The UI requires explicit confirmation because the
@@ -82,6 +105,11 @@ The CUDA override does not install or replace a toolkit. It selects an existing
 toolkit whose major version matches the profile's PyTorch build and exports it
 through `CUDA_HOME`, `CUDA_PATH`, and `PATH` for the background job. Blocked
 profiles are informational records and intentionally have no Create action.
+
+Godzilla preparation also runs as a background job and verifies that the
+expected `.triattention` output exists. Custom outputs are limited to the
+selected checkout or model folder. The checkout must remain inside a saved
+add-on root, and the GGUF must remain inside the saved model root.
 
 ## Persistent defaults
 

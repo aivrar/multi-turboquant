@@ -35,10 +35,13 @@ from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FA
 from multi_turboquant.integration import (
     CudaWeightShareConfig,
     LlamaCppContextExtensionConfig,
+    inspect_godzilla_checkout,
+    plan_godzilla_triattention,
     scan_llamacpp_binary,
 )
 from multi_turboquant.ui import (
     EnvironmentJobManager,
+    GodzillaCalibrationJobManager,
     ManagedProcess,
     UISettingsStore,
     inspect_flashattention_source,
@@ -60,6 +63,7 @@ BACKEND_ONLY_METHODS = (
 SETTINGS_STORE = UISettingsStore()
 MODEL_PROCESS = ManagedProcess()
 ENVIRONMENT_JOBS = EnvironmentJobManager()
+GODZILLA_JOBS = GodzillaCalibrationJobManager()
 UI_MUTATIONS_ENABLED = True
 
 
@@ -450,6 +454,8 @@ def api_scan_environments(params):
     return scan_environment_profiles(
         root,
         cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
+        local_source_profile=_optional_text(params.get("local_source_profile")),
+        local_source=_optional_text(params.get("local_source")),
     )
 
 
@@ -462,17 +468,87 @@ def api_create_environment(params):
     profile = _optional_text(params.get("profile"))
     if profile is None:
         raise ValueError("An environment profile is required")
+    local_source_profile = _optional_text(params.get("local_source_profile"))
+    local_source = _optional_text(params.get("local_source"))
+    if local_source and local_source_profile != profile:
+        raise ValueError("The selected local checkout does not match this environment profile")
     return ENVIRONMENT_JOBS.start_create(
         profile,
         root=params.get("root") or settings["environment_root"],
         python=_optional_text(params.get("python")),
         cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
+        local_source=local_source,
         build_from_source=_truthy(params.get("build_from_source")),
     )
 
 
 def api_environment_jobs():
     return {"jobs": ENVIRONMENT_JOBS.list()}
+
+
+def _validated_godzilla_checkout(value: str) -> Path:
+    settings = _saved_settings()
+    roots = [Path(item).expanduser().resolve() for item in settings["addon_roots"]]
+    checkout = Path(value).expanduser().resolve()
+    if not any(checkout == root or checkout.is_relative_to(root) for root in roots):
+        raise ValueError("The Godzilla checkout must be inside a saved add-on root")
+    inspection = inspect_godzilla_checkout(checkout)
+    if not inspection["valid"]:
+        raise ValueError("; ".join(str(item) for item in inspection.get("issues", [])))
+    return checkout
+
+
+def _validated_godzilla_output(value, *, checkout: Path, model: Path) -> Path | None:
+    text_value = _optional_text(value)
+    if text_value is None:
+        return None
+    output = Path(text_value).expanduser().resolve()
+    model_root = model.parent.resolve()
+    if not (output.is_relative_to(checkout) or output.is_relative_to(model_root)):
+        raise ValueError("Calibration output must be inside the Godzilla checkout or model folder")
+    return output
+
+
+def _godzilla_plan_from_params(params):
+    checkout = _validated_godzilla_checkout(str(params.get("checkout", "")))
+    model = _validated_launch_model(str(params.get("gguf", "")))
+    output = _validated_godzilla_output(params.get("output"), checkout=checkout, model=model)
+    return plan_godzilla_triattention(
+        checkout,
+        model,
+        output=output,
+        python=_optional_text(params.get("python")),
+        calibrator=_optional_text(params.get("calibrator")),
+        hf_model=_optional_text(params.get("hf_model")),
+        n_tokens=_optional_int(params.get("n_tokens"), 2048),
+        device=_optional_text(params.get("device")) or "cuda",
+    )
+
+
+def api_plan_godzilla(params):
+    return _godzilla_plan_from_params(params).to_dict()
+
+
+def api_create_godzilla(params):
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    if params.get("confirm") is not True:
+        raise ValueError("Godzilla calibration requires explicit confirmation")
+    plan = _godzilla_plan_from_params(params)
+    return GODZILLA_JOBS.start(
+        plan.checkout,
+        plan.gguf,
+        output=plan.output,
+        python=plan.python,
+        calibrator=plan.calibrator,
+        hf_model=plan.hf_model,
+        n_tokens=plan.n_tokens,
+        device=plan.device,
+    )
+
+
+def api_godzilla_jobs():
+    return {"jobs": GODZILLA_JOBS.list()}
 
 
 def _validated_launch_model(model_path: str) -> Path:
@@ -842,7 +918,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 
       <div class="card">
         <h2>Add-on Sources</h2>
-        <p class="muted">Recognizes FlashAttention, FastDMS, LMCache, MInference, SageAttention, and llama.cpp checkouts.</p>
+        <p class="muted">Recognizes reviewed Python package checkouts and Godzilla/llama.cpp source trees. A recognized checkout can be selected below without executing scanner-discovered code.</p>
         <div class="button-row">
           <button onclick="scanAddons()">Scan Add-ons</button>
           <button class="secondary" onclick="scanFlashAttention()">Check FlashAttention</button>
@@ -857,6 +933,15 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div style="grid-column:span 2"><label>Python override</label><input type="text" id="env-python" placeholder="3.11 or interpreter path"></div>
           <div style="grid-column:span 2"><label>CUDA toolkit override</label><input type="text" id="env-cuda-toolkit" placeholder="/usr/local/cuda-12.6 or /path/to/nvcc"></div>
         </div>
+        <div class="form-row">
+          <div><label>Local source profile</label><select id="env-source-profile">
+            <option value="">Use pinned/default source</option>
+            <option value="flashattention">FlashAttention</option><option value="fastdms">FastDMS</option>
+            <option value="lmcache">LMCache</option><option value="minference">MInference</option>
+            <option value="sageattention">SageAttention</option>
+          </select></div>
+          <div style="grid-column:span 3"><label>Reviewed local checkout</label><input type="text" id="env-local-source" placeholder="Select a recognized add-on checkout above"></div>
+        </div>
         <div class="button-row">
           <label><input type="checkbox" id="env-build-source"> Force reviewed source build</label>
           <label><input type="checkbox" id="env-confirm"> Confirm downloads/builds</label>
@@ -867,8 +952,37 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
       </div>
 
       <div class="card full">
+        <h2>Godzilla Source Setup</h2>
+        <div class="setup-note">The scanner checks Godzilla's known source markers, KVarN/TriAttention features, preparation script, and existing llama-server builds. KVarN is selected at launch and needs no calibration. TriAttention is model-specific: it requires Godzilla's preparation script, a Python environment with its dependencies, a compatible calibrator, and the matching Hugging Face source model. Preparation may download that model.</div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Godzilla checkout</label><input type="text" id="godzilla-checkout" placeholder="Select a recognized Godzilla checkout above"></div>
+          <div style="grid-column:span 2"><label>GGUF model</label><input type="text" id="godzilla-gguf" placeholder="Model inside the saved model root"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Calibration Python</label><input type="text" id="godzilla-python" placeholder="Python executable with Torch/calibrator dependencies"></div>
+          <div style="grid-column:span 2"><label>Compatible calibrator script</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/calibrate-triattention.py"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Matching Hugging Face model (optional)</label><input type="text" id="godzilla-hf-model" placeholder="org/model; blank lets Godzilla try metadata resolution"></div>
+          <div style="grid-column:span 2"><label>Output .triattention (optional)</label><input type="text" id="godzilla-output" placeholder="Defaults to checkout/calibrations/model.triattention"></div>
+        </div>
+        <div class="form-row">
+          <div><label>Calibration tokens</label><input type="number" id="godzilla-tokens" value="2048" min="128" max="32768"></div>
+          <div><label>Device</label><select id="godzilla-device"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
+          <div style="grid-column:span 2" class="button-row">
+            <button class="secondary" onclick="planGodzilla()">Check Plan</button>
+            <label><input type="checkbox" id="godzilla-confirm"> Confirm model load/download and preparation</label>
+            <button onclick="startGodzilla()">Prepare TriAttention</button>
+          </div>
+        </div>
+        <div id="godzilla-plan" class="item-list"><div class="muted">No preparation plan checked.</div></div>
+      </div>
+
+      <div class="card full">
         <h2>Background Jobs</h2>
         <div id="environment-jobs" class="item-list"><div class="muted">No environment jobs.</div></div>
+        <div class="mini-label">Godzilla TriAttention</div>
+        <div id="godzilla-jobs" class="item-list"><div class="muted">No Godzilla jobs.</div></div>
       </div>
     </div>
   </section>
@@ -907,7 +1021,7 @@ function setSaveState(message, kind='') {
 
 function persistentControls() {
   return [...document.querySelectorAll('input[id], select[id], textarea[id]')].filter(el =>
-    !['settings-import', 'env-confirm', 'setup-model-root', 'setup-environment-root',
+    !['settings-import', 'env-confirm', 'godzilla-confirm', 'setup-model-root', 'setup-environment-root',
       'setup-flash-source', 'setup-addon-roots'].includes(el.id)
   );
 }
@@ -1118,11 +1232,14 @@ async function init() {
   });
   ['setup-model-root', 'setup-environment-root', 'setup-flash-source', 'setup-addon-roots']
     .forEach(id => document.getElementById(id).addEventListener('input', scheduleSave));
-  await Promise.allSettled([scanModels(), scanEnvironments(), refreshRuntime(), refreshJobs()]);
+  await Promise.allSettled([
+    scanModels(), scanEnvironments(), refreshRuntime(), refreshJobs(), refreshGodzillaJobs()
+  ]);
   await generateCommand();
   statusTimer = setInterval(() => {
     refreshRuntime().catch(() => {});
     refreshJobs().catch(() => {});
+    refreshGodzillaJobs().catch(() => {});
   }, 2000);
 }
 
@@ -1134,6 +1251,7 @@ function selectDiscoveredModel() {
   const selected = document.getElementById('cmd-model-select').value;
   if (!selected) return;
   document.getElementById('cmd-model').value = selected;
+  document.getElementById('godzilla-gguf').value = selected;
   scheduleSave();
   generateCommand();
 }
@@ -1178,17 +1296,51 @@ async function scanAddons() {
     const roots = document.getElementById('setup-addon-roots').value
       .split(/\\r?\\n/).map(value => value.trim()).filter(Boolean);
     const result = await api('/api/discovery/addons', {roots});
-    let html = result.addons.map(addon =>
-      `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
-      `<span class="status-pill status-ready">${escapeHtml(addon.kind)}</span></div>` +
-      `<div class="muted">${escapeHtml(addon.path)}</div>` +
-      `${addon.git_remote ? `<div class="muted">${escapeHtml(addon.git_remote)}</div>` : ''}</div>`
-    ).join('');
+    let html = result.addons.map(addon => {
+      const encodedPath = encodeURIComponent(addon.path).replace(/'/g, '%27');
+      const encodedBinary = encodeURIComponent(addon.source?.preferred_binary || '').replace(/'/g, '%27');
+      let action = '';
+      if (addon.environment_profile && addon.local_source?.valid) {
+        action += `<button onclick="useAddonSource('${escapeHtml(addon.environment_profile)}','${encodedPath}')">Use for ${escapeHtml(addon.environment_profile)}</button>`;
+      }
+      if (addon.kind === 'godzilla' && addon.source?.valid) {
+        action += `<button onclick="useGodzillaSource('${encodedPath}','${encodedBinary}')">Use Godzilla checkout</button>`;
+      }
+      const features = addon.kind === 'godzilla' && addon.source?.features
+        ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
+        : '';
+      return `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
+        `<span class="status-pill status-ready">${escapeHtml(addon.kind)}</span></div>` +
+        `<div class="muted">${escapeHtml(addon.path)}</div>` +
+        `${addon.git_remote ? `<div class="muted">${escapeHtml(addon.git_remote)}</div>` : ''}` +
+        features + (action ? `<div class="button-row">${action}</div>` : '') + '</div>';
+    }).join('');
     result.errors.forEach(error => { html += `<div class="item cap-bad">${escapeHtml(error)}</div>`; });
     target.innerHTML = html || '<div class="muted">No recognized add-ons found.</div>';
   } catch (error) {
     renderFailure('addon-scan-result', error);
   }
+}
+
+function useAddonSource(profile, encodedPath) {
+  document.getElementById('env-source-profile').value = profile;
+  document.getElementById('env-local-source').value = decodeURIComponent(encodedPath);
+  scheduleSave();
+  scanEnvironments();
+}
+
+function useGodzillaSource(encodedPath, encodedBinary) {
+  const checkout = decodeURIComponent(encodedPath);
+  const binary = decodeURIComponent(encodedBinary);
+  document.getElementById('godzilla-checkout').value = checkout;
+  document.getElementById('cmd-profile').value = 'godzilla';
+  if (binary) document.getElementById('cmd-binary').value = binary;
+  const quickModel = document.getElementById('cmd-model').value;
+  if (quickModel && !document.getElementById('godzilla-gguf').value) {
+    document.getElementById('godzilla-gguf').value = quickModel;
+  }
+  scheduleSave();
+  generateCommand();
 }
 
 async function scanFlashAttention() {
@@ -1216,6 +1368,8 @@ async function scanEnvironments() {
     const result = await api('/api/environments/scan', {
       root: document.getElementById('setup-environment-root').value,
       cuda_toolkit: document.getElementById('env-cuda-toolkit').value,
+      local_source_profile: document.getElementById('env-source-profile').value,
+      local_source: document.getElementById('env-local-source').value,
     });
     const toolkitVersion = result.context.cuda_toolkit_version?.join('.') || 'not detected';
     const toolkitRoot = result.context.cuda_toolkit_root || 'PATH/default';
@@ -1233,6 +1387,7 @@ async function scanEnvironments() {
         `<div class="muted">${escapeHtml(profile.target)}</div>` +
         `${errors.slice(0, 2).map(issue => `<div class="cap-bad">${escapeHtml(issue.message)}</div>`).join('')}` +
         `<div class="button-row">${action}` +
+        `${profile.local_source_selected ? `<span class="muted">Local checkout: ${escapeHtml(profile.local_source_selected)}</span>` : ''}` +
         `${profile.source_build_available ? '<span class="muted">Reviewed source build available</span>' : ''}</div></div>`;
     }).join('');
   } catch (error) {
@@ -1246,11 +1401,14 @@ async function createEnvironment(profile) {
     return;
   }
   try {
+    const sourceProfile = document.getElementById('env-source-profile').value;
     await api('/api/environments/create', {
       profile,
       root: document.getElementById('setup-environment-root').value,
       python: document.getElementById('env-python').value,
       cuda_toolkit: document.getElementById('env-cuda-toolkit').value,
+      local_source_profile: sourceProfile === profile ? sourceProfile : '',
+      local_source: sourceProfile === profile ? document.getElementById('env-local-source').value : '',
       build_from_source: document.getElementById('env-build-source').checked,
       confirm: true,
     });
@@ -1259,6 +1417,74 @@ async function createEnvironment(profile) {
   } catch (error) {
     alert(`Environment creation failed: ${error.message}`);
   }
+}
+
+function godzillaPayload() {
+  return {
+    checkout: document.getElementById('godzilla-checkout').value,
+    gguf: document.getElementById('godzilla-gguf').value,
+    python: document.getElementById('godzilla-python').value,
+    calibrator: document.getElementById('godzilla-calibrator').value,
+    hf_model: document.getElementById('godzilla-hf-model').value,
+    output: document.getElementById('godzilla-output').value,
+    n_tokens: document.getElementById('godzilla-tokens').value,
+    device: document.getElementById('godzilla-device').value,
+  };
+}
+
+function renderGodzillaPlan(plan) {
+  const target = document.getElementById('godzilla-plan');
+  const status = plan.ready ? 'ready' : 'blocked';
+  target.innerHTML = `<div class="item"><div class="item-title"><span>TriAttention preparation</span>` +
+    `<span class="status-pill status-${status}">${status}</span></div>` +
+    `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
+    (plan.issues || []).map(issue =>
+      `<div class="${issue.severity === 'error' ? 'cap-bad' : 'muted'}">${escapeHtml(issue.message)}</div>`
+    ).join('') +
+    `${plan.command?.length ? `<div class="result-box">${escapeHtml(plan.command.join(' '))}</div>` : ''}</div>`;
+}
+
+async function planGodzilla() {
+  const target = document.getElementById('godzilla-plan');
+  target.innerHTML = '<div class="muted">Checking checkout and prerequisites...</div>';
+  try {
+    renderGodzillaPlan(await api('/api/godzilla/plan', godzillaPayload()));
+  } catch (error) {
+    renderFailure('godzilla-plan', error);
+  }
+}
+
+async function startGodzilla() {
+  if (!document.getElementById('godzilla-confirm').checked) {
+    alert('Confirm model load/download and TriAttention preparation first.');
+    return;
+  }
+  try {
+    const payload = godzillaPayload();
+    payload.confirm = true;
+    await api('/api/godzilla/create', payload);
+    document.getElementById('godzilla-confirm').checked = false;
+    await refreshGodzillaJobs();
+  } catch (error) {
+    alert(`Godzilla preparation failed: ${error.message}`);
+  }
+}
+
+async function refreshGodzillaJobs() {
+  const result = await api('/api/godzilla/jobs');
+  const target = document.getElementById('godzilla-jobs');
+  if (!result.jobs.length) {
+    target.innerHTML = '<div class="muted">No Godzilla jobs.</div>';
+    return;
+  }
+  target.innerHTML = result.jobs.map(job =>
+    `<div class="item"><div class="item-title"><span>TriAttention: ${escapeHtml(job.model)}</span>` +
+    `<span class="status-pill status-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span></div>` +
+    `<div class="muted">${escapeHtml(job.output)}</div>` +
+    `${job.error ? `<div class="cap-bad">${escapeHtml(job.error)}</div>` : ''}` +
+    `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
+    `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\\n'))}</div>` : ''}</div>`
+  ).join('');
 }
 
 async function refreshJobs() {
@@ -1519,6 +1745,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 self._json(api_runtime_status())
             elif path == "/api/environments/jobs":
                 self._json(api_environment_jobs())
+            elif path == "/api/godzilla/jobs":
+                self._json(api_godzilla_jobs())
             else:
                 self.send_error(404)
         except (KeyError, TypeError, ValueError, RuntimeError) as exc:
@@ -1542,6 +1770,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/discovery/flashattention": lambda: api_scan_flashattention(body),
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
+                "/api/godzilla/plan": lambda: api_plan_godzilla(body),
+                "/api/godzilla/create": lambda: api_create_godzilla(body),
                 "/api/runtime/start": lambda: api_runtime_start(body),
                 "/api/runtime/stop": api_runtime_stop,
             }
@@ -1570,7 +1800,10 @@ def main():
     parser.add_argument(
         "--read-only",
         action="store_true",
-        help="Disable settings writes, environment creation, and model process controls",
+        help=(
+            "Disable settings writes, environment/calibration jobs, "
+            "and model process controls"
+        ),
     )
     args = parser.parse_args()
     SETTINGS_STORE = UISettingsStore(args.settings_file)

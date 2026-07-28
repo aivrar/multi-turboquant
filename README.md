@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-182%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-194%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -88,7 +88,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-193 automated test cases: 182 pass in the current Windows CPU environment and
+205 automated test cases: 194 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -97,8 +97,9 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
-| `test_environments.py` + `test_env_cli.py` | 26 | Locked profile rendering, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, isolated validation |
-| `test_run_ui.py` + `test_ui_workspace.py` | 29 | Command generation, rendered JavaScript, absent/default settings, bounded discovery, managed processes, and explicit environment creation |
+| `test_environments.py` + `test_env_cli.py` | 28 | Locked profile rendering, local checkout sources, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, isolated validation |
+| `test_godzilla_workspace.py` | 5 | Checkout feature inspection, add-on recognition, prerequisite planning, and verified TriAttention preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 34 | Command generation, rendered JavaScript, absent/default settings, bounded discovery, managed processes, local sources, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
@@ -320,6 +321,10 @@ mtq-env check fastdms
 mtq-env plan fastdms --build-from-source
 mtq-env create fastdms --build-from-source --yes
 
+# Build one reviewed add-on package from an existing local checkout
+mtq-env plan fastdms --local-source /opt/addons/FastDMS
+mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
+
 # Run the standalone engine without activating or modifying the current environment
 mtq-env run fastdms -- python -c "import fastdms; print(fastdms.__version__)"
 ```
@@ -334,6 +339,14 @@ and creation always requires the explicit `--yes` flag. The optional
 profiles. It forces a fresh local FlashAttention compilation without changing
 the normal wheel-first behavior of either profile. See
 [the dependency-profile table and validation record](docs/optimizations.md#built-in-profiles).
+
+`--local-source` is a separate option for a checkout you already have. It is
+accepted only for the five reviewed installable profiles, verifies the
+profile-specific source markers, and records an absolute local-path source in
+that profile's generated `uv` project. `uv` then builds the selected package
+and resolves its declared dependencies inside the isolated environment. It
+does not execute scanner-discovered files in the core environment or turn an
+arbitrary source folder into an installable add-on.
 
 Native extensions must be compiled with the same CUDA major used by the
 profile's PyTorch build. A newer NVIDIA driver may remain installed while a
@@ -452,8 +465,10 @@ The browser UI now has two focused views:
   the generated argument list.
 - **Setup & Add-ons** stores the model, environment, add-on, and optional
   FlashAttention source folders; scans only those configured folders; and can
-  create the reviewed isolated `mtq-env` dependency profiles after explicit
-  confirmation.
+  select a reviewed checkout for an isolated `mtq-env` profile after explicit
+  confirmation. It also recognizes Godzilla source trees, reports KVarN and
+  TriAttention support and existing builds, and can run Godzilla's own
+  model-specific TriAttention preparation after its prerequisites pass.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -510,7 +525,8 @@ This project reimplements algorithms from published research. All original repos
 | Context-extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | [llama.cpp](https://github.com/ggml-org/llama.cpp), [sheryc/resonance_rope](https://github.com/sheryc/resonance_rope), published papers |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
-is a command-generation and compatibility integration only; context-extension
+is a command-generation, source-inspection, and preparation-workflow
+integration; context-extension
 support is a llama.cpp command-generation and capability-scanning integration
 only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance
 RoPE, LongRoPE, or llama.cpp code.
@@ -526,6 +542,7 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested isolated dependency handling for FastDMS, FlashAttention, and the other optional add-ons, including pyenv-compatible interpreter selection | [@jawadala](https://github.com/jawadala) | Issue [#15](https://github.com/aivrar/multi-turboquant/issues/15) |
 | Suggested an explicit local source-build option for projects that depend on FlashAttention | [@jawadala](https://github.com/jawadala) | Issue [#17](https://github.com/aivrar/multi-turboquant/issues/17) |
 | Suggested separating quick-run controls from advanced setup, persisting defaults, discovering models and add-ons, and exposing the recent KV, weight-sharing, and RoPE/YaRN options in the UI | [@jawadala](https://github.com/jawadala) | Issue [#19](https://github.com/aivrar/multi-turboquant/issues/19) |
+| Suggested selecting local add-on source folders, resolving their dependencies, and recognizing Godzilla's KVarN/TriAttention setup needs | [@jawadala](https://github.com/jawadala) | Issue [#25](https://github.com/aivrar/multi-turboquant/issues/25) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue
