@@ -130,7 +130,12 @@ def test_managed_process_starts_collects_output_and_stops(tmp_path: Path):
 def test_environment_job_reports_completion(tmp_path: Path, monkeypatch):
     from multi_turboquant.optimizations import environments
 
-    plan = SimpleNamespace(ready=True, target=tmp_path / "fastdms", issues=[])
+    plan = SimpleNamespace(
+        ready=True,
+        target=tmp_path / "fastdms",
+        issues=[],
+        cuda_toolkit_root=None,
+    )
     monkeypatch.setattr(environments, "plan_environment", lambda *args, **kwargs: plan)
     monkeypatch.setattr(environments, "synchronize_environment", lambda *args, **kwargs: None)
     monkeypatch.setattr(

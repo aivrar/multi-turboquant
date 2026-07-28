@@ -29,6 +29,14 @@ def _add_common_profile_arguments(
         "--python",
         help="Python version or interpreter path; pyenv interpreter paths are accepted",
     )
+    parser.add_argument(
+        "--cuda-toolkit",
+        type=Path,
+        help=(
+            "CUDA toolkit root or nvcc path to use for native builds; "
+            "side-by-side toolkits are supported"
+        ),
+    )
     if allow_source_build:
         parser.add_argument(
             "--build-from-source",
@@ -45,6 +53,13 @@ def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
     print(f"Status:  {'installable' if plan.profile.installable else 'blocked'}")
     print(f"Target:  {plan.target}")
     print(f"Python:  {plan.python_request} ({plan.profile.python_spec})")
+    if plan.cuda_toolkit_root is not None:
+        version = (
+            ".".join(str(item) for item in plan.cuda_toolkit_version)
+            if plan.cuda_toolkit_version is not None
+            else "unknown"
+        )
+        print(f"CUDA:    {version} ({plan.cuda_toolkit_root})")
     if plan.build_from_source:
         packages = ", ".join(plan.profile.source_build_packages) or "unavailable"
         print(f"Source:  forced ({packages})")
@@ -103,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         args.profile,
         root=args.root,
         python=args.python,
+        cuda_toolkit=args.cuda_toolkit,
         build_from_source=getattr(args, "build_from_source", False),
     )
     if args.action == "plan":

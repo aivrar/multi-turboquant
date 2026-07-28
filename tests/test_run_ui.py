@@ -86,7 +86,8 @@ def test_api_generate_command_returns_error_for_missing_triattention_stats():
     ]
     assert len(triattention_issues) == 1
     assert "Stats Path" in triattention_issues[0]["message"]
-    assert "--triattention-calibrate" in triattention_issues[0]["suggestion"]
+    assert "matching Hugging Face checkpoint" in triattention_issues[0]["suggestion"]
+    assert "GGUF alone is not sufficient" in triattention_issues[0]["suggestion"]
     assert not any(issue["method"] == "command" for issue in result["issues"])
 
 
@@ -355,3 +356,56 @@ def test_api_runtime_start_uses_generated_argv_without_shell(tmp_path, monkeypat
 def test_environment_creation_requires_explicit_ui_confirmation():
     with pytest.raises(ValueError, match="explicit confirmation"):
         run_ui.api_create_environment({"profile": "fastdms", "confirm": False})
+
+
+def test_environment_scan_forwards_cuda_toolkit_selection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        run_ui,
+        "scan_environment_profiles",
+        lambda root, **kwargs: calls.append((root, kwargs)) or {"profiles": []},
+    )
+
+    result = run_ui.api_scan_environments(
+        {"root": "/tmp/envs", "cuda_toolkit": "/usr/local/cuda-12.6"}
+    )
+
+    assert result == {"profiles": []}
+    assert calls == [
+        ("/tmp/envs", {"cuda_toolkit": "/usr/local/cuda-12.6"})
+    ]
+
+
+def test_environment_creation_forwards_cuda_toolkit_selection(monkeypatch):
+    calls = []
+
+    class FakeJobs:
+        def start_create(self, profile, **kwargs):
+            calls.append((profile, kwargs))
+            return {"id": "job", "status": "queued"}
+
+    monkeypatch.setattr(run_ui, "ENVIRONMENT_JOBS", FakeJobs())
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    result = run_ui.api_create_environment(
+        {
+            "profile": "fastdms",
+            "root": "/tmp/envs",
+            "python": "3.11",
+            "cuda_toolkit": "/usr/local/cuda-12.6",
+            "confirm": True,
+        }
+    )
+
+    assert result["status"] == "queued"
+    assert calls == [
+        (
+            "fastdms",
+            {
+                "root": "/tmp/envs",
+                "python": "3.11",
+                "cuda_toolkit": "/usr/local/cuda-12.6",
+                "build_from_source": False,
+            },
+        )
+    ]

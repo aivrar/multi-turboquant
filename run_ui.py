@@ -447,7 +447,10 @@ def api_scan_flashattention(params):
 def api_scan_environments(params):
     settings = _saved_settings()
     root = params.get("root") or settings["environment_root"]
-    return scan_environment_profiles(root)
+    return scan_environment_profiles(
+        root,
+        cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
+    )
 
 
 def api_create_environment(params):
@@ -463,6 +466,7 @@ def api_create_environment(params):
         profile,
         root=params.get("root") or settings["environment_root"],
         python=_optional_text(params.get("python")),
+        cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
         build_from_source=_truthy(params.get("build_from_source")),
     )
 
@@ -780,6 +784,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div style="grid-column:1/-1"><label>TriAttention Stats Path</label>
           <input type="text" id="cmd-tri-stats" value="" placeholder="model.triattention" onchange="generateCommand()">
         </div>
+        <div class="setup-note" style="grid-column:1/-1">Godzilla calibration is model-specific and runs offline with a compatible Python calibrator plus the matching Hugging Face checkpoint. A GGUF file alone cannot supply the required pre-RoPE query statistics; Multi-TurboQuant's Python <code>.pt</code> stats are a different format.</div>
       </div>
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri-log" onchange="generateCommand()"> TriAttn Log</label></div>
@@ -809,7 +814,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
     <div class="grid">
       <div class="card full">
         <h2>Persistent Workspace</h2>
-        <div class="setup-note">Settings are stored in a versioned JSON file. Scanners only inspect the roots configured here; they never search entire disks.</div>
+        <div class="setup-note">Settings are stored in a versioned JSON file under your home folder by default, outside the Git checkout, so normal pulls do not remove them. Scanners only inspect the roots configured here; they never search entire disks.</div>
         <div class="form-row">
           <div style="grid-column:1/3"><label>Default Model Root</label><input type="text" id="setup-model-root" placeholder="D:\\models or /opt/models"></div>
           <div style="grid-column:3/5"><label>Dependency Environment Root</label><input type="text" id="setup-environment-root" value=".mtq/environments"></div>
@@ -847,13 +852,17 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 
       <div class="card full">
         <h2>Dependency Environments</h2>
-        <div class="setup-note">Creation reuses the reviewed <code>mtq-env</code> profiles. Downloads and native builds start only after explicit confirmation.</div>
+        <div class="setup-note">Creation reuses the reviewed <code>mtq-env</code> profiles. A newer NVIDIA driver can run older CUDA applications, but native extensions must be compiled with a toolkit matching the profile's PyTorch CUDA major. Select a side-by-side toolkit here; downloads and builds still require confirmation.</div>
         <div class="form-row">
-          <div><label>Python override</label><input type="text" id="env-python" placeholder="3.11 or interpreter path"></div>
-          <div><label><input type="checkbox" id="env-build-source"> Force reviewed source build</label></div>
-          <div><label><input type="checkbox" id="env-confirm"> Confirm downloads/builds</label></div>
-          <div><label>&nbsp;</label><button onclick="scanEnvironments()">Refresh Profiles</button></div>
+          <div style="grid-column:span 2"><label>Python override</label><input type="text" id="env-python" placeholder="3.11 or interpreter path"></div>
+          <div style="grid-column:span 2"><label>CUDA toolkit override</label><input type="text" id="env-cuda-toolkit" placeholder="/usr/local/cuda-12.6 or /path/to/nvcc"></div>
         </div>
+        <div class="button-row">
+          <label><input type="checkbox" id="env-build-source"> Force reviewed source build</label>
+          <label><input type="checkbox" id="env-confirm"> Confirm downloads/builds</label>
+          <button onclick="scanEnvironments()">Refresh Profiles</button>
+        </div>
+        <div class="setup-note">Blocked profiles are informational entries, not failed installations. They remain unavailable when upstream hardware, licensing, artifacts, or a maintained serving integration is missing.</div>
         <div id="environment-result" class="item-list"><div class="muted">Not scanned.</div></div>
       </div>
 
@@ -1206,15 +1215,24 @@ async function scanEnvironments() {
   try {
     const result = await api('/api/environments/scan', {
       root: document.getElementById('setup-environment-root').value,
+      cuda_toolkit: document.getElementById('env-cuda-toolkit').value,
     });
-    target.innerHTML = result.profiles.map(profile => {
+    const toolkitVersion = result.context.cuda_toolkit_version?.join('.') || 'not detected';
+    const toolkitRoot = result.context.cuda_toolkit_root || 'PATH/default';
+    const contextHtml = `<div class="item"><div class="item-title"><span>Selected build context</span>` +
+      `<span class="status-pill status-configured">CUDA ${escapeHtml(toolkitVersion)}</span></div>` +
+      `<div class="muted">${escapeHtml(toolkitRoot)}</div></div>`;
+    target.innerHTML = contextHtml + result.profiles.map(profile => {
       const errors = profile.issues.filter(issue => issue.severity === 'error');
       const canCreate = profile.ready && !['installed', 'blocked'].includes(profile.status);
+      const action = profile.status === 'blocked'
+        ? '<span class="muted">Informational only; automatic installation is intentionally unavailable.</span>'
+        : `<button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">Create</button>`;
       return `<div class="item"><div class="item-title"><span>${escapeHtml(profile.name)}</span>` +
         `<span class="status-pill status-${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span></div>` +
         `<div class="muted">${escapeHtml(profile.target)}</div>` +
         `${errors.slice(0, 2).map(issue => `<div class="cap-bad">${escapeHtml(issue.message)}</div>`).join('')}` +
-        `<div class="button-row"><button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">Create</button>` +
+        `<div class="button-row">${action}` +
         `${profile.source_build_available ? '<span class="muted">Reviewed source build available</span>' : ''}</div></div>`;
     }).join('');
   } catch (error) {
@@ -1232,6 +1250,7 @@ async function createEnvironment(profile) {
       profile,
       root: document.getElementById('setup-environment-root').value,
       python: document.getElementById('env-python').value,
+      cuda_toolkit: document.getElementById('env-cuda-toolkit').value,
       build_from_source: document.getElementById('env-build-source').checked,
       confirm: true,
     });

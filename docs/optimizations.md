@@ -156,6 +156,24 @@ Use `--root PATH` to choose another environment root and `--python VERSION` or
 `--python /path/to/python` to select an interpreter. A Python installed by
 `pyenv` works through the latter form; pyenv itself is not required.
 
+For profiles that compile CUDA extensions, `nvcc` must use the same CUDA major
+as the profile's PyTorch build. NVIDIA driver backward compatibility does not
+make a CUDA 13 compiler interchangeable with a CUDA 12.6 PyTorch extension
+build. Keep the newer driver and select a side-by-side toolkit root or its
+`nvcc` executable:
+
+```bash
+mtq-env plan fastdms --cuda-toolkit /usr/local/cuda-12.6
+mtq-env create fastdms --cuda-toolkit /usr/local/cuda-12.6 --yes
+mtq-env check fastdms --cuda-toolkit /usr/local/cuda-12.6
+```
+
+The selected root is exported as `CUDA_HOME` and `CUDA_PATH`, and its `bin`
+folder is placed first on `PATH` for creation, validation, and commands run
+through `mtq-env`. A major mismatch remains an error because PyTorch's native
+extension builder rejects it; minor differences within the same major remain
+eligible for the reviewed profile.
+
 ### Built-in profiles
 
 | Profile | Status | Locked top-level requirements or block | Current host gate / validation |
@@ -171,6 +189,11 @@ Use `--root PATH` to choose another environment root and `--python VERSION` or
 | `lexico` | Blocked | WIP source tree requiring a trained dictionary per model/configuration | Dependencies alone cannot produce a usable runtime |
 | `adadecode` | Blocked | No repository software license and requires task-specific prediction heads | Automatic installation is not legally or operationally complete |
 | `resonance_yarn` | Blocked | Old training environment and Hugging Face LLaMA fork | Needs a native serving-backend implementation, not an environment install |
+
+Blocked rows are catalog records, not failed installations. They intentionally
+have no create command until the missing hardware contract, licensing,
+artifacts, maintenance baseline, or serving integration exists. The UI labels
+them as informational and does not offer an automatic Create action.
 
 Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible

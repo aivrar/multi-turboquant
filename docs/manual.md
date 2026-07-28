@@ -733,17 +733,27 @@ cmd = get_llamacpp_command(config, model_path="/opt/models/model.gguf")
 For upstream llama.cpp, leave `use_custom_triattention_llamacpp=False`; the
 command generator will warn that TriAttention is ignored in that backend.
 
-The stats file is required before patched llama.cpp TriAttention can run. With
-`atomicmilkshake/llama-cpp-turboquant`, generate it from representative text:
+The stats file is required before patched llama.cpp TriAttention can run.
+Godzilla-compatible calibration is an offline Python pass over the matching
+Hugging Face checkpoint, for example:
 
 ```bash
-llama-cli -m /opt/models/model.gguf -ngl 99 \
-  --triattention-calibrate corpus.txt \
-  --triattention-calibrate-out model.triattention
+python /path/to/calibrate-triattention.py \
+  --model organization/original-model \
+  --n-tokens 2048 \
+  --output model.triattention
 ```
 
 Then put the generated `model.triattention` path into the web UI's
 `TriAttention Stats Path` field or `CacheConfig.triattention_stats_path`.
+Use the calibrator configured for the selected Godzilla build. Calibration
+cannot be made universal from GGUF files alone: each output is model-specific,
+the original checkpoint mapping is not guaranteed in GGUF metadata, and the
+calibrator only supports architectures it knows how to instrument.
+
+`mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
+Python/vLLM integration. That file is not binary-compatible with Godzilla's
+`.triattention` runtime format.
 
 ### CUDA weight-share launch wrapper
 
@@ -1007,8 +1017,8 @@ for a different port, `--no-browser` to suppress auto-open,
 - **Model library and launcher**: Scan a configured folder, select a GGUF model,
   and start or stop one managed `llama-server` process
 - **Setup & Add-ons**: Save workspace paths, inspect configured add-on and
-  FlashAttention source folders, and create reviewed isolated dependency
-  profiles after explicit confirmation
+  FlashAttention source folders, select a matching side-by-side CUDA toolkit,
+  and create reviewed isolated dependency profiles after explicit confirmation
 
 ### How it works
 
@@ -1018,7 +1028,8 @@ discovery, and process controls live in `multi_turboquant.ui`. It calls the same
 library APIs and `mtq-env` profiles used by the command-line tools.
 
 Settings and form defaults are stored in a versioned JSON file at
-`~/.multi-turboquant/ui-settings.json` unless overridden. Model and add-on scans
+`~/.multi-turboquant/ui-settings.json` unless overridden. This default is
+outside the Git checkout and survives normal pulls. Model and add-on scans
 stay within explicitly configured roots, do not follow directory symlinks, and
 do not import discovered code. Managed model launching accepts only an existing
 `.gguf` file inside the saved model root and executes an argument list without a

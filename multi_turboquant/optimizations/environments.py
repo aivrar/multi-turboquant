@@ -399,6 +399,7 @@ class EnvironmentContext:
     compute: str
     available_executables: frozenset[str] = field(default_factory=frozenset)
     cuda_toolkit_version: tuple[int, int] | None = None
+    cuda_toolkit_root: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "os", self.os.strip().lower())
@@ -408,20 +409,52 @@ class EnvironmentContext:
             "available_executables",
             frozenset(item.strip().lower() for item in self.available_executables),
         )
+        if self.cuda_toolkit_root is not None:
+            object.__setattr__(
+                self,
+                "cuda_toolkit_root",
+                str(Path(self.cuda_toolkit_root).expanduser().resolve()),
+            )
 
 
-def detect_environment_context() -> EnvironmentContext:
+def _cuda_toolkit_paths(cuda_toolkit: str | Path | None) -> tuple[Path | None, Path | None]:
+    executable_names = ("nvcc.exe", "nvcc") if os.name == "nt" else ("nvcc", "nvcc.exe")
+    if cuda_toolkit is None:
+        discovered = shutil.which("nvcc")
+        if discovered is None:
+            return None, None
+        nvcc = Path(discovered).resolve()
+        return nvcc.parent.parent, nvcc
+
+    selected = Path(cuda_toolkit).expanduser().resolve()
+    if selected.name.lower() in executable_names:
+        return selected.parent.parent, selected
+    if selected.name.lower() == "bin":
+        root = selected.parent
+        candidates = [selected / name for name in executable_names]
+    else:
+        root = selected
+        candidates = [root / "bin" / name for name in executable_names]
+    nvcc = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
+    return root, nvcc
+
+
+def detect_environment_context(
+    *, cuda_toolkit: str | Path | None = None
+) -> EnvironmentContext:
     """Detect only the host facts needed by the environment planner."""
     from ..hardware import detect_platform
 
     platform_info = detect_platform()
-    known_executables = ("uv", "pyenv", "git", "nvcc", "nvidia-smi", "rocminfo")
+    known_executables = ("uv", "pyenv", "git", "nvidia-smi", "rocminfo")
     available = frozenset(name for name in known_executables if shutil.which(name))
+    toolkit_root, nvcc = _cuda_toolkit_paths(cuda_toolkit)
     cuda_toolkit_version = None
-    if "nvcc" in available:
+    if nvcc is not None and nvcc.is_file():
+        available = available | {"nvcc"}
         try:
             result = subprocess.run(
-                ["nvcc", "--version"],
+                [str(nvcc), "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -437,6 +470,7 @@ def detect_environment_context() -> EnvironmentContext:
         compute=platform_info.primary_compute,
         available_executables=available,
         cuda_toolkit_version=cuda_toolkit_version,
+        cuda_toolkit_root=str(toolkit_root) if toolkit_root is not None else None,
     )
 
 
@@ -467,6 +501,8 @@ class EnvironmentPlan:
     project_toml: str
     commands: tuple[EnvironmentCommand, ...]
     issues: tuple[EnvironmentIssue, ...]
+    cuda_toolkit_root: Path | None = None
+    cuda_toolkit_version: tuple[int, int] | None = None
     build_from_source: bool = False
 
     @property
@@ -478,6 +514,14 @@ class EnvironmentPlan:
             "profile": self.profile.to_dict(),
             "target": str(self.target),
             "python_request": self.python_request,
+            "cuda_toolkit_root": (
+                str(self.cuda_toolkit_root) if self.cuda_toolkit_root is not None else None
+            ),
+            "cuda_toolkit_version": (
+                list(self.cuda_toolkit_version)
+                if self.cuda_toolkit_version is not None
+                else None
+            ),
             "build_from_source": self.build_from_source,
             "source_build_packages": (
                 list(self.profile.source_build_packages) if self.build_from_source else []
@@ -563,12 +607,18 @@ def plan_environment(
     *,
     root: str | Path = DEFAULT_ENVIRONMENT_ROOT,
     python: str | None = None,
+    cuda_toolkit: str | Path | None = None,
     build_from_source: bool = False,
     context: EnvironmentContext | None = None,
 ) -> EnvironmentPlan:
     """Plan environment creation without writing files or running commands."""
     profile = get_environment_profile(profile_id)
-    context = context or detect_environment_context()
+    if context is not None and cuda_toolkit is not None:
+        raise ValueError("Pass either context or cuda_toolkit, not both")
+    context = context or detect_environment_context(cuda_toolkit=cuda_toolkit)
+    toolkit_root = (
+        Path(context.cuda_toolkit_root) if context.cuda_toolkit_root is not None else None
+    )
     python_request = (python or profile.default_python).strip()
     if not python_request:
         raise ValueError("Python request must not be empty")
@@ -591,6 +641,8 @@ def plan_environment(
             project_toml="",
             commands=(),
             issues=tuple(issues),
+            cuda_toolkit_root=toolkit_root,
+            cuda_toolkit_version=context.cuda_toolkit_version,
         )
 
     if context.os not in profile.supported_os:
@@ -619,11 +671,16 @@ def plan_environment(
         )
     for executable in profile.required_executables:
         if executable.lower() not in context.available_executables:
+            location = (
+                "the selected CUDA toolkit"
+                if executable.lower() == "nvcc" and context.cuda_toolkit_root
+                else "PATH"
+            )
             issues.append(
                 EnvironmentIssue(
                     "error",
                     "missing_build_tool",
-                    f"Required build tool {executable!r} was not found on PATH.",
+                    f"Required build tool {executable!r} was not found in {location}.",
                 )
             )
     if profile.cuda_toolkit_major is not None and "cuda" in profile.supported_compute:
@@ -633,7 +690,8 @@ def plan_environment(
                 EnvironmentIssue(
                     "error",
                     "unknown_cuda_toolkit",
-                    "The CUDA toolkit version could not be read from nvcc.",
+                    "The CUDA toolkit version could not be read from nvcc. Select a toolkit "
+                    "root with --cuda-toolkit or in Setup & Add-ons.",
                 )
             )
         elif detected_cuda[0] != profile.cuda_toolkit_major:
@@ -642,7 +700,17 @@ def plan_environment(
                     "error",
                     "unsupported_cuda_toolkit",
                     f"This profile requires CUDA {profile.cuda_toolkit_major}.x, but nvcc reports "
-                    f"{detected_cuda[0]}.{detected_cuda[1]}.",
+                    f"{detected_cuda[0]}.{detected_cuda[1]}. Native extensions must use the same "
+                    "CUDA major as the profile's PyTorch build. Select a matching side-by-side "
+                    "toolkit; the newer NVIDIA driver can remain installed.",
+                )
+            )
+        elif toolkit_root is not None:
+            issues.append(
+                EnvironmentIssue(
+                    "info",
+                    "cuda_toolkit_selected",
+                    f"Using CUDA toolkit {detected_cuda[0]}.{detected_cuda[1]} at {toolkit_root}.",
                 )
             )
     if profile.build_may_compile:
@@ -697,6 +765,8 @@ def plan_environment(
         project_toml=render_profile_project(profile, build_from_source=build_from_source),
         commands=(command,),
         issues=tuple(issues),
+        cuda_toolkit_root=toolkit_root,
+        cuda_toolkit_version=context.cuda_toolkit_version,
     )
 
 
@@ -739,6 +809,20 @@ def materialize_environment_project(plan: EnvironmentPlan) -> Path:
 RunCommand = Callable[..., subprocess.CompletedProcess]
 
 
+def _plan_child_environment(plan: EnvironmentPlan) -> dict[str, str]:
+    child_environment = dict(os.environ)
+    if plan.cuda_toolkit_root is not None:
+        toolkit_root = str(plan.cuda_toolkit_root)
+        child_environment["CUDA_HOME"] = toolkit_root
+        child_environment["CUDA_PATH"] = toolkit_root
+        child_environment["PATH"] = (
+            str(plan.cuda_toolkit_root / "bin")
+            + os.pathsep
+            + child_environment.get("PATH", "")
+        )
+    return child_environment
+
+
 def synchronize_environment(
     plan: EnvironmentPlan,
     *,
@@ -753,7 +837,7 @@ def synchronize_environment(
     argv = list(plan.commands[0].argv)
     if upgrade:
         argv.append("--upgrade")
-    child_environment = dict(os.environ)
+    child_environment = _plan_child_environment(plan)
     child_environment.update(dict(plan.profile.build_environment))
     if plan.build_from_source:
         child_environment.update(dict(plan.profile.source_build_environment))
@@ -807,6 +891,7 @@ def check_environment(
     result = runner(
         [str(interpreter), "-c", validation_script(plan.profile)],
         cwd=plan.target,
+        env=_plan_child_environment(plan),
         capture_output=True,
         text=True,
         check=False,
@@ -848,7 +933,7 @@ def run_in_environment(
     if not interpreter.is_file():
         raise RuntimeError(f"Environment has not been created: {interpreter}")
     binary_dir = interpreter.parent
-    child_environment = dict(os.environ)
+    child_environment = _plan_child_environment(plan)
     child_environment["VIRTUAL_ENV"] = str(interpreter.parent.parent)
     child_environment["PATH"] = str(binary_dir) + os.pathsep + child_environment.get("PATH", "")
     result = runner(list(command), cwd=Path.cwd(), env=child_environment, check=False)

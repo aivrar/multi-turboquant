@@ -49,12 +49,19 @@ one managed `llama-server` process can run at a time, and it is stopped when the
 UI server shuts down. A binary path can be supplied in the command controls, or
 `llama-server` can be resolved from `PATH`.
 
+For patched Godzilla TriAttention, the stats-path control expects the finished
+binary `.triattention` file. Producing that file is a model-specific offline
+calibration against the matching Hugging Face checkpoint; a discovered GGUF
+alone does not contain the required pre-RoPE query statistics. The UI does not
+mislabel Multi-TurboQuant's Python `.pt` stats as Godzilla-compatible data.
+
 ## Setup & Add-ons
 
 Setup & Add-ons holds configuration that is changed less often:
 
 - the default model folder;
 - the isolated dependency-environment root;
+- an optional side-by-side CUDA toolkit root or `nvcc` path for native builds;
 - one or more add-on/source roots;
 - an optional FlashAttention source checkout;
 - environment profile status and explicit creation controls.
@@ -71,6 +78,10 @@ runs as a background job. The UI requires explicit confirmation because the
 operation creates files, resolves packages, and can build native extensions.
 The optional source-build checkbox is accepted only for profiles that declare a
 reviewed source-build path. Progress and command output appear in the job list.
+The CUDA override does not install or replace a toolkit. It selects an existing
+toolkit whose major version matches the profile's PyTorch build and exports it
+through `CUDA_HOME`, `CUDA_PATH`, and `PATH` for the background job. Blocked
+profiles are informational records and intentionally have no Create action.
 
 ## Persistent defaults
 
@@ -81,7 +92,8 @@ By default, the UI saves a versioned JSON document at:
 ```
 
 It remembers workspace paths and normal form values, including the active UI
-view. Writes use an atomic file replacement. Setup & Add-ons also provides JSON
+view. The default path is outside the Git checkout, so normal pulls do not
+remove it. Writes use an atomic file replacement. Setup & Add-ons also provides JSON
 export and import for moving a configuration between machines; imported paths
 still need to exist on the destination machine.
 
