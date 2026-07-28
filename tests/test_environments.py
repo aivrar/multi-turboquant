@@ -300,6 +300,7 @@ def test_plan_builds_reviewed_package_from_validated_local_checkout(tmp_path: Pa
     assert "--no-cache" in plan.commands[0].argv
     assert plan.commands[0].argv[-2:] == ("--reinstall-package", "fastdms")
     assert any(issue.code == "local_source_selected" for issue in plan.issues)
+    assert any(issue.code == "local_source_cuda_constraints" for issue in plan.issues)
 
 
 def test_plan_rejects_local_checkout_with_missing_reviewed_markers(tmp_path: Path):

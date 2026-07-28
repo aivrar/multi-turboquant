@@ -733,6 +733,16 @@ def plan_environment(
                     f"the reviewed local checkout at {local_source_path}.",
                 )
             )
+            if profile.cuda_toolkit_major is not None or profile.torch_cuda_major is not None:
+                issues.append(
+                    EnvironmentIssue(
+                        "warning",
+                        "local_source_cuda_constraints",
+                        "A local checkout changes the package source, not its CUDA ABI. The "
+                        "selected nvcc toolkit must still match this profile's PyTorch CUDA "
+                        "major; choose a compatible side-by-side toolkit if needed.",
+                    )
+                )
 
     if not profile.installable:
         issues.append(

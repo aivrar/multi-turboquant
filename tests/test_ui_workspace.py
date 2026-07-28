@@ -102,6 +102,49 @@ def test_addon_scan_finds_flashattention_under_explicit_root(tmp_path: Path):
     assert result["addons"][0]["source"]["valid"] is True
     assert result["addons"][0]["environment_profile"] == "flashattention"
     assert result["addons"][0]["local_source"]["valid"] is True
+    assert result["scanned_directories"] >= 2
+    assert result["max_depth"] == 3
+
+
+def test_addon_scan_recognizes_renamed_godzilla_checkout(tmp_path: Path):
+    checkout = tmp_path / "custom-llama.cpp"
+    (checkout / "ggml").mkdir(parents=True)
+    (checkout / "common").mkdir()
+    (checkout / "scripts").mkdir()
+    (checkout / "src").mkdir()
+    (checkout / "CMakeLists.txt").write_text("project(godzilla)\n", encoding="utf-8")
+    (checkout / "common" / "arg.cpp").write_text(
+        "kvarn --triattention-stats\n", encoding="utf-8"
+    )
+    (checkout / "scripts" / "godzilla-paths.ps1").write_text("", encoding="utf-8")
+    (checkout / "src" / "llama-triattention.cpp").write_text("", encoding="utf-8")
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(checkout.resolve()))
+    assert addon["kind"] == "godzilla"
+    assert addon["source"]["valid"] is True
+
+
+def test_addon_scan_explains_empty_configuration():
+    result = scan_addon_roots([])
+
+    assert result["addons"] == []
+    assert result["scanned_directories"] == 0
+    assert "No add-on roots" in result["warnings"][0]
+
+
+def test_addon_scan_does_not_classify_the_parent_as_a_python_addon(tmp_path: Path):
+    addon_root = tmp_path / "addons"
+    source = addon_root / "FastDMS"
+    (source / "fastdms").mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[project]\nname='fastdms'\n", encoding="utf-8")
+
+    result = scan_addon_roots([addon_root])
+
+    paths = [item["path"] for item in result["addons"]]
+    assert paths == [str(source.resolve())]
+    assert result["addons"][0]["local_source"]["valid"] is True
 
 
 def test_env_wrapper_is_split_without_a_shell():

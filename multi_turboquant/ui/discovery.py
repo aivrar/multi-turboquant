@@ -152,19 +152,22 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
     directories = {item.lower() for item in directories}
     if {"setup.py"}.issubset(files) and {"flash_attn", "csrc"}.issubset(directories):
         return "flashattention"
-    if "fastdms" in name or "fastdms" in directories:
+    if "fastdms" in directories and "pyproject.toml" in files:
         return "fastdms"
-    if "lmcache" in name or "lmcache" in directories:
+    if "lmcache" in directories and {"pyproject.toml", "setup.py"}.issubset(files):
         return "lmcache"
-    if "minference" in name or "minference" in directories:
+    if "minference" in directories and "setup.py" in files and "csrc" in directories:
         return "minference"
-    if "sageattention" in name or "sageattention" in directories:
+    if "sageattention" in directories and "setup.py" in files and "csrc" in directories:
         return "sageattention"
-    if "godzilla" in name or "GODZILLA_KING.md" in files:
+    llama_markers = "CMakeLists.txt" in files and "ggml" in directories
+    if (
+        "GODZILLA_KING.md" in files
+        or (path / "scripts" / "godzilla-paths.ps1").is_file()
+        or ("godzilla" in name and llama_markers)
+    ):
         return "godzilla"
-    if "llama.cpp" in name or "llama-cpp" in name:
-        return "llamacpp"
-    if "CMakeLists.txt" in files and "ggml" in directories:
+    if llama_markers:
         return "llamacpp"
     return None
 
@@ -172,7 +175,7 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
 def scan_addon_roots(
     roots: Iterable[str | Path],
     *,
-    max_depth: int = 2,
+    max_depth: int = 3,
     limit: int = 200,
 ) -> dict[str, object]:
     """Scan only configured roots for recognized add-on source directories."""
@@ -180,9 +183,14 @@ def scan_addon_roots(
         raise ValueError("max_depth must be between 0 and 5")
     results: list[dict[str, object]] = []
     errors: list[str] = []
+    warnings: list[str] = []
     resolved_roots: list[str] = []
     seen: set[Path] = set()
-    for raw_root in roots:
+    scanned_directories = 0
+    configured_roots = list(roots)
+    if not configured_roots:
+        warnings.append("No add-on roots are configured. Add a checkout folder or its parent directory.")
+    for raw_root in configured_roots:
         try:
             root = _directory(raw_root, "Add-on root")
         except ValueError as exc:
@@ -191,9 +199,14 @@ def scan_addon_roots(
         resolved_roots.append(str(root))
         try:
             for directory, child_directories, filenames in _walk(root, max_depth=max_depth):
+                scanned_directories += 1
                 kind = _classify_addon(directory, set(filenames), set(child_directories))
                 if kind is None or directory in seen:
                     continue
+                # A recognized checkout is the useful unit. Do not descend into
+                # its package/source subdirectories and report them as duplicate
+                # add-ons merely because they repeat the project name.
+                child_directories[:] = []
                 seen.add(directory)
                 item = {
                     "kind": kind,
@@ -225,12 +238,23 @@ def scan_addon_roots(
             errors.append(f"{root}: {exc}")
         if len(results) >= limit:
             break
+    if resolved_roots and not results and not errors:
+        warnings.append(
+            f"Scanned {scanned_directories} directories to depth {max_depth}, but found no "
+            "recognized checkout. Select the repository folder itself or a parent directory; "
+            "renamed Godzilla checkouts must include scripts/godzilla-paths.ps1."
+        )
+    if len(results) >= limit:
+        warnings.append(f"Add-on results were limited to {limit} entries.")
     results.sort(key=lambda item: (str(item["kind"]), str(item["path"]).lower()))
     return {
         "roots": resolved_roots,
         "addons": results,
         "count": len(results),
         "errors": errors,
+        "warnings": warnings,
+        "scanned_directories": scanned_directories,
+        "max_depth": max_depth,
         "truncated": len(results) >= limit,
     }
 

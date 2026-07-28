@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-194%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-202%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -88,7 +88,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-205 automated test cases: 194 pass in the current Windows CPU environment and
+213 automated test cases: 202 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -98,8 +98,8 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 28 | Locked profile rendering, local checkout sources, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, isolated validation |
-| `test_godzilla_workspace.py` | 5 | Checkout feature inspection, add-on recognition, prerequisite planning, and verified TriAttention preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 34 | Command generation, rendered JavaScript, absent/default settings, bounded discovery, managed processes, local sources, and confirmed background jobs |
+| `test_godzilla_workspace.py` | 7 | Checkout feature inspection, add-on recognition, prerequisite planning, reuse, and verified TriAttention preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 40 | Command generation, disconnect handling, rendered JavaScript, settings, automatic bounded discovery, managed processes, local sources, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
@@ -206,10 +206,15 @@ python /path/to/calibrate-triattention.py \
 
 This cannot be inferred reliably for every GGUF: calibration needs the original
 model (or an exact compatible source), and the GGUF does not contain the needed
-pre-RoPE query statistics. Configure the calibrator provided for your Godzilla
-build and verify its supported architectures. The `mtq-triattention-stats`
-command instead writes PyTorch `.pt` data for Multi-TurboQuant's Python/vLLM
-path; it is not a Godzilla `.triattention` file.
+pre-RoPE query statistics. The current Godzilla checkout does not bundle
+`calibrate-triattention.py`, and its lab policy treats TriAttention as
+experimental, opt-in, and manually calibrated. Multi-TurboQuant automatically
+uses a bundled calibrator if a future compatible checkout provides one;
+otherwise it requires a separately validated script and does not invent
+unverified statistics. An existing `.triattention` file is reused without
+requiring the calibration toolchain. The `mtq-triattention-stats` command
+instead writes PyTorch `.pt` data for Multi-TurboQuant's Python/vLLM path; it is
+not a Godzilla `.triattention` file.
 
 ### Godzilla KVarN and DFlash
 
@@ -464,11 +469,14 @@ The browser UI now has two focused views:
   models under a configured folder and start or stop a selected GGUF model with
   the generated argument list.
 - **Setup & Add-ons** stores the model, environment, add-on, and optional
-  FlashAttention source folders; scans only those configured folders; and can
+  FlashAttention source folders; automatically scans only those configured
+  folders; and reports the roots, depth, and directories inspected. It can
   select a reviewed checkout for an isolated `mtq-env` profile after explicit
-  confirmation. It also recognizes Godzilla source trees, reports KVarN and
-  TriAttention support and existing builds, and can run Godzilla's own
-  model-specific TriAttention preparation after its prerequisites pass.
+  confirmation. A local checkout changes the package source, not its CUDA ABI,
+  so the selected toolkit must still match the profile's PyTorch CUDA major.
+  The view also recognizes renamed Godzilla trees by their marker script,
+  reports KVarN/TriAttention support and existing builds, and can run the
+  checkout's manual TriAttention preparation only after its prerequisites pass.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,

@@ -113,6 +113,51 @@ def test_godzilla_triattention_plan_rejects_missing_prerequisites(tmp_path: Path
     } <= codes
 
 
+def test_godzilla_plan_uses_bundled_calibrator_when_present(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibrator = checkout / "scripts" / "calibrate-triattention.py"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.write_text("", encoding="utf-8")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        hf_model="org/source-model",
+        shell_executable="pwsh-test",
+    )
+
+    assert plan.ready is True
+    assert plan.calibrator == calibrator.resolve()
+    assert dict(plan.environment)["TRIATTENTION_CALIBRATE_PY"] == str(calibrator.resolve())
+
+
+def test_godzilla_plan_reuses_existing_calibration_without_toolchain(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    output = tmp_path / "model.triattention"
+    model.write_bytes(b"gguf")
+    output.write_bytes(b"existing stats")
+
+    plan = plan_godzilla_triattention(checkout, model, output=output)
+    runner_called = False
+
+    def runner(*args, **kwargs):
+        nonlocal runner_called
+        runner_called = True
+        raise AssertionError("existing calibration must not start a subprocess")
+
+    report = run_godzilla_triattention(plan, runner=runner)
+
+    assert plan.ready is True
+    assert plan.command == ()
+    assert report["reused"] is True
+    assert runner_called is False
+
+
 def test_godzilla_triattention_run_verifies_output(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
     model = tmp_path / "model.gguf"
