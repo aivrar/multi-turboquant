@@ -152,6 +152,8 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
     directories = {item.lower() for item in directories}
     if {"setup.py"}.issubset(files) and {"flash_attn", "csrc"}.issubset(directories):
         return "flashattention"
+    if (path / "scripts" / "calibrate.py").is_file() and "triattention" in directories:
+        return "triattention"
     if "fastdms" in directories and "pyproject.toml" in files:
         return "fastdms"
     if "lmcache" in directories and {"pyproject.toml", "setup.py"}.issubset(files):
@@ -220,12 +222,17 @@ def scan_addon_roots(
                     from ..integration import inspect_godzilla_checkout
 
                     item["source"] = inspect_godzilla_checkout(directory)
+                if kind == "triattention":
+                    from ..calibration import inspect_official_triattention_checkout
+
+                    item["source"] = inspect_official_triattention_checkout(directory)
                 if kind in {
                     "flashattention",
                     "fastdms",
                     "lmcache",
                     "minference",
                     "sageattention",
+                    "triattention",
                 }:
                     from ..optimizations.environments import inspect_profile_source
 
@@ -265,10 +272,12 @@ def scan_environment_profiles(
     cuda_toolkit: str | Path | None = None,
     local_source_profile: str | None = None,
     local_source: str | Path | None = None,
+    manual_dependency_override: bool = False,
 ) -> dict[str, object]:
-    """Report dependency profile readiness and materialization without imports."""
+    """Report dependency readiness, validating materialized environments by import."""
     from ..optimizations.environments import (
         BUILTIN_ENVIRONMENT_PROFILES,
+        check_environment,
         detect_environment_context,
         environment_python,
         get_environment_profile,
@@ -292,10 +301,40 @@ def scan_environment_profiles(
         )
         project_file = plan.target / "pyproject.toml"
         interpreter = environment_python(plan.target, os_name=context.os)
+        issues = [issue.to_dict() for issue in plan.issues]
+        validation: dict[str, object] | None = None
         if not profile.installable:
             status = "blocked"
         elif interpreter.is_file():
-            status = "installed"
+            try:
+                validation = dict(check_environment(plan))
+            except RuntimeError as exc:
+                if manual_dependency_override:
+                    status = "manual"
+                    issues.append(
+                        {
+                            "severity": "warning",
+                            "code": "manual_dependency_override",
+                            "message": (
+                                "Automatic dependency validation failed, but the manual override "
+                                f"is active: {exc}. Runtime failures remain possible."
+                            ),
+                        }
+                    )
+                else:
+                    status = "broken"
+                    issues.append(
+                        {
+                            "severity": "error",
+                            "code": "environment_validation_failed",
+                            "message": (
+                                f"The environment exists but its dependency check failed: {exc}. "
+                                "Repair it or use the manual override only if the scan is wrong."
+                            ),
+                        }
+                    )
+            else:
+                status = "installed"
         elif project_file.is_file():
             status = "configured"
         elif plan.ready:
@@ -312,13 +351,15 @@ def scan_environment_profiles(
                 "source_build_available": bool(profile.source_build_packages),
                 "local_source_supported": profile.local_source_package is not None,
                 "local_source_selected": str(plan.local_source) if plan.local_source else None,
-                "issues": [issue.to_dict() for issue in plan.issues],
+                "validation": validation,
+                "issues": issues,
             }
         )
     return {
         "root": str(Path(root).expanduser().resolve()),
         "local_source_profile": selected_profile,
         "local_source": str(Path(local_source).expanduser().resolve()) if local_source else None,
+        "manual_dependency_override": manual_dependency_override,
         "context": {
             "os": context.os,
             "compute": context.compute,

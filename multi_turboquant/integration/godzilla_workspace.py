@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Read-only Godzilla checkout inspection and explicit TriAttention preparation."""
+"""Read-only Godzilla inspection and explicit TriAttention preparation."""
 
 from __future__ import annotations
 
@@ -9,6 +9,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
+
+from ..calibration.godzilla_triattention import (
+    inspect_calibration_python,
+    inspect_godzilla_triattention_file,
+    inspect_official_triattention_calibrator,
+)
 
 
 def _file_contains(path: Path, token: str, *, max_bytes: int = 4_000_000) -> bool:
@@ -103,7 +109,8 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
             (
                 "This checkout bundles a calibration script."
                 if bundled_calibrator.is_file()
-                else "This checkout does not bundle calibrate-triattention.py; a separately validated compatible script is required."
+                else "This checkout does not bundle calibrate-triattention.py; use the official "
+                "WeianMao/triattention calibrator plus conversion, or a validated checkout-owned script."
             ),
         ],
     }
@@ -129,6 +136,13 @@ class GodzillaCalibrationPlan:
     hf_model: str | None
     n_tokens: int
     device: str
+    mode: str
+    calibration_input: Path | None
+    official_stats: Path | None
+    official_stats_input: Path | None
+    attention_implementation: str
+    dependency_validation: Mapping[str, object] | None
+    dependency_override: bool
     command: tuple[str, ...]
     environment: tuple[tuple[str, str], ...]
     issues: tuple[GodzillaIssue, ...]
@@ -147,6 +161,17 @@ class GodzillaCalibrationPlan:
             "hf_model": self.hf_model,
             "n_tokens": self.n_tokens,
             "device": self.device,
+            "mode": self.mode,
+            "calibration_input": (
+                str(self.calibration_input) if self.calibration_input is not None else None
+            ),
+            "official_stats": str(self.official_stats) if self.official_stats is not None else None,
+            "official_stats_input": (
+                str(self.official_stats_input) if self.official_stats_input is not None else None
+            ),
+            "attention_implementation": self.attention_implementation,
+            "dependency_validation": self.dependency_validation,
+            "dependency_override": self.dependency_override,
             "command": list(self.command),
             "environment": dict(self.environment),
             "issues": [issue.to_dict() for issue in self.issues],
@@ -162,12 +187,19 @@ def plan_godzilla_triattention(
     output: str | Path | None = None,
     python: str | Path | None = None,
     calibrator: str | Path | None = None,
+    calibration_input: str | Path | None = None,
+    official_stats_input: str | Path | None = None,
     hf_model: str | None = None,
     n_tokens: int = 2048,
     device: str = "cuda",
+    mode: str = "official_python",
+    attention_implementation: str = "sdpa",
+    verify_dependencies: bool = False,
+    dependency_override: bool = False,
+    dependency_runner=subprocess.run,
     shell_executable: str | None = None,
 ) -> GodzillaCalibrationPlan:
-    """Plan Godzilla's own ensure-triattention workflow without running it."""
+    """Plan a validated official-Python or checkout-owned calibration workflow."""
     checkout_path = Path(checkout).expanduser().resolve()
     gguf_path = Path(gguf).expanduser().resolve()
     output_path = (
@@ -177,6 +209,8 @@ def plan_godzilla_triattention(
     )
     normalized_hf = hf_model.strip() if hf_model and hf_model.strip() else None
     normalized_device = device.strip().lower()
+    normalized_mode = mode.strip().lower()
+    normalized_attention = attention_implementation.strip().lower()
     inspection = inspect_godzilla_checkout(checkout_path)
     python_value = python or os.environ.get("TRIATTENTION_PYTHON")
     inspection_paths = inspection.get("paths")
@@ -188,12 +222,30 @@ def plan_godzilla_triattention(
     calibrator_value = (
         calibrator
         or os.environ.get("TRIATTENTION_CALIBRATE_PY")
-        or bundled_calibrator
+        or (bundled_calibrator if normalized_mode == "godzilla_script" else None)
+    )
+    calibration_input_value = calibration_input or os.environ.get("TRIATTENTION_CALIBRATION_TEXT")
+    official_stats_input_value = official_stats_input or os.environ.get(
+        "TRIATTENTION_OFFICIAL_STATS"
     )
     python_path = Path(python_value).expanduser().resolve() if python_value else None
     calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
+    calibration_input_path = (
+        Path(calibration_input_value).expanduser().resolve() if calibration_input_value else None
+    )
+    official_stats_input_path = (
+        Path(official_stats_input_value).expanduser().resolve()
+        if official_stats_input_value
+        else None
+    )
+    official_stats = (
+        official_stats_input_path
+        if normalized_mode == "official_convert"
+        else output_path.with_suffix(".official.pt")
+    )
     output_exists = output_path.is_file()
     issues: list[GodzillaIssue] = []
+    dependency_validation: Mapping[str, object] | None = None
 
     if not inspection["valid"]:
         issues.append(
@@ -203,9 +255,17 @@ def plan_godzilla_triattention(
                 "; ".join(str(item) for item in inspection.get("issues", [])),
             )
         )
+    if normalized_mode not in {"official_python", "official_convert", "godzilla_script"}:
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "invalid_calibration_mode",
+                "Calibration mode must be official_python, official_convert, or godzilla_script.",
+            )
+        )
     ensure_script = checkout_path / "scripts" / "ensure-triattention.ps1"
     resolver_script = checkout_path / "scripts" / "resolve-triattention-hf.py"
-    if not ensure_script.is_file():
+    if normalized_mode == "godzilla_script" and not ensure_script.is_file():
         issues.append(
             GodzillaIssue(
                 "error",
@@ -231,14 +291,47 @@ def plan_godzilla_triattention(
                 "Select TRIATTENTION_PYTHON: a Python executable with Torch and calibrator dependencies.",
             )
         )
-    if not output_exists and (calibrator_path is None or not calibrator_path.is_file()):
+    if not output_exists and normalized_mode in {"official_python", "godzilla_script"}:
+        if calibrator_path is None or not calibrator_path.is_file():
+            message = (
+                "Select the official WeianMao/triattention scripts/calibrate.py."
+                if normalized_mode == "official_python"
+                else "This Godzilla checkout does not provide calibrate-triattention.py. Select a "
+                "separately validated script compatible with this checkout's binary format."
+            )
+            issues.append(GodzillaIssue("error", "missing_calibrator", message))
+        elif normalized_mode == "official_python":
+            calibrator_inspection = inspect_official_triattention_calibrator(calibrator_path)
+            if not calibrator_inspection["valid"]:
+                issues.append(
+                    GodzillaIssue(
+                        "error",
+                        "invalid_official_calibrator",
+                        "; ".join(str(item) for item in calibrator_inspection["issues"]),
+                    )
+                )
+    if not output_exists and normalized_mode == "official_python" and (
+        calibration_input_path is None
+        or not calibration_input_path.is_file()
+        or calibration_input_path.stat().st_size == 0
+    ):
         issues.append(
             GodzillaIssue(
                 "error",
-                "missing_calibrator",
-                "This Godzilla checkout does not provide calibrate-triattention.py. Select a "
-                "separately validated script compatible with this checkout's binary format; "
-                "Multi-TurboQuant will not fabricate unverified model statistics.",
+                "missing_calibration_input",
+                "Select a non-empty plain-text calibration input file.",
+            )
+        )
+    if not output_exists and normalized_mode == "official_convert" and (
+        official_stats_input_path is None
+        or not official_stats_input_path.is_file()
+        or official_stats_input_path.suffix.lower() not in {".pt", ".pth"}
+    ):
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "missing_official_stats",
+                "Select an existing official TriAttention .pt statistics file to convert.",
             )
         )
     if not 128 <= n_tokens <= 32_768:
@@ -247,7 +340,32 @@ def plan_godzilla_triattention(
         )
     if normalized_device not in {"cuda", "cpu"}:
         issues.append(GodzillaIssue("error", "invalid_device", "Device must be 'cuda' or 'cpu'."))
-    if not output_exists and normalized_hf is None:
+    if normalized_mode == "official_python" and normalized_attention not in {
+        "eager",
+        "sdpa",
+        "flash_attention_2",
+    }:
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "invalid_attention_implementation",
+                "Attention implementation must be eager, sdpa, or flash_attention_2.",
+            )
+        )
+    if (
+        not output_exists
+        and normalized_hf is None
+        and normalized_mode in {"official_python", "official_convert"}
+    ):
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "missing_hf_model",
+                "Provide the matching Hugging Face model ID or local Transformers directory "
+                "for model-shape metadata.",
+            )
+        )
+    elif not output_exists and normalized_hf is None and normalized_mode == "godzilla_script":
         if resolver_script.is_file():
             issues.append(
                 GodzillaIssue(
@@ -281,14 +399,26 @@ def plan_godzilla_triattention(
         )
     )
     if output_exists:
-        issues.append(
-            GodzillaIssue(
-                "info",
-                "calibration_present",
-                f"Existing calibration will be reused: {output_path}",
+        try:
+            artifact = inspect_godzilla_triattention_file(output_path)
+        except (OSError, ValueError) as exc:
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "invalid_existing_calibration",
+                    f"Existing calibration is not a valid Godzilla v1 artifact: {exc}",
+                )
             )
-        )
-    else:
+        else:
+            issues.append(
+                GodzillaIssue(
+                    "info",
+                    "calibration_present",
+                    f"Validated existing calibration will be reused: {output_path} "
+                    f"({artifact['sampled_heads']} sampled heads).",
+                )
+            )
+    elif normalized_mode == "official_python":
         issues.append(
             GodzillaIssue(
                 "warning",
@@ -296,9 +426,83 @@ def plan_godzilla_triattention(
                 "Calibration can download and load the matching Hugging Face checkpoint.",
             )
         )
+    elif normalized_mode == "official_convert":
+        issues.append(
+            GodzillaIssue(
+                "info",
+                "model_config_download_possible",
+                "Conversion loads only matching Hugging Face configuration metadata, not model weights.",
+            )
+        )
+
+    if (
+        not output_exists
+        and verify_dependencies
+        and normalized_mode in {"official_python", "official_convert"}
+        and python_path is not None
+        and python_path.is_file()
+    ):
+        python_check = inspect_calibration_python(
+            python_path,
+            device=normalized_device,
+            runner=dependency_runner,
+        )
+        report = python_check.get("report")
+        dependency_validation = report if isinstance(report, Mapping) else None
+        if python_check["valid"]:
+            issues.append(
+                GodzillaIssue(
+                    "info",
+                    "calibration_dependencies_ready",
+                    "Calibration Python successfully imported torch, transformers, and accelerate.",
+                )
+            )
+        else:
+            message = "; ".join(str(item) for item in python_check["issues"])
+            if dependency_override:
+                issues.append(
+                    GodzillaIssue(
+                        "warning",
+                        "calibration_dependency_override",
+                        "Automatic dependency validation failed, but the manual override is active: "
+                        f"{message}. Calibration may still fail.",
+                    )
+                )
+            else:
+                issues.append(
+                    GodzillaIssue(
+                        "error",
+                        "calibration_dependencies_missing",
+                        f"Calibration dependency check failed: {message}",
+                    )
+                )
+
+    if normalized_mode in {"official_python", "official_convert"}:
+        issues.append(
+            GodzillaIssue(
+                "info",
+                "no_llama_cli_required",
+                (
+                    "This mode runs the official Python/Hugging Face calibrator and a validated "
+                    "Godzilla format conversion; it does not use llama-cli."
+                    if normalized_mode == "official_python"
+                    else "This mode converts existing official .pt statistics to the validated "
+                    "Godzilla format; it does not rerun calibration or use llama-cli."
+                ),
+            )
+        )
+        if not output_exists:
+            issues.append(
+                GodzillaIssue(
+                    "warning",
+                    "official_remote_code",
+                    "Hugging Face metadata/model loading uses trust_remote_code=True; review and "
+                    "trust the selected model source before continuing.",
+                )
+            )
 
     shell = shell_executable or shutil.which("pwsh") or shutil.which("powershell")
-    if not output_exists and shell is None:
+    if not output_exists and normalized_mode == "godzilla_script" and shell is None:
         issues.append(
             GodzillaIssue(
                 "error",
@@ -307,7 +511,54 @@ def plan_godzilla_triattention(
             )
         )
     command: list[str] = []
-    if not output_exists and shell is not None:
+    if (
+        not output_exists
+        and normalized_mode == "official_python"
+        and python_path is not None
+        and calibrator_path is not None
+        and calibration_input_path is not None
+        and normalized_hf is not None
+    ):
+        converter = Path(__file__).resolve().parents[1] / "calibration" / "godzilla_triattention.py"
+        command = [
+            str(python_path),
+            str(converter),
+            "calibrate",
+            "--calibrator",
+            str(calibrator_path) if calibrator_path is not None else "",
+            "--model",
+            normalized_hf or "",
+            "--input",
+            str(calibration_input_path) if calibration_input_path is not None else "",
+            "--output",
+            str(output_path),
+            "--stats-output",
+            str(official_stats),
+            "--max-length",
+            str(n_tokens),
+            "--device",
+            normalized_device,
+            "--attn-implementation",
+            normalized_attention,
+        ]
+    elif (
+        not output_exists
+        and normalized_mode == "official_convert"
+        and python_path is not None
+        and official_stats_input_path is not None
+        and normalized_hf is not None
+    ):
+        converter = Path(__file__).resolve().parents[1] / "calibration" / "godzilla_triattention.py"
+        command = [
+            str(python_path),
+            str(converter),
+            "convert",
+            str(official_stats_input_path),
+            str(output_path),
+            "--model",
+            normalized_hf,
+        ]
+    elif not output_exists and normalized_mode == "godzilla_script" and shell is not None:
         command = [
             shell,
             "-NoProfile",
@@ -338,6 +589,17 @@ def plan_godzilla_triattention(
         hf_model=normalized_hf,
         n_tokens=n_tokens,
         device=normalized_device,
+        mode=normalized_mode,
+        calibration_input=calibration_input_path,
+        official_stats=(
+            official_stats
+            if normalized_mode in {"official_python", "official_convert"}
+            else None
+        ),
+        official_stats_input=official_stats_input_path,
+        attention_implementation=normalized_attention,
+        dependency_validation=dependency_validation,
+        dependency_override=dependency_override,
         command=tuple(command),
         environment=tuple(environment),
         issues=tuple(issues),
@@ -357,9 +619,11 @@ def run_godzilla_triattention(
         errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")
         raise RuntimeError(f"Godzilla calibration plan is not ready: {errors}")
     if plan.output.is_file():
+        artifact = inspect_godzilla_triattention_file(plan.output)
         return {
             "output": str(plan.output),
             "reused": True,
+            "artifact": artifact,
             "stdout": "",
             "stderr": "",
         }
@@ -381,9 +645,14 @@ def run_godzilla_triattention(
         )
     if not plan.output.is_file():
         raise RuntimeError(f"Godzilla calibration command did not create {plan.output}")
+    try:
+        artifact = inspect_godzilla_triattention_file(plan.output)
+    except ValueError as exc:
+        raise RuntimeError(f"Godzilla calibration command created an invalid artifact: {exc}") from exc
     return {
         "output": str(plan.output),
         "reused": existed,
+        "artifact": artifact,
         "stdout": result.stdout or "",
         "stderr": result.stderr or "",
     }

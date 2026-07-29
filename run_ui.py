@@ -30,6 +30,7 @@ from multi_turboquant import (
     plan_agents,
 )
 from multi_turboquant.hardware import detect_platform, detect_gpus
+from multi_turboquant.optimizations.environments import environment_python
 from multi_turboquant.compatibility import check_config
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
 from multi_turboquant.integration import (
@@ -279,7 +280,10 @@ def _cuda_weight_share_config(params):
         ipc_name=params.get("cuda_weight_share_ipc_name")
         or "/cuda_vram_ipc_auto",
         shm_wait_sec=_optional_int(params.get("cuda_weight_share_shm_wait_sec")),
+        suppress_master_free=_truthy(params.get("cuda_weight_share_suppress_master_free")),
         trace_callers=_truthy(params.get("cuda_weight_share_trace")),
+        trace_depth=_optional_int(params.get("cuda_weight_share_trace_depth")),
+        trace_normal_allocs=_truthy(params.get("cuda_weight_share_trace_normal_allocs")),
     )
 
 
@@ -456,6 +460,7 @@ def api_scan_environments(params):
         cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
         local_source_profile=_optional_text(params.get("local_source_profile")),
         local_source=_optional_text(params.get("local_source")),
+        manual_dependency_override=_truthy(params.get("manual_dependency_override")),
     )
 
 
@@ -479,6 +484,7 @@ def api_create_environment(params):
         cuda_toolkit=_optional_text(params.get("cuda_toolkit")),
         local_source=local_source,
         build_from_source=_truthy(params.get("build_from_source")),
+        max_jobs=_optional_int(params.get("max_jobs"), 2),
     )
 
 
@@ -509,19 +515,94 @@ def _validated_godzilla_output(value, *, checkout: Path, model: Path) -> Path | 
     return output
 
 
+def _validated_calibration_file(value, *, label: str) -> Path | None:
+    text_value = _optional_text(value)
+    if text_value is None:
+        return None
+    path = Path(text_value).expanduser().resolve()
+    settings = _saved_settings()
+    roots = [Path(item).expanduser().resolve() for item in settings["addon_roots"]]
+    if settings.get("model_root"):
+        roots.append(Path(settings["model_root"]).expanduser().resolve())
+    if not any(path == root or path.is_relative_to(root) for root in roots):
+        raise ValueError(f"{label} must be inside the saved model or add-on roots")
+    if not path.is_file():
+        raise ValueError(f"{label} is not a file: {path}")
+    return path
+
+
+def _validated_hf_model(value) -> str | None:
+    model = _optional_text(value)
+    if model is None:
+        return None
+    candidate = Path(model).expanduser()
+    if not candidate.exists():
+        return model
+    resolved = candidate.resolve()
+    settings = _saved_settings()
+    roots = [Path(item).expanduser().resolve() for item in settings["addon_roots"]]
+    if settings.get("model_root"):
+        roots.append(Path(settings["model_root"]).expanduser().resolve())
+    if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
+        raise ValueError("A local Hugging Face model must be inside a saved model or add-on root")
+    if not resolved.is_dir():
+        raise ValueError(f"Local Hugging Face model is not a directory: {resolved}")
+    return str(resolved)
+
+
+def _default_triattention_python(settings) -> Path | None:
+    target = Path(settings["environment_root"]).expanduser().resolve() / "triattention"
+    interpreter = environment_python(target)
+    return interpreter.resolve() if interpreter.is_file() else None
+
+
+def _default_triattention_calibrator(settings) -> Path | None:
+    scan = scan_addon_roots(settings["addon_roots"])
+    candidates: list[Path] = []
+    for addon in scan["addons"]:
+        if addon.get("kind") != "triattention":
+            continue
+        source = addon.get("source")
+        if not isinstance(source, dict) or not source.get("valid") or not source.get("calibrator"):
+            continue
+        candidates.append(Path(str(source["calibrator"])).resolve())
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _godzilla_plan_from_params(params):
+    settings = _saved_settings()
     checkout = _validated_godzilla_checkout(str(params.get("checkout", "")))
     model = _validated_launch_model(str(params.get("gguf", "")))
     output = _validated_godzilla_output(params.get("output"), checkout=checkout, model=model)
+    mode = _optional_text(params.get("mode")) or "official_python"
+    python = _optional_text(params.get("python"))
+    if python is None and mode in {"official_python", "official_convert"}:
+        discovered_python = _default_triattention_python(settings)
+        python = str(discovered_python) if discovered_python is not None else None
+    calibrator = _validated_calibration_file(params.get("calibrator"), label="Calibrator")
+    if calibrator is None and mode == "official_python":
+        calibrator = _default_triattention_calibrator(settings)
     return plan_godzilla_triattention(
         checkout,
         model,
         output=output,
-        python=_optional_text(params.get("python")),
-        calibrator=_optional_text(params.get("calibrator")),
-        hf_model=_optional_text(params.get("hf_model")),
+        python=python,
+        calibrator=calibrator,
+        calibration_input=_validated_calibration_file(
+            params.get("calibration_input"), label="Calibration input"
+        ),
+        official_stats_input=_validated_calibration_file(
+            params.get("official_stats_input"), label="Official statistics"
+        ),
+        hf_model=_validated_hf_model(params.get("hf_model")),
         n_tokens=_optional_int(params.get("n_tokens"), 2048),
         device=_optional_text(params.get("device")) or "cuda",
+        mode=mode,
+        attention_implementation=(
+            _optional_text(params.get("attention_implementation")) or "sdpa"
+        ),
+        verify_dependencies=True,
+        dependency_override=_truthy(params.get("dependency_override")),
     )
 
 
@@ -541,9 +622,14 @@ def api_create_godzilla(params):
         output=plan.output,
         python=plan.python,
         calibrator=plan.calibrator,
+        calibration_input=plan.calibration_input,
+        official_stats_input=plan.official_stats_input,
         hf_model=plan.hf_model,
         n_tokens=plan.n_tokens,
         device=plan.device,
+        mode=plan.mode,
+        attention_implementation=plan.attention_implementation,
+        dependency_override=plan.dependency_override,
     )
 
 
@@ -677,8 +763,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
 .status-pill { display:inline-block; border:1px solid #30363d; border-radius:999px;
                padding:2px 8px; font-size:10px; text-transform:uppercase; }
 .status-ready,.status-installed,.status-completed { color:#3fb950; border-color:#238636; }
-.status-configured,.status-running,.status-queued { color:#d29922; border-color:#d29922; }
-.status-blocked,.status-incompatible,.status-failed { color:#ff7b72; border-color:#f85149; }
+.status-configured,.status-running,.status-queued,.status-manual { color:#d29922; border-color:#d29922; }
+.status-blocked,.status-incompatible,.status-failed,.status-broken { color:#ff7b72; border-color:#f85149; }
 .runtime-actions { display:grid; grid-template-columns:1fr auto auto; gap:8px; align-items:end; }
 .runtime-log { min-height:70px; }
 .result-box { background: #0d1117; border: 1px solid #30363d; border-radius: 4px;
@@ -865,15 +951,22 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri-log" onchange="generateCommand()"> TriAttn Log</label></div>
         <div><label><input type="checkbox" id="cmd-weight-share" onchange="generateCommand()"> CUDA Weight Share</label></div>
-        <div><label>MODEL_SIZE</label><input type="number" id="cmd-ws-model-size" value="" onchange="generateCommand()"></div>
-        <div><label>Tolerance</label><input type="number" id="cmd-ws-tolerance" value="0" onchange="generateCommand()"></div>
+        <div><label title="Exact model-weight CUDA allocation size in bytes. Use 0 or blank only for a discovery run; this is not the GGUF file size.">MODEL_SIZE</label><input type="number" id="cmd-ws-model-size" value="" onchange="generateCommand()"></div>
+        <div><label title="Allowed byte difference when matching MODEL_SIZE. Keep 0 unless allocator variation requires a small tolerance.">MODEL_SIZE_TOLERANCE</label><input type="number" id="cmd-ws-tolerance" value="0" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
-        <div><label>Preload Library</label><input type="text" id="cmd-ws-library" value="./cuda-llm-weight-share.so" onchange="generateCommand()"></div>
-        <div><label>IPC Name</label><input type="text" id="cmd-ws-ipc" value="/cuda_vram_ipc_auto" onchange="generateCommand()"></div>
-        <div><label>SHM Wait</label><input type="number" id="cmd-ws-wait" value="" onchange="generateCommand()"></div>
-        <div><label><input type="checkbox" id="cmd-ws-trace" onchange="generateCommand()"> Trace</label></div>
+        <div><label title="LD_PRELOAD loads the external Linux helper before llama.cpp so it can intercept CUDA allocations.">LD_PRELOAD library</label><input type="text" id="cmd-ws-library" value="./cuda-llm-weight-share.so" onchange="generateCommand()"></div>
+        <div><label title="Shared-memory namespace. Every process sharing one model must use the same unique name; unrelated groups should use different names.">CUDA_VRAM_IPC_NAME</label><input type="text" id="cmd-ws-ipc" value="/cuda_vram_ipc_auto" onchange="generateCommand()"></div>
+        <div><label title="Seconds a worker waits for the master process to publish shared allocation metadata.">SHM wait seconds</label><input type="number" id="cmd-ws-wait" value="" onchange="generateCommand()"></div>
+        <div><label title="Diagnostic caller tracing adds log volume and overhead; leave disabled for normal serving."><input type="checkbox" id="cmd-ws-trace" onchange="generateCommand()"> Trace callers</label></div>
       </div>
+      <div class="form-row">
+        <div><label title="Maximum captured call-stack depth when caller tracing is enabled.">Trace depth</label><input type="number" id="cmd-ws-trace-depth" value="" min="1" onchange="generateCommand()"></div>
+        <div><label title="Also trace CUDA allocations that are not classified as model weights; useful only for diagnostics."><input type="checkbox" id="cmd-ws-trace-normal" onchange="generateCommand()"> Trace normal allocations</label></div>
+        <div><label title="Specialized helper option that prevents the master from freeing the shared backing allocation prematurely; leave disabled unless the helper's workflow requires it."><input type="checkbox" id="cmd-ws-suppress-free" onchange="generateCommand()"> Suppress master free</label></div>
+        <div></div>
+      </div>
+      <div class="setup-note">CUDA weight sharing is a Linux + CUDA feature supplied by an external preload helper. First run one trusted process with <code>MODEL_SIZE=0</code> to discover the model-weight allocation, then reuse the reported byte count for the master and workers. It shares model weights only—not the KV cache or context—and all participating processes must use the same model/build/device setup.</div>
       <div class="result-box" id="cmd-result">Select methods above...</div>
       <div class="mini-label">Managed llama-server</div>
       <div class="runtime-actions">
@@ -938,32 +1031,44 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="">Use pinned/default source</option>
             <option value="flashattention">FlashAttention</option><option value="fastdms">FastDMS</option>
             <option value="lmcache">LMCache</option><option value="minference">MInference</option>
-            <option value="sageattention">SageAttention</option>
+            <option value="sageattention">SageAttention</option><option value="triattention">TriAttention calibration</option>
           </select></div>
           <div style="grid-column:span 3"><label>Reviewed local checkout</label><input type="text" id="env-local-source" placeholder="Select a recognized add-on checkout above"></div>
         </div>
         <div class="button-row">
           <label><input type="checkbox" id="env-build-source"> Force reviewed source build</label>
+          <label>Build jobs <input type="number" id="env-max-jobs" value="2" min="1" max="64" style="width:6em"></label>
+          <label><input type="checkbox" id="env-manual-override"> Treat failed dependency checks as installed</label>
           <label><input type="checkbox" id="env-confirm"> Confirm downloads/builds</label>
           <button onclick="scanEnvironments()">Refresh Profiles</button>
         </div>
+        <div class="setup-note">Existing environments are validated before another build is suggested. The manual override suppresses a rebuild recommendation when automatic imports fail, but it cannot prove the dependencies are usable and may move the failure to calibration or launch time.</div>
         <div class="setup-note">Blocked profiles are informational entries, not failed installations. They remain unavailable when upstream hardware, licensing, artifacts, or a maintained serving integration is missing.</div>
         <div id="environment-result" class="item-list"><div class="muted">Not scanned.</div></div>
       </div>
 
       <div class="card full">
         <h2>Godzilla Source Setup</h2>
-        <div class="setup-note">The scanner checks Godzilla's known source markers, KVarN/TriAttention features, preparation script, bundled-calibrator status, and existing llama-server builds. KVarN is selected at launch and needs no calibration. TriAttention is experimental and manually calibrated: a missing calibrator is reported rather than synthesized, while an existing stats file is reused without the calibration toolchain.</div>
+        <div class="setup-note">The recommended mode runs the official WeianMao/triattention Python calibrator, converts its <code>.pt</code> statistics to Godzilla v1, and validates the finished file. Select the recognized TriAttention checkout above and its isolated dependency environment is used automatically after validation. Existing official <code>.pt</code> statistics can be converted without another model forward pass. Neither route needs <code>llama-cli</code>.</div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Godzilla checkout</label><input type="text" id="godzilla-checkout" placeholder="Select a recognized Godzilla checkout above"></div>
           <div style="grid-column:span 2"><label>GGUF model</label><input type="text" id="godzilla-gguf" placeholder="Model inside the saved model root"></div>
         </div>
         <div class="form-row">
-          <div style="grid-column:span 2"><label>Calibration Python</label><input type="text" id="godzilla-python" placeholder="Python executable with Torch/calibrator dependencies"></div>
-          <div style="grid-column:span 2"><label>Validated external calibrator (if not bundled)</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/calibrate-triattention.py"></div>
+          <div><label>Calibration mode</label><select id="godzilla-mode"><option value="official_python" selected>Generate stats + convert</option><option value="official_convert">Convert existing official .pt</option><option value="godzilla_script">Godzilla checkout script</option></select></div>
+          <div><label>Attention implementation</label><select id="godzilla-attention"><option value="sdpa" selected>SDPA</option><option value="eager">Eager</option><option value="flash_attention_2">FlashAttention 2</option></select></div>
+          <div style="grid-column:span 2"><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
         </div>
         <div class="form-row">
-          <div style="grid-column:span 2"><label>Matching Hugging Face model (optional)</label><input type="text" id="godzilla-hf-model" placeholder="org/model; blank lets Godzilla try metadata resolution"></div>
+          <div style="grid-column:span 2"><label>Official TriAttention calibrator</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/triattention/scripts/calibrate.py"></div>
+          <div style="grid-column:span 2"><label>Calibration text</label><input type="text" id="godzilla-input" placeholder="Non-empty plain-text file inside a saved root"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Existing official .pt statistics</label><input type="text" id="godzilla-official-stats" placeholder="Used only by Convert existing official .pt"></div>
+          <div style="grid-column:span 2"><label><input type="checkbox" id="godzilla-dependency-override"> Dependencies are installed (override failed automatic check)</label><div class="muted">Use only when the dependency scanner is wrong; this does not bypass artifact validation.</div></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Matching Hugging Face model</label><input type="text" id="godzilla-hf-model" placeholder="org/model or local Transformers directory"></div>
           <div style="grid-column:span 2"><label>Output .triattention (optional)</label><input type="text" id="godzilla-output" placeholder="Defaults to checkout/calibrations/model.triattention"></div>
         </div>
         <div class="form-row">
@@ -1309,12 +1414,16 @@ async function scanAddons() {
     html += result.addons.map(addon => {
       const encodedPath = encodeURIComponent(addon.path).replace(/'/g, '%27');
       const encodedBinary = encodeURIComponent(addon.source?.preferred_binary || '').replace(/'/g, '%27');
+      const encodedCalibrator = encodeURIComponent(addon.source?.calibrator || '').replace(/'/g, '%27');
       let action = '';
       if (addon.environment_profile && addon.local_source?.valid) {
         action += `<button onclick="useAddonSource('${escapeHtml(addon.environment_profile)}','${encodedPath}')">Use for ${escapeHtml(addon.environment_profile)}</button>`;
       }
       if (addon.kind === 'godzilla' && addon.source?.valid) {
         action += `<button onclick="useGodzillaSource('${encodedPath}','${encodedBinary}')">Use Godzilla checkout</button>`;
+      }
+      if (addon.kind === 'triattention' && addon.source?.valid) {
+        action += `<button onclick="useTriAttentionSource('${encodedCalibrator}','${encodedPath}')">Use calibrator & dependencies</button>`;
       }
       let features = addon.kind === 'godzilla' && addon.source?.features
         ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
@@ -1323,6 +1432,9 @@ async function scanAddons() {
         features += '<div class="muted">Calibrator ' +
           (addon.source.features.bundled_calibrator ? 'bundled' : 'not bundled; external manual tool required') +
           '.</div>';
+      }
+      if (addon.kind === 'triattention' && addon.source?.valid) {
+        features += '<div class="muted">Official scripts/calibrate.py found; output will be converted and validated for Godzilla.</div>';
       }
       const inspection = addon.source || addon.local_source;
       (inspection?.issues || []).forEach(issue => {
@@ -1366,6 +1478,15 @@ function useGodzillaSource(encodedPath, encodedBinary) {
   generateCommand();
 }
 
+function useTriAttentionSource(encodedCalibrator, encodedPath) {
+  document.getElementById('godzilla-mode').value = 'official_python';
+  document.getElementById('godzilla-calibrator').value = decodeURIComponent(encodedCalibrator);
+  document.getElementById('env-source-profile').value = 'triattention';
+  document.getElementById('env-local-source').value = decodeURIComponent(encodedPath);
+  scheduleSave();
+  scanEnvironments();
+}
+
 async function scanFlashAttention() {
   const target = document.getElementById('addon-scan-result');
   target.innerHTML = '<div class="muted">Inspecting FlashAttention source...</div>';
@@ -1393,6 +1514,7 @@ async function scanEnvironments() {
       cuda_toolkit: document.getElementById('env-cuda-toolkit').value,
       local_source_profile: document.getElementById('env-source-profile').value,
       local_source: document.getElementById('env-local-source').value,
+      manual_dependency_override: document.getElementById('env-manual-override').checked,
     });
     const toolkitVersion = result.context.cuda_toolkit_version?.join('.') || 'not detected';
     const toolkitRoot = result.context.cuda_toolkit_root || 'PATH/default';
@@ -1409,10 +1531,10 @@ async function scanEnvironments() {
             : (issue.severity === 'warning' ? 'cap-warn' : 'muted');
           return '<div class="' + cls + '">' + escapeHtml(issue.message) + '</div>';
         }).join('');
-      const canCreate = profile.ready && !['installed', 'blocked'].includes(profile.status);
+      const canCreate = profile.ready && !['installed', 'manual', 'blocked'].includes(profile.status);
       const action = profile.status === 'blocked'
         ? '<span class="muted">Informational only; automatic installation is intentionally unavailable.</span>'
-        : `<button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">Create</button>`;
+        : `<button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">${profile.status === 'broken' ? 'Repair' : 'Create'}</button>`;
       return `<div class="item"><div class="item-title"><span>${escapeHtml(profile.name)}</span>` +
         `<span class="status-pill status-${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span></div>` +
         `<div class="muted">${escapeHtml(profile.target)}</div>` +
@@ -1441,6 +1563,7 @@ async function createEnvironment(profile) {
       local_source_profile: sourceProfile === profile ? sourceProfile : '',
       local_source: sourceProfile === profile ? document.getElementById('env-local-source').value : '',
       build_from_source: document.getElementById('env-build-source').checked,
+      max_jobs: document.getElementById('env-max-jobs').value,
       confirm: true,
     });
     document.getElementById('env-confirm').checked = false;
@@ -1454,12 +1577,17 @@ function godzillaPayload() {
   return {
     checkout: document.getElementById('godzilla-checkout').value,
     gguf: document.getElementById('godzilla-gguf').value,
+    mode: document.getElementById('godzilla-mode').value,
+    attention_implementation: document.getElementById('godzilla-attention').value,
     python: document.getElementById('godzilla-python').value,
     calibrator: document.getElementById('godzilla-calibrator').value,
+    calibration_input: document.getElementById('godzilla-input').value,
+    official_stats_input: document.getElementById('godzilla-official-stats').value,
     hf_model: document.getElementById('godzilla-hf-model').value,
     output: document.getElementById('godzilla-output').value,
     n_tokens: document.getElementById('godzilla-tokens').value,
     device: document.getElementById('godzilla-device').value,
+    dependency_override: document.getElementById('godzilla-dependency-override').checked,
   };
 }
 
@@ -1468,7 +1596,10 @@ function renderGodzillaPlan(plan) {
   const status = plan.ready ? 'ready' : 'blocked';
   target.innerHTML = `<div class="item"><div class="item-title"><span>TriAttention preparation</span>` +
     `<span class="status-pill status-${status}">${status}</span></div>` +
+    `<div class="muted">Mode: ${escapeHtml(plan.mode)}</div>` +
+    `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
     `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
+    (plan.official_stats ? `<div class="muted">Official .pt stats: ${escapeHtml(plan.official_stats)}</div>` : '') +
     (plan.issues || []).map(issue =>
       `<div class="${issue.severity === 'error' ? 'cap-bad' : 'muted'}">${escapeHtml(issue.message)}</div>`
     ).join('') +
@@ -1654,6 +1785,9 @@ function commandPayload() {
     cuda_weight_share_ipc_name: document.getElementById('cmd-ws-ipc').value,
     cuda_weight_share_shm_wait_sec: document.getElementById('cmd-ws-wait').value,
     cuda_weight_share_trace: document.getElementById('cmd-ws-trace').checked,
+    cuda_weight_share_trace_depth: document.getElementById('cmd-ws-trace-depth').value,
+    cuda_weight_share_trace_normal_allocs: document.getElementById('cmd-ws-trace-normal').checked,
+    cuda_weight_share_suppress_master_free: document.getElementById('cmd-ws-suppress-free').checked,
   };
 }
 

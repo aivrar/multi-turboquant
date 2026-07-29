@@ -109,16 +109,14 @@ TriAttention pruning is implemented (KVX-2). Multi-TurboQuant mirrors that
 guardrail in command generation, compatibility checks, and UI warnings.
 
 Godzilla TriAttention calibration is a separate, per-model offline step. Its
-runtime `.triattention` file is produced by a compatible Python calibrator from
-the matching Hugging Face checkpoint, not from the GGUF. The current Godzilla
-checkout does not bundle `calibrate-triattention.py`, and its current lab policy
-treats TriAttention as experimental, opt-in, and manually calibrated. The
-llama-cpp-turboquant repository cited by older documentation also does not
-currently contain the documented Python script or an implemented native
-calibration flag, so it is not a safe implementation source. Multi-TurboQuant
-reuses a finished stats file and automatically selects a bundled calibrator if
-a compatible future checkout ships one; it does not synthesize unverified
-model statistics.
+runtime `.triattention` file can now be produced from the official
+WeianMao/triattention Python calibrator and the matching Hugging Face checkpoint,
+not from the GGUF. Multi-TurboQuant converts the official `.pt` payload to
+Godzilla v1 and validates the result. This route does not use `llama-cli`; the
+current Godzilla binary has no implemented native calibration command. The
+older checkout-owned PowerShell workflow remains an explicit fallback for
+compatible checkouts. Multi-TurboQuant never synthesizes unverified model
+statistics and reuses existing artifacts only after strict validation.
 
 ## Sources
 

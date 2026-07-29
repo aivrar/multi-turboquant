@@ -111,6 +111,7 @@ mtq-env list
 mtq-env plan fastdms
 mtq-env plan flashattention --json
 mtq-env plan lmcache
+mtq-env plan triattention
 mtq-env plan rocketkv
 ```
 
@@ -138,6 +139,10 @@ mtq-env create fastdms --build-from-source --yes
 # Use an already checked-out, reviewed package instead of the default source
 mtq-env plan fastdms --local-source /opt/addons/FastDMS
 mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
+
+# Official TriAttention checkout and calibrator dependencies
+mtq-env plan triattention --local-source /opt/addons/triattention --max-jobs 2
+mtq-env create triattention --local-source /opt/addons/triattention --max-jobs 2 --yes
 ```
 
 Source mode is opt-in and is currently reviewed only for the `flashattention`
@@ -149,7 +154,8 @@ than applying an unreviewed source-build procedure.
 
 `--local-source PATH` addresses a different case: installing the profile's
 primary package from an existing checkout. It is available for
-`flashattention`, `fastdms`, `lmcache`, `minference`, and `sageattention`.
+`flashattention`, `fastdms`, `lmcache`, `minference`, `sageattention`, and
+`triattention`.
 Planning resolves the path and verifies a profile-specific marker set (for
 example `setup.py`, the import package, and `csrc` where applicable). The
 generated project replaces only that package requirement with a
@@ -157,6 +163,10 @@ generated project replaces only that package requirement with a
 other reviewed pin, Python constraint, CUDA check, validation import, and
 isolation boundary stays in force. A missing marker or unsupported profile is
 an error before any write.
+
+Local-checkout and forced-source builds default to `MAX_JOBS=2`. Pass
+`--max-jobs N` (1-64) to choose another bounded concurrency value. The value is
+applied to the child `uv sync` process and never changes the caller's environment.
 
 Local paths are non-editable by default, matching `uv` project-source
 semantics. Scanner discovery remains read-only: choosing and creating the
@@ -204,6 +214,7 @@ eligible for the reviewed profile.
 | `lmcache` | Installable | LMCache 0.5.2, PyTorch 2.11.0 CUDA 13.0, and OpenAI 2.46.0 | Linux CUDA; imports `lmcache.c_ops`, checks Torch CUDA 13, and exposes the standalone CLI |
 | `minference` | Installable | Official v0.1.6 source commit `d76b76e`, Transformers 4.x, and PyTorch 2.7.1 CUDA 12.6 | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports Torch, Triton, and MInference |
 | `sageattention` | Installable | Audited upstream commit `d1a57a5`, PyTorch 2.7.1 CUDA 12.6, and build helpers | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports SageAttention |
+| `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers, Accelerate, and SentencePiece | Linux CUDA + Git; imports the official calibration stack and supplies the UI's automatic calibration Python |
 | `maru` | Blocked | Upstream installer builds a host C++ resource manager and expects CXL `/dev/dax` | Use upstream installation on a dedicated CXL host |
 | `speculative_prefill` | Blocked | Unpackaged monkeypatch pinned to Torch 2.4.0 and vLLM 0.6.3.post1 | Requires a separately qualified legacy source checkout |
 | `rocketkv` | Blocked | Unpackaged research snapshot under a non-commercial research license | Not exposed as a supported serving add-on |

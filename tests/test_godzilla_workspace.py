@@ -3,6 +3,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import torch
+
+from multi_turboquant.calibration.godzilla_triattention import (
+    convert_official_triattention_stats,
+)
 from multi_turboquant.integration.godzilla_workspace import (
     inspect_godzilla_checkout,
     plan_godzilla_triattention,
@@ -29,6 +34,36 @@ def _godzilla_checkout(root: Path) -> Path:
     (checkout / "scripts" / "resolve-triattention-hf.py").write_text("", encoding="utf-8")
     (checkout / "build" / "bin" / "llama-server.exe").write_bytes(b"exe")
     return checkout
+
+
+def _write_valid_calibration(output: Path) -> None:
+    source = output.with_suffix(".pt")
+    torch.save(
+        {
+            "metadata": {
+                "head_dim": 4,
+                "rope_style": "half",
+                "sampled_heads": [[0, 0]],
+            },
+            "stats": {
+                "layer00_head00": {
+                    "q_mean_real": torch.tensor([0.1, 0.2]),
+                    "q_mean_imag": torch.tensor([0.2, 0.1]),
+                    "q_abs_mean": torch.tensor([0.5, 0.5]),
+                }
+            },
+        },
+        source,
+    )
+    convert_official_triattention_stats(
+        source,
+        output,
+        model_name="model",
+        num_layers=1,
+        num_attention_heads=1,
+        num_key_value_heads=1,
+        rope_theta=10_000.0,
+    )
 
 
 def test_godzilla_checkout_inspection_reports_features_and_binary(tmp_path: Path):
@@ -76,6 +111,7 @@ def test_godzilla_triattention_plan_uses_explicit_prerequisites(tmp_path: Path):
         hf_model="org/source-model",
         n_tokens=4096,
         device="CPU",
+        mode="godzilla_script",
         shell_executable="pwsh-test",
     )
 
@@ -127,6 +163,7 @@ def test_godzilla_plan_uses_bundled_calibrator_when_present(tmp_path: Path):
         model,
         python=python,
         hf_model="org/source-model",
+        mode="godzilla_script",
         shell_executable="pwsh-test",
     )
 
@@ -140,7 +177,7 @@ def test_godzilla_plan_reuses_existing_calibration_without_toolchain(tmp_path: P
     model = tmp_path / "model.gguf"
     output = tmp_path / "model.triattention"
     model.write_bytes(b"gguf")
-    output.write_bytes(b"existing stats")
+    _write_valid_calibration(output)
 
     plan = plan_godzilla_triattention(checkout, model, output=output)
     runner_called = False
@@ -172,6 +209,7 @@ def test_godzilla_triattention_run_verifies_output(tmp_path: Path):
         python=python,
         calibrator=calibrator,
         hf_model="org/source-model",
+        mode="godzilla_script",
         shell_executable="pwsh-test",
     )
     observed: dict[str, object] = {}
@@ -180,7 +218,7 @@ def test_godzilla_triattention_run_verifies_output(tmp_path: Path):
         observed["argv"] = argv
         observed.update(kwargs)
         plan.output.parent.mkdir(parents=True)
-        plan.output.write_bytes(b"stats")
+        _write_valid_calibration(plan.output)
         return subprocess.CompletedProcess(argv, 0, stdout="prepared\n", stderr="")
 
     report = run_godzilla_triattention(plan, runner=runner)
@@ -190,3 +228,78 @@ def test_godzilla_triattention_run_verifies_output(tmp_path: Path):
     assert observed["argv"] == list(plan.command)
     assert observed["cwd"] == checkout.resolve()
     assert observed["check"] is False
+
+
+def test_godzilla_official_python_plan_does_not_require_powershell(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python.exe"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("coherent calibration text", encoding="utf-8")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        n_tokens=1024,
+        device="cuda",
+        mode="official_python",
+        attention_implementation="sdpa",
+        shell_executable=None,
+    )
+
+    assert plan.ready is True
+    assert plan.mode == "official_python"
+    assert plan.command[0] == str(python.resolve())
+    assert "calibrate" in plan.command
+    assert "--stats-output" in plan.command
+    assert not any("PowerShell" in issue.message for issue in plan.issues)
+
+
+def test_godzilla_official_convert_plan_skips_model_forward_pass(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    official_stats = tmp_path / "official.pt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    torch.save(
+        {
+            "metadata": {"head_dim": 4, "rope_style": "half", "sampled_heads": [[0, 0]]},
+            "stats": {
+                "layer00_head00": {
+                    "q_mean_real": torch.tensor([0.1, 0.2]),
+                    "q_mean_imag": torch.tensor([0.2, 0.1]),
+                    "q_abs_mean": torch.tensor([0.5, 0.5]),
+                }
+            },
+        },
+        official_stats,
+    )
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        official_stats_input=official_stats,
+        hf_model="org/model",
+        mode="official_convert",
+    )
+
+    assert plan.ready
+    assert plan.official_stats_input == official_stats.resolve()
+    assert "convert" in plan.command
+    assert "calibrate" not in plan.command
+    assert "--input" not in plan.command
