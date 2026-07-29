@@ -590,6 +590,11 @@ path that bring those additions together.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 
+## Support the Project
+
+If Multi-TurboQuant is useful to you, you can support its continued development
+through [GitHub Sponsors](https://github.com/sponsors/aivrar).
+
 ## License
 
 MIT
