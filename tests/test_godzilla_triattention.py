@@ -196,3 +196,45 @@ def test_official_checkout_inspection_requires_expected_markers(tmp_path: Path):
 
     assert report["valid"] is True
     assert report["calibrator"] == str((checkout / "scripts" / "calibrate.py").resolve())
+
+
+def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                '{"accelerate": "1.0", "cuda_available": true, "torch": "2.7.1", '
+                '"torch_cuda": "12.6", "transformers": "4.53"}\n'
+            ),
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(python, runner=runner)
+
+    assert report["valid"] is True
+    assert report["report"]["torch_cuda"] == "12.6"
+
+
+def test_calibration_python_preflight_rejects_missing_cuda(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                '{"accelerate": "1.0", "cuda_available": false, "torch": "2.7.1", '
+                '"torch_cuda": null, "transformers": "4.53"}\n'
+            ),
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(python, runner=runner)
+
+    assert report["valid"] is False
+    assert "CPU-only" in report["issues"][0]

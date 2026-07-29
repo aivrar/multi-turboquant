@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from ..calibration.godzilla_triattention import (
+    inspect_calibration_python,
     inspect_godzilla_triattention_file,
     inspect_official_triattention_calibrator,
 )
@@ -138,7 +139,10 @@ class GodzillaCalibrationPlan:
     mode: str
     calibration_input: Path | None
     official_stats: Path | None
+    official_stats_input: Path | None
     attention_implementation: str
+    dependency_validation: Mapping[str, object] | None
+    dependency_override: bool
     command: tuple[str, ...]
     environment: tuple[tuple[str, str], ...]
     issues: tuple[GodzillaIssue, ...]
@@ -162,7 +166,12 @@ class GodzillaCalibrationPlan:
                 str(self.calibration_input) if self.calibration_input is not None else None
             ),
             "official_stats": str(self.official_stats) if self.official_stats is not None else None,
+            "official_stats_input": (
+                str(self.official_stats_input) if self.official_stats_input is not None else None
+            ),
             "attention_implementation": self.attention_implementation,
+            "dependency_validation": self.dependency_validation,
+            "dependency_override": self.dependency_override,
             "command": list(self.command),
             "environment": dict(self.environment),
             "issues": [issue.to_dict() for issue in self.issues],
@@ -179,11 +188,15 @@ def plan_godzilla_triattention(
     python: str | Path | None = None,
     calibrator: str | Path | None = None,
     calibration_input: str | Path | None = None,
+    official_stats_input: str | Path | None = None,
     hf_model: str | None = None,
     n_tokens: int = 2048,
     device: str = "cuda",
     mode: str = "official_python",
     attention_implementation: str = "sdpa",
+    verify_dependencies: bool = False,
+    dependency_override: bool = False,
+    dependency_runner=subprocess.run,
     shell_executable: str | None = None,
 ) -> GodzillaCalibrationPlan:
     """Plan a validated official-Python or checkout-owned calibration workflow."""
@@ -212,14 +225,27 @@ def plan_godzilla_triattention(
         or (bundled_calibrator if normalized_mode == "godzilla_script" else None)
     )
     calibration_input_value = calibration_input or os.environ.get("TRIATTENTION_CALIBRATION_TEXT")
+    official_stats_input_value = official_stats_input or os.environ.get(
+        "TRIATTENTION_OFFICIAL_STATS"
+    )
     python_path = Path(python_value).expanduser().resolve() if python_value else None
     calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
     calibration_input_path = (
         Path(calibration_input_value).expanduser().resolve() if calibration_input_value else None
     )
-    official_stats = output_path.with_suffix(".official.pt")
+    official_stats_input_path = (
+        Path(official_stats_input_value).expanduser().resolve()
+        if official_stats_input_value
+        else None
+    )
+    official_stats = (
+        official_stats_input_path
+        if normalized_mode == "official_convert"
+        else output_path.with_suffix(".official.pt")
+    )
     output_exists = output_path.is_file()
     issues: list[GodzillaIssue] = []
+    dependency_validation: Mapping[str, object] | None = None
 
     if not inspection["valid"]:
         issues.append(
@@ -229,12 +255,12 @@ def plan_godzilla_triattention(
                 "; ".join(str(item) for item in inspection.get("issues", [])),
             )
         )
-    if normalized_mode not in {"official_python", "godzilla_script"}:
+    if normalized_mode not in {"official_python", "official_convert", "godzilla_script"}:
         issues.append(
             GodzillaIssue(
                 "error",
                 "invalid_calibration_mode",
-                "Calibration mode must be 'official_python' or 'godzilla_script'.",
+                "Calibration mode must be official_python, official_convert, or godzilla_script.",
             )
         )
     ensure_script = checkout_path / "scripts" / "ensure-triattention.ps1"
@@ -265,7 +291,7 @@ def plan_godzilla_triattention(
                 "Select TRIATTENTION_PYTHON: a Python executable with Torch and calibrator dependencies.",
             )
         )
-    if not output_exists:
+    if not output_exists and normalized_mode in {"official_python", "godzilla_script"}:
         if calibrator_path is None or not calibrator_path.is_file():
             message = (
                 "Select the official WeianMao/triattention scripts/calibrate.py."
@@ -284,18 +310,30 @@ def plan_godzilla_triattention(
                         "; ".join(str(item) for item in calibrator_inspection["issues"]),
                     )
                 )
-        if normalized_mode == "official_python" and (
-            calibration_input_path is None
-            or not calibration_input_path.is_file()
-            or calibration_input_path.stat().st_size == 0
-        ):
-            issues.append(
-                GodzillaIssue(
-                    "error",
-                    "missing_calibration_input",
-                    "Select a non-empty plain-text calibration input file.",
-                )
+    if not output_exists and normalized_mode == "official_python" and (
+        calibration_input_path is None
+        or not calibration_input_path.is_file()
+        or calibration_input_path.stat().st_size == 0
+    ):
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "missing_calibration_input",
+                "Select a non-empty plain-text calibration input file.",
             )
+        )
+    if not output_exists and normalized_mode == "official_convert" and (
+        official_stats_input_path is None
+        or not official_stats_input_path.is_file()
+        or official_stats_input_path.suffix.lower() not in {".pt", ".pth"}
+    ):
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "missing_official_stats",
+                "Select an existing official TriAttention .pt statistics file to convert.",
+            )
+        )
     if not 128 <= n_tokens <= 32_768:
         issues.append(
             GodzillaIssue("error", "invalid_token_count", "Calibration tokens must be 128 to 32768.")
@@ -314,15 +352,20 @@ def plan_godzilla_triattention(
                 "Attention implementation must be eager, sdpa, or flash_attention_2.",
             )
         )
-    if not output_exists and normalized_hf is None and normalized_mode == "official_python":
+    if (
+        not output_exists
+        and normalized_hf is None
+        and normalized_mode in {"official_python", "official_convert"}
+    ):
         issues.append(
             GodzillaIssue(
                 "error",
                 "missing_hf_model",
-                "Provide the matching Hugging Face model ID or local Transformers directory.",
+                "Provide the matching Hugging Face model ID or local Transformers directory "
+                "for model-shape metadata.",
             )
         )
-    elif not output_exists and normalized_hf is None:
+    elif not output_exists and normalized_hf is None and normalized_mode == "godzilla_script":
         if resolver_script.is_file():
             issues.append(
                 GodzillaIssue(
@@ -375,7 +418,7 @@ def plan_godzilla_triattention(
                     f"({artifact['sampled_heads']} sampled heads).",
                 )
             )
-    else:
+    elif normalized_mode == "official_python":
         issues.append(
             GodzillaIssue(
                 "warning",
@@ -383,14 +426,69 @@ def plan_godzilla_triattention(
                 "Calibration can download and load the matching Hugging Face checkpoint.",
             )
         )
+    elif normalized_mode == "official_convert":
+        issues.append(
+            GodzillaIssue(
+                "info",
+                "model_config_download_possible",
+                "Conversion loads only matching Hugging Face configuration metadata, not model weights.",
+            )
+        )
 
-    if normalized_mode == "official_python":
+    if (
+        not output_exists
+        and verify_dependencies
+        and normalized_mode in {"official_python", "official_convert"}
+        and python_path is not None
+        and python_path.is_file()
+    ):
+        python_check = inspect_calibration_python(
+            python_path,
+            device=normalized_device,
+            runner=dependency_runner,
+        )
+        report = python_check.get("report")
+        dependency_validation = report if isinstance(report, Mapping) else None
+        if python_check["valid"]:
+            issues.append(
+                GodzillaIssue(
+                    "info",
+                    "calibration_dependencies_ready",
+                    "Calibration Python successfully imported torch, transformers, and accelerate.",
+                )
+            )
+        else:
+            message = "; ".join(str(item) for item in python_check["issues"])
+            if dependency_override:
+                issues.append(
+                    GodzillaIssue(
+                        "warning",
+                        "calibration_dependency_override",
+                        "Automatic dependency validation failed, but the manual override is active: "
+                        f"{message}. Calibration may still fail.",
+                    )
+                )
+            else:
+                issues.append(
+                    GodzillaIssue(
+                        "error",
+                        "calibration_dependencies_missing",
+                        f"Calibration dependency check failed: {message}",
+                    )
+                )
+
+    if normalized_mode in {"official_python", "official_convert"}:
         issues.append(
             GodzillaIssue(
                 "info",
                 "no_llama_cli_required",
-                "This mode runs the official Python/Hugging Face calibrator and a validated "
-                "Godzilla format conversion; it does not use llama-cli.",
+                (
+                    "This mode runs the official Python/Hugging Face calibrator and a validated "
+                    "Godzilla format conversion; it does not use llama-cli."
+                    if normalized_mode == "official_python"
+                    else "This mode converts existing official .pt statistics to the validated "
+                    "Godzilla format; it does not rerun calibration or use llama-cli."
+                ),
             )
         )
         if not output_exists:
@@ -398,8 +496,8 @@ def plan_godzilla_triattention(
                 GodzillaIssue(
                     "warning",
                     "official_remote_code",
-                    "The official calibrator loads Hugging Face models with trust_remote_code=True; "
-                    "review and trust the selected model source before continuing.",
+                    "Hugging Face metadata/model loading uses trust_remote_code=True; review and "
+                    "trust the selected model source before continuing.",
                 )
             )
 
@@ -443,6 +541,23 @@ def plan_godzilla_triattention(
             "--attn-implementation",
             normalized_attention,
         ]
+    elif (
+        not output_exists
+        and normalized_mode == "official_convert"
+        and python_path is not None
+        and official_stats_input_path is not None
+        and normalized_hf is not None
+    ):
+        converter = Path(__file__).resolve().parents[1] / "calibration" / "godzilla_triattention.py"
+        command = [
+            str(python_path),
+            str(converter),
+            "convert",
+            str(official_stats_input_path),
+            str(output_path),
+            "--model",
+            normalized_hf,
+        ]
     elif not output_exists and normalized_mode == "godzilla_script" and shell is not None:
         command = [
             shell,
@@ -476,8 +591,15 @@ def plan_godzilla_triattention(
         device=normalized_device,
         mode=normalized_mode,
         calibration_input=calibration_input_path,
-        official_stats=official_stats if normalized_mode == "official_python" else None,
+        official_stats=(
+            official_stats
+            if normalized_mode in {"official_python", "official_convert"}
+            else None
+        ),
+        official_stats_input=official_stats_input_path,
         attention_implementation=normalized_attention,
+        dependency_validation=dependency_validation,
+        dependency_override=dependency_override,
         command=tuple(command),
         environment=tuple(environment),
         issues=tuple(issues),

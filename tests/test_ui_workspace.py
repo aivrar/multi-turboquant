@@ -8,9 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from multi_turboquant.optimizations import EnvironmentContext
+from multi_turboquant.optimizations.environments import environment_python
 from multi_turboquant.ui.discovery import (
     inspect_flashattention_source,
     scan_addon_roots,
+    scan_environment_profiles,
     scan_models,
 )
 from multi_turboquant.ui.runtime import (
@@ -131,6 +134,7 @@ def test_addon_scan_recognizes_official_triattention_checkout(tmp_path: Path):
     (checkout / "triattention").mkdir(parents=True)
     (checkout / "docs").mkdir()
     (checkout / "scripts").mkdir()
+    (checkout / "setup.py").write_text("", encoding="utf-8")
     (checkout / "docs" / "calibration.md").write_text("calibration", encoding="utf-8")
     (checkout / "scripts" / "calibrate.py").write_text(
         "AutoModelForCausalLM --max-length --attn-implementation "
@@ -144,6 +148,62 @@ def test_addon_scan_recognizes_official_triattention_checkout(tmp_path: Path):
     assert addon["kind"] == "triattention"
     assert addon["source"]["valid"] is True
     assert Path(addon["source"]["calibrator"]).name == "calibrate.py"
+    assert addon["environment_profile"] == "triattention"
+    assert addon["local_source"]["valid"] is True
+
+
+def test_environment_scan_validates_before_suggesting_rebuild(tmp_path: Path, monkeypatch):
+    from multi_turboquant.optimizations import environments
+
+    context = EnvironmentContext(
+        os="linux",
+        compute="cuda",
+        available_executables=frozenset({"uv", "git", "nvcc"}),
+        cuda_toolkit_version=(12, 6),
+    )
+    monkeypatch.setattr(environments, "detect_environment_context", lambda **kwargs: context)
+    monkeypatch.setattr(
+        environments,
+        "check_environment",
+        lambda plan: {"torch": "2.7.1", plan.profile.validation_modules[-1]: "test"},
+    )
+    interpreter = environment_python((tmp_path / "triattention").resolve(), os_name="linux")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("python", encoding="utf-8")
+
+    result = scan_environment_profiles(tmp_path)
+    profile = next(item for item in result["profiles"] if item["id"] == "triattention")
+
+    assert profile["status"] == "installed"
+    assert profile["validation"]["torch"] == "2.7.1"
+
+
+def test_environment_scan_manual_override_warns_without_suggesting_rebuild(
+    tmp_path: Path, monkeypatch
+):
+    from multi_turboquant.optimizations import environments
+
+    context = EnvironmentContext(
+        os="linux",
+        compute="cuda",
+        available_executables=frozenset({"uv", "git", "nvcc"}),
+        cuda_toolkit_version=(12, 6),
+    )
+    monkeypatch.setattr(environments, "detect_environment_context", lambda **kwargs: context)
+    monkeypatch.setattr(
+        environments,
+        "check_environment",
+        lambda plan: (_ for _ in ()).throw(RuntimeError("extension import failed")),
+    )
+    interpreter = environment_python((tmp_path / "triattention").resolve(), os_name="linux")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("python", encoding="utf-8")
+
+    result = scan_environment_profiles(tmp_path, manual_dependency_override=True)
+    profile = next(item for item in result["profiles"] if item["id"] == "triattention")
+
+    assert profile["status"] == "manual"
+    assert any(issue["code"] == "manual_dependency_override" for issue in profile["issues"])
 
 
 def test_addon_scan_explains_empty_configuration():

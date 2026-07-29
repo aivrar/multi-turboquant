@@ -266,3 +266,40 @@ def test_godzilla_official_python_plan_does_not_require_powershell(tmp_path: Pat
     assert "calibrate" in plan.command
     assert "--stats-output" in plan.command
     assert not any("PowerShell" in issue.message for issue in plan.issues)
+
+
+def test_godzilla_official_convert_plan_skips_model_forward_pass(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    official_stats = tmp_path / "official.pt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    torch.save(
+        {
+            "metadata": {"head_dim": 4, "rope_style": "half", "sampled_heads": [[0, 0]]},
+            "stats": {
+                "layer00_head00": {
+                    "q_mean_real": torch.tensor([0.1, 0.2]),
+                    "q_mean_imag": torch.tensor([0.2, 0.1]),
+                    "q_abs_mean": torch.tensor([0.5, 0.5]),
+                }
+            },
+        },
+        official_stats,
+    )
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        official_stats_input=official_stats,
+        hf_model="org/model",
+        mode="official_convert",
+    )
+
+    assert plan.ready
+    assert plan.official_stats_input == official_stats.resolve()
+    assert "convert" in plan.command
+    assert "calibrate" not in plan.command
+    assert "--input" not in plan.command

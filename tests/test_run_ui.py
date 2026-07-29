@@ -443,6 +443,7 @@ def test_environment_scan_forwards_cuda_toolkit_selection(monkeypatch):
                 "cuda_toolkit": "/usr/local/cuda-12.6",
                 "local_source_profile": None,
                 "local_source": None,
+                "manual_dependency_override": False,
             },
         )
     ]
@@ -479,6 +480,7 @@ def test_environment_creation_forwards_cuda_toolkit_selection(monkeypatch):
                 "cuda_toolkit": "/usr/local/cuda-12.6",
                 "local_source": None,
                 "build_from_source": False,
+                "max_jobs": 2,
             },
         )
     ]
@@ -597,6 +599,7 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
             "calibration_input": str(calibration_input),
             "hf_model": "org/model",
             "mode": "official_python",
+            "dependency_override": True,
         }
     )
 
@@ -620,6 +623,66 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
         )
 
 
+def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
+    tmp_path, monkeypatch
+):
+    addon_root = tmp_path / "addons"
+    checkout = addon_root / "godzilla-llama.cpp"
+    triattention = addon_root / "triattention"
+    calibrator = triattention / "scripts" / "calibrate.py"
+    environment_root = tmp_path / "envs"
+    calibration_python = environment_root / "triattention" / ".venv" / "Scripts" / "python.exe"
+    model_root = tmp_path / "models"
+    model = model_root / "model.gguf"
+    calibration_input = model_root / "calibration.txt"
+    (checkout / "ggml").mkdir(parents=True)
+    (checkout / "common").mkdir()
+    (checkout / "scripts").mkdir()
+    (checkout / "CMakeLists.txt").write_text("", encoding="utf-8")
+    (checkout / "GODZILLA_KING.md").write_text("", encoding="utf-8")
+    (checkout / "common" / "arg.cpp").write_text("kvarn", encoding="utf-8")
+    (triattention / "triattention").mkdir(parents=True)
+    (triattention / "docs").mkdir()
+    (triattention / "setup.py").write_text("", encoding="utf-8")
+    (triattention / "docs" / "calibration.md").write_text("docs", encoding="utf-8")
+    calibrator.parent.mkdir()
+    calibrator.write_text(
+        "AutoModelForCausalLM --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_python.parent.mkdir(parents=True)
+    calibration_python.write_bytes(b"python")
+    model_root.mkdir()
+    model.write_bytes(b"gguf")
+    calibration_input.write_text("coherent calibration text", encoding="utf-8")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save(
+        {
+            **DEFAULT_UI_SETTINGS,
+            "model_root": str(model_root),
+            "environment_root": str(environment_root),
+            "addon_roots": [str(addon_root)],
+        }
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+
+    result = run_ui.api_plan_godzilla(
+        {
+            "checkout": str(checkout),
+            "gguf": str(model),
+            "calibration_input": str(calibration_input),
+            "hf_model": "org/model",
+            "mode": "official_python",
+            "dependency_override": True,
+        }
+    )
+
+    assert result["ready"] is True
+    assert result["python"] == str(calibration_python.resolve())
+    assert result["calibrator"] == str(calibrator.resolve())
+
+
 def test_godzilla_creation_requires_confirmation():
     with pytest.raises(ValueError, match="explicit confirmation"):
         run_ui.api_create_godzilla({"confirm": False})
@@ -633,11 +696,13 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
         python=tmp_path / "python.exe",
         calibrator=tmp_path / "calibrator.py",
         calibration_input=tmp_path / "calibration.txt",
+        official_stats_input=None,
         hf_model="org/model",
         n_tokens=2048,
         device="cuda",
         mode="official_python",
         attention_implementation="sdpa",
+        dependency_override=False,
     )
     calls = []
 
@@ -662,11 +727,13 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
                 "python": plan.python,
                 "calibrator": plan.calibrator,
                 "calibration_input": plan.calibration_input,
+                "official_stats_input": None,
                 "hf_model": "org/model",
                 "n_tokens": 2048,
                 "device": "cuda",
                 "mode": "official_python",
                 "attention_implementation": "sdpa",
+                "dependency_override": False,
             },
         )
     ]

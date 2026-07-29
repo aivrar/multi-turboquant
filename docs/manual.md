@@ -743,7 +743,7 @@ mtq-godzilla-triattention calibrate \
   --model organization/original-model \
   --input calibration.txt \
   --output model.triattention \
-  --max-length 32768 \
+  --max-length 2048 \
   --device cuda \
   --attn-implementation sdpa
 ```
@@ -772,10 +772,13 @@ query statistics. The official script loads models with
 `trust_remote_code=True`; inspect and trust the chosen model source first.
 
 The web UI's Setup view detects both Godzilla and official TriAttention source
-checkouts. **Official Python** is the default mode: choose the official
-`scripts/calibrate.py`, a non-empty coherent text file, the calibration Python,
-the GGUF, and the exact Hugging Face model. **Godzilla checkout script** retains
-the older `scripts/ensure-triattention.ps1` workflow for compatible checkouts.
+checkouts. **Generate stats + convert** is the default mode: selecting the
+official checkout also selects its `mtq-env` profile, and the validated
+TriAttention environment Python is used automatically. Choose a non-empty
+coherent text file, the GGUF, and the exact Hugging Face model. **Convert
+existing official .pt** skips the forward pass while preserving model-metadata
+and output validation. **Godzilla checkout script** retains the older
+`scripts/ensure-triattention.ps1` workflow for compatible checkouts.
 The UI reports missing prerequisites before it starts a confirmed background
 job, validates new and existing output artifacts, and never builds the Godzilla
 CMake project. KVarN requires no calibration and remains a launch-time cache
@@ -1066,8 +1069,8 @@ for a different port, `--no-browser` to suppress auto-open,
 - **Setup & Add-ons**: Save workspace paths, inspect configured add-on and
   FlashAttention source folders, select a matching side-by-side CUDA toolkit,
   select a reviewed local checkout for an isolated dependency profile, and
-  inspect a Godzilla tree or prepare its model-specific TriAttention artifact
-  after explicit confirmation
+  inspect a Godzilla tree or generate/convert its model-specific TriAttention
+  artifact after explicit confirmation
 
 ### How it works
 
@@ -1081,6 +1084,11 @@ profile. The UI verifies reviewed source markers and `uv` builds the checkout
 with its dependencies inside that profile; it does not install those packages
 into Multi-TurboQuant's environment. Godzilla is inspected separately because
 it is a CMake/llama.cpp source tree rather than a Python package.
+
+Local checkout builds default to `MAX_JOBS=2` and accept a 1-64 override. The
+environment scan imports validation modules before suggesting another build;
+the manual override is explicitly unverified and warns that runtime failure is
+still possible.
 
 Settings and form defaults are stored in a versioned JSON file at
 `~/.multi-turboquant/ui-settings.json` unless overridden. This default is
@@ -1510,6 +1518,7 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Local UI workspace, persistent defaults, model/add-on discovery, and recent option exposure | jawadala / issue #19 | Community contribution |
 | Local checkout dependency builds and Godzilla source/setup recognition | jawadala / issue #25 | Community contribution |
 | Official TriAttention calibration discovery, no-llama-cli workflow, and CUDA weight-share documentation | jawadala / issue #29 | Community contribution |
+| Bounded add-on builds, installed-environment validation, and streamlined TriAttention conversion workflow | jawadala / issue #31 | Community contribution |
 
 We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for the sustained issue reports that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, and official TriAttention calibration path.
 

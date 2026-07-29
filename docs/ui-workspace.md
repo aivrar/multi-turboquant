@@ -54,12 +54,19 @@ binary `.triattention` file. Producing that file is a model-specific offline
 calibration against the matching Hugging Face checkpoint; a discovered GGUF
 alone does not contain the required pre-RoPE query statistics.
 
-The default **Official Python** mode uses the official TriAttention checkout's
-`scripts/calibrate.py`, keeps its `.pt` output, converts that payload to
-Godzilla v1, and strictly reads the final artifact back. Select a non-empty
-calibration text, the exact Hugging Face model, and a Python environment with
-PyTorch and Transformers. The official script may download model data and uses
+The default **Generate stats + convert** mode uses the official TriAttention
+checkout's `scripts/calibrate.py`, keeps its `.pt` output, converts that payload
+to Godzilla v1, and strictly reads the final artifact back. Selecting a
+recognized official checkout also selects its reviewed `mtq-env` profile. Once
+that isolated environment is created and validated, the UI finds its Python
+automatically. Select a non-empty calibration text and the exact Hugging Face
+model. The official script may download model data and uses
 `trust_remote_code=True`; only continue with a model source you trust.
+
+**Convert existing official .pt** accepts stats that were already produced by
+the official script and skips the expensive model forward pass. It still loads
+the matching Hugging Face configuration to verify layer/head/RoPE metadata and
+then performs the same strict Godzilla artifact validation.
 
 This path does not call `llama-cli`. The UI does not offer a native llama-cli
 mode because the current Godzilla binary has no implemented calibration command.
@@ -101,15 +108,15 @@ Setup & Add-ons holds configuration that is changed less often:
 The scanners are bounded and inspect only configured roots. Add-on scanning
 runs at UI startup and shortly after its root list changes, while the manual
 button remains available. Results report the resolved roots, scan depth,
-directory count, invalid roots, and missing source markers. The scanner does
-not search an entire drive, follow directory symlinks, import third-party
-packages, or run source code. Recognized add-ons currently include
+directory count, invalid roots, and missing source markers. The add-on source
+scanner does not search an entire drive, follow directory symlinks, import
+third-party packages, or run source code. Recognized add-ons currently include
 FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
 Godzilla, and llama.cpp checkouts. Renamed Godzilla trees are recognized by
 `scripts/godzilla-paths.ps1`. FlashAttention inspection checks the expected
 source markers and reports version and Git remote metadata when available.
 
-For the five reviewed Python add-ons, a recognized checkout has a **Use for
+For the six reviewed Python add-ons, a recognized checkout has a **Use for
 profile** action. It fills the local-source profile and path controls. Refresh
 the profile plan before creation: the plan validates the checkout markers,
 then `uv` builds that package and resolves its dependencies in the selected
@@ -125,7 +132,7 @@ A recognized Godzilla tree has a separate action. Inspection reports its known
 source markers, KVarN and TriAttention flags, preparation/resolver scripts,
 bundled-calibrator status, and known `llama-server` build locations. A recognized
 official TriAttention checkout has a separate action that fills its validated
-`scripts/calibrate.py` path.
+`scripts/calibrate.py` path and selects its dependency profile.
 Multi-TurboQuant does not configure or compile the CMake project automatically;
 use Godzilla's documented build process. TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1
@@ -137,6 +144,11 @@ runs as a background job. The UI requires explicit confirmation because the
 operation creates files, resolves packages, and can build native extensions.
 The optional source-build checkbox is accepted only for profiles that declare a
 reviewed source-build path. Progress and command output appear in the job list.
+Local-checkout builds use `MAX_JOBS=2` by default and expose a bounded job-count
+control. Existing environments are import-validated before the UI offers
+Create/Repair. If that check is a false negative, the manual override marks the
+environment as manually accepted and displays a warning instead of claiming it
+was validated.
 The CUDA override does not install or replace a toolkit. It selects an existing
 toolkit whose major version matches the profile's PyTorch build and exports it
 through `CUDA_HOME`, `CUDA_PATH`, and `PATH` for the background job. Blocked

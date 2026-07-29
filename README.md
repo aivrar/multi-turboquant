@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-202%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-219%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -30,8 +30,9 @@ A Python toolkit that compresses the KV cache in large language models. The KV c
 
 Install it, pick a preset, and get the exact launch command for llama.cpp or vLLM with optimal compression. Or use it directly in your own inference code.
 
-Optional runtimes such as FastDMS, FlashAttention, LMCache, MInference, and
-SageAttention are managed through `mtq-env`. Each receives its own reviewed,
+Optional runtimes such as FastDMS, FlashAttention, LMCache, MInference,
+SageAttention, and the official TriAttention calibrator are managed through
+`mtq-env`. Each receives its own reviewed,
 locked `uv` project and virtual environment, so experimenting with an add-on
 does not replace packages in the core Multi-TurboQuant environment.
 
@@ -88,7 +89,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-213 automated test cases: 202 pass in the current Windows CPU environment and
+230 automated test cases: 219 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -97,9 +98,9 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
-| `test_environments.py` + `test_env_cli.py` | 28 | Locked profile rendering, local checkout sources, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 14 | Official `.pt` conversion, strict Godzilla v1 round trips, both planner modes, prerequisite checks, reuse, and verified preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 42 | Command generation, disconnect handling, rendered JavaScript, settings, bounded Godzilla/TriAttention discovery, managed processes, local sources, and confirmed background jobs |
+| `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 17 | Official calibration/conversion, dependency preflight, strict Godzilla v1 round trips, three planner modes, reuse, and verified preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 45 | Command generation, disconnect handling, rendered JavaScript, settings, dependency-state validation/override, automatic calibrator/interpreter selection, bounded discovery, managed processes, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
@@ -203,7 +204,7 @@ mtq-godzilla-triattention calibrate \
   --model organization/original-model \
   --input calibration.txt \
   --output model.triattention \
-  --max-length 32768 \
+  --max-length 2048 \
   --device cuda \
   --attn-implementation sdpa
 ```
@@ -214,6 +215,11 @@ atomically, and reads it back with strict shape, index, finite-value, and file-s
 validation. An existing official payload can be converted separately with
 `mtq-godzilla-triattention convert`, and a finished artifact can be checked with
 `mtq-godzilla-triattention inspect`.
+
+The Setup & Add-ons view recognizes the official checkout, can build its
+isolated calibration environment from that directory with `MAX_JOBS=2`, and
+automatically uses the validated interpreter. Its second official mode converts
+an existing `.pt` payload without repeating the model forward pass.
 
 This route does not use `llama-cli`. A native `llama-cli` calibration choice is
 not offered because the current Godzilla binary does not expose a real calibration
@@ -331,8 +337,8 @@ Multi-TurboQuant or KVarN layouts. See [the optimization integration notes](docs
 
 ### Isolated add-on environments
 
-FastDMS, FlashAttention, LMCache, MInference, and SageAttention have stricter or
-mutually incompatible runtime stacks. Their dependencies remain completely
+FastDMS, FlashAttention, LMCache, MInference, SageAttention, and TriAttention
+calibration have stricter or mutually incompatible runtime stacks. Their dependencies remain completely
 optional and are managed in separate, locked environments. Reviewed research
 projects also appear in the list with an explicit reason when automatic
 installation would be unsafe or incomplete:
@@ -344,6 +350,7 @@ mtq-env plan fastdms
 mtq-env plan flashattention
 mtq-env plan lmcache
 mtq-env plan minference
+mtq-env plan triattention
 mtq-env plan rocketkv  # reports its research/license block; changes nothing
 
 # Explicitly create .mtq/environments/fastdms/{pyproject.toml,uv.lock,.venv}
@@ -357,6 +364,9 @@ mtq-env create fastdms --build-from-source --yes
 # Build one reviewed add-on package from an existing local checkout
 mtq-env plan fastdms --local-source /opt/addons/FastDMS
 mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
+
+# Build the official calibrator environment from its checkout with bounded jobs
+mtq-env create triattention --local-source /opt/addons/triattention --max-jobs 2 --yes
 
 # Run the standalone engine without activating or modifying the current environment
 mtq-env run fastdms -- python -c "import fastdms; print(fastdms.__version__)"
@@ -374,12 +384,18 @@ the normal wheel-first behavior of either profile. See
 [the dependency-profile table and validation record](docs/optimizations.md#built-in-profiles).
 
 `--local-source` is a separate option for a checkout you already have. It is
-accepted only for the five reviewed installable profiles, verifies the
+accepted only for the six reviewed installable profiles, verifies the
 profile-specific source markers, and records an absolute local-path source in
 that profile's generated `uv` project. `uv` then builds the selected package
 and resolves its declared dependencies inside the isolated environment. It
 does not execute scanner-discovered files in the core environment or turn an
 arbitrary source folder into an installable add-on.
+
+`--max-jobs 2` controls the `MAX_JOBS` environment value used by source/native
+builds; local-checkout builds default to two jobs when it is omitted. The UI
+validates existing isolated environments before suggesting another build. Its
+manual dependency override suppresses a rebuild recommendation only when the
+automatic import check is known to be wrong, and displays a runtime-risk warning.
 
 Native extensions must be compiled with the same CUDA major used by the
 profile's PyTorch build. A newer NVIDIA driver may remain installed while a
@@ -503,8 +519,9 @@ The browser UI now has two focused views:
   confirmation. A local checkout changes the package source, not its CUDA ABI,
   so the selected toolkit must still match the profile's PyTorch CUDA major.
   The view also recognizes renamed Godzilla trees by their marker script,
-  reports KVarN/TriAttention support and existing builds, and can run the
-  checkout's manual TriAttention preparation only after its prerequisites pass.
+  reports KVarN/TriAttention support and existing builds, validates or creates
+  the official calibrator environment, and can either calibrate and convert or
+  convert existing official statistics after its prerequisites pass.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -580,6 +597,7 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested separating quick-run controls from advanced setup, persisting defaults, discovering models and add-ons, and exposing the recent KV, weight-sharing, and RoPE/YaRN options in the UI | [@jawadala](https://github.com/jawadala) | Issue [#19](https://github.com/aivrar/multi-turboquant/issues/19) |
 | Suggested selecting local add-on source folders, resolving their dependencies, and recognizing Godzilla's KVarN/TriAttention setup needs | [@jawadala](https://github.com/jawadala) | Issue [#25](https://github.com/aivrar/multi-turboquant/issues/25) |
 | Identified the official TriAttention calibration script and requested a no-`llama-cli` workflow plus clearer CUDA weight-share guidance | [@jawadala](https://github.com/jawadala) | Issue [#29](https://github.com/aivrar/multi-turboquant/issues/29) |
+| Reported remaining dependency-state and calibration workflow friction, prompting bounded local builds, installed-environment validation, and a streamlined official-stats conversion path | [@jawadala](https://github.com/jawadala) | Issue [#31](https://github.com/aivrar/multi-turboquant/issues/31) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue

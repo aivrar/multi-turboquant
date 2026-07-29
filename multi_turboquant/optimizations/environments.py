@@ -22,6 +22,7 @@ from typing import Callable, Mapping, Sequence
 
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_ENVIRONMENT_ROOT = Path(".mtq") / "environments"
+DEFAULT_LOCAL_BUILD_JOBS = 2
 _PROFILE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
@@ -301,6 +302,41 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         local_source_markers=("setup.py", "sageattention", "csrc"),
     ),
     DependencyProfile(
+        id="triattention",
+        name="TriAttention calibration",
+        optimization_id="triattention",
+        source_url="https://github.com/WeianMao/triattention",
+        python_spec=">=3.10,<3.14",
+        default_python="3.11",
+        packages=(
+            "torch==2.7.1",
+            "transformers>=4.48.1,<5",
+            "accelerate",
+            "sentencepiece",
+            "triattention @ git+https://github.com/WeianMao/triattention.git@81552bb91eedcdda239a3ff02ca985f49f866031",
+        ),
+        supported_os=("linux",),
+        supported_compute=("cuda",),
+        required_executables=("git",),
+        build_environment=(("MAX_JOBS", "2"),),
+        package_sources=(("torch", "pytorch-cu126"),),
+        package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
+        torch_cuda_major=12,
+        validation_modules=("torch", "transformers", "accelerate", "triattention"),
+        notes=(
+            "Provides the official Python calibrator dependencies used by the Godzilla converter.",
+            "The default SDPA path does not require FlashAttention.",
+            "Model calibration still downloads or opens the matching Hugging Face checkpoint.",
+        ),
+        local_source_package="triattention",
+        local_source_markers=(
+            "setup.py",
+            "triattention",
+            "scripts/calibrate.py",
+            "docs/calibration.md",
+        ),
+    ),
+    DependencyProfile(
         id="maru",
         name="Maru",
         optimization_id="maru",
@@ -562,6 +598,7 @@ class EnvironmentPlan:
     cuda_toolkit_version: tuple[int, int] | None = None
     local_source: Path | None = None
     build_from_source: bool = False
+    max_jobs: int | None = None
 
     @property
     def ready(self) -> bool:
@@ -585,6 +622,7 @@ class EnvironmentPlan:
                 self.profile.local_source_package if self.local_source is not None else None
             ),
             "build_from_source": self.build_from_source,
+            "max_jobs": self.max_jobs,
             "source_build_packages": (
                 list(self.profile.source_build_packages) if self.build_from_source else []
             ),
@@ -695,6 +733,7 @@ def plan_environment(
     cuda_toolkit: str | Path | None = None,
     local_source: str | Path | None = None,
     build_from_source: bool = False,
+    max_jobs: int | None = None,
     context: EnvironmentContext | None = None,
 ) -> EnvironmentPlan:
     """Plan environment creation without writing files or running commands."""
@@ -708,6 +747,8 @@ def plan_environment(
     python_request = (python or profile.default_python).strip()
     if not python_request:
         raise ValueError("Python request must not be empty")
+    if max_jobs is not None and (isinstance(max_jobs, bool) or not 1 <= int(max_jobs) <= 64):
+        raise ValueError("max_jobs must be between 1 and 64")
     target = (Path(root).expanduser() / profile.id).resolve()
     issues: list[EnvironmentIssue] = []
     local_source_path: Path | None = None
@@ -757,6 +798,7 @@ def plan_environment(
             target=target,
             python_request=python_request,
             build_from_source=build_from_source,
+            max_jobs=int(max_jobs) if max_jobs is not None else None,
             project_toml="",
             commands=(),
             issues=tuple(issues),
@@ -859,6 +901,17 @@ def plan_environment(
                     f"Source compilation is forced for: {packages}.",
                 )
             )
+    effective_max_jobs = int(max_jobs) if max_jobs is not None else None
+    if effective_max_jobs is None and (build_from_source or local_source_path is not None):
+        effective_max_jobs = DEFAULT_LOCAL_BUILD_JOBS
+    if effective_max_jobs is not None:
+        issues.append(
+            EnvironmentIssue(
+                "info",
+                "build_job_limit",
+                f"Native/source build concurrency is limited with MAX_JOBS={effective_max_jobs}.",
+            )
+        )
     if "pyenv" in context.available_executables:
         issues.append(
             EnvironmentIssue(
@@ -887,6 +940,7 @@ def plan_environment(
         target=target,
         python_request=python_request,
         build_from_source=build_from_source,
+        max_jobs=effective_max_jobs,
         project_toml=render_profile_project(
             profile,
             build_from_source=build_from_source,
@@ -969,6 +1023,8 @@ def synchronize_environment(
         argv.append("--upgrade")
     child_environment = _plan_child_environment(plan)
     child_environment.update(dict(plan.profile.build_environment))
+    if plan.max_jobs is not None:
+        child_environment["MAX_JOBS"] = str(plan.max_jobs)
     if plan.build_from_source:
         child_environment.update(dict(plan.profile.source_build_environment))
     result = runner(argv, cwd=plan.target, env=child_environment, check=False)
@@ -1018,14 +1074,18 @@ def check_environment(
     interpreter = environment_python(plan.target)
     if not interpreter.is_file():
         raise RuntimeError(f"Environment has not been created: {interpreter}")
-    result = runner(
-        [str(interpreter), "-c", validation_script(plan.profile)],
-        cwd=plan.target,
-        env=_plan_child_environment(plan),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = runner(
+            [str(interpreter), "-c", validation_script(plan.profile)],
+            cwd=plan.target,
+            env=_plan_child_environment(plan),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"Environment validation could not run: {exc}") from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         raise RuntimeError(f"Environment validation failed: {stderr}")

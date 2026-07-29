@@ -8,6 +8,7 @@ from .godzilla_triattention import (
     calibrate_official_triattention_for_godzilla,
     convert_official_triattention_stats,
     inspect_godzilla_triattention_file,
+    inspect_calibration_python,
     inspect_official_triattention_calibrator,
     inspect_official_triattention_checkout,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "calibrate_official_triattention_for_godzilla",
     "convert_official_triattention_stats",
     "inspect_godzilla_triattention_file",
+    "inspect_calibration_python",
     "inspect_official_triattention_calibrator",
     "inspect_official_triattention_checkout",
 ]

@@ -48,6 +48,11 @@ def _add_common_profile_arguments(
             action="store_true",
             help="Force the profile's reviewed native packages to build locally",
         )
+        parser.add_argument(
+            "--max-jobs",
+            type=int,
+            help="Limit native/source build concurrency with MAX_JOBS (1-64; local default: 2)",
+        )
 
 
 def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
@@ -70,6 +75,8 @@ def _print_plan(plan, *, as_json: bool = False, read_only: bool = True) -> None:
         print(f"Source:  forced ({packages})")
     if plan.local_source is not None:
         print(f"Checkout: {plan.local_source} ({plan.profile.local_source_package})")
+    if plan.max_jobs is not None:
+        print(f"Jobs:    MAX_JOBS={plan.max_jobs}")
     if plan.profile.packages:
         print("Packages:")
         for package in plan.profile.packages:
@@ -128,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         cuda_toolkit=args.cuda_toolkit,
         local_source=getattr(args, "local_source", None),
         build_from_source=getattr(args, "build_from_source", False),
+        max_jobs=getattr(args, "max_jobs", None),
     )
     if args.action == "plan":
         _print_plan(plan, as_json=args.json)

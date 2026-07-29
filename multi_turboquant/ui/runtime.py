@@ -150,6 +150,7 @@ class EnvironmentJobManager:
         cuda_toolkit: str | Path | None = None,
         local_source: str | Path | None = None,
         build_from_source: bool = False,
+        max_jobs: int | None = None,
     ) -> dict[str, object]:
         from ..optimizations.environments import plan_environment
 
@@ -160,6 +161,7 @@ class EnvironmentJobManager:
             cuda_toolkit=cuda_toolkit,
             local_source=local_source,
             build_from_source=build_from_source,
+            max_jobs=max_jobs,
         )
         if not plan.ready:
             errors = "; ".join(
@@ -172,6 +174,7 @@ class EnvironmentJobManager:
             "profile": profile_id,
             "status": "queued",
             "build_from_source": build_from_source,
+            "max_jobs": getattr(plan, "max_jobs", max_jobs),
             "cuda_toolkit_root": (
                 str(plan.cuda_toolkit_root) if plan.cuda_toolkit_root is not None else None
             ),
@@ -275,11 +278,13 @@ class GodzillaCalibrationJobManager:
         python: str | Path | None = None,
         calibrator: str | Path | None = None,
         calibration_input: str | Path | None = None,
+        official_stats_input: str | Path | None = None,
         hf_model: str | None = None,
         n_tokens: int = 2048,
         device: str = "cuda",
         mode: str = "official_python",
         attention_implementation: str = "sdpa",
+        dependency_override: bool = False,
     ) -> dict[str, object]:
         from ..integration.godzilla_workspace import plan_godzilla_triattention
 
@@ -290,11 +295,14 @@ class GodzillaCalibrationJobManager:
             python=python,
             calibrator=calibrator,
             calibration_input=calibration_input,
+            official_stats_input=official_stats_input,
             hf_model=hf_model,
             n_tokens=n_tokens,
             device=device,
             mode=mode,
             attention_implementation=attention_implementation,
+            verify_dependencies=True,
+            dependency_override=dependency_override,
         )
         if not plan.ready:
             errors = "; ".join(

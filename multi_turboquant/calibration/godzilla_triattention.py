@@ -38,6 +38,69 @@ _OFFICIAL_CALIBRATOR_MARKERS = (
 )
 
 
+def inspect_calibration_python(
+    python: str | Path,
+    *,
+    device: str = "cuda",
+    runner=subprocess.run,
+) -> dict[str, object]:
+    """Verify the interpreter used for official calibration before model loading."""
+    interpreter = Path(python).expanduser().resolve()
+    normalized_device = device.strip().lower()
+    issues: list[str] = []
+    if not interpreter.is_file():
+        issues.append(f"Calibration Python was not found: {interpreter}")
+        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+    script = (
+        "import json\n"
+        "import accelerate, torch, transformers\n"
+        "print(json.dumps({"
+        "'torch': torch.__version__, "
+        "'torch_cuda': torch.version.cuda, "
+        "'cuda_available': torch.cuda.is_available(), "
+        "'transformers': transformers.__version__, "
+        "'accelerate': accelerate.__version__"
+        "}, sort_keys=True))\n"
+    )
+    try:
+        result = runner(
+            [str(interpreter), "-I", "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        issues.append(f"Calibration dependency check could not run: {exc}")
+        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        issues.append(
+            "Calibration Python is missing or cannot import torch, transformers, or accelerate"
+            + (f": {details}" if details else "")
+        )
+        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+    output_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+    try:
+        report = json.loads(output_lines[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        issues.append(f"Calibration dependency check returned invalid output: {exc}")
+        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+    if not isinstance(report, dict):
+        issues.append("Calibration dependency check returned an unexpected result")
+    elif normalized_device == "cuda":
+        if not report.get("torch_cuda"):
+            issues.append("Calibration Python has a CPU-only PyTorch build")
+        elif report.get("cuda_available") is not True:
+            issues.append("Calibration Python cannot access CUDA")
+    return {
+        "python": str(interpreter),
+        "valid": not issues,
+        "report": report if isinstance(report, dict) else None,
+        "issues": issues,
+    }
+
+
 def inspect_official_triattention_checkout(path: str | Path) -> dict[str, object]:
     """Inspect an official-style TriAttention checkout without importing it."""
     root = Path(path).expanduser().resolve()

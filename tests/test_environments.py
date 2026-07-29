@@ -41,6 +41,7 @@ def test_profiles_are_isolated_and_explicit():
         "lmcache",
         "minference",
         "sageattention",
+        "triattention",
         "maru",
         "speculative_prefill",
         "rocketkv",
@@ -150,6 +151,48 @@ def test_sageattention_is_pinned_to_a_reviewed_commit():
             "requires-dist": [],
         }
     ]
+
+
+def test_triattention_profile_supports_the_official_local_checkout(tmp_path: Path):
+    source = tmp_path / "triattention"
+    (source / "triattention").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    (source / "docs").mkdir()
+    (source / "setup.py").write_text("", encoding="utf-8")
+    (source / "scripts" / "calibrate.py").write_text("", encoding="utf-8")
+    (source / "docs" / "calibration.md").write_text("", encoding="utf-8")
+
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path / "envs",
+        local_source=source,
+        context=linux_cuda_context("uv", "git"),
+    )
+    project = tomllib.loads(plan.project_toml)
+
+    assert plan.ready
+    assert plan.max_jobs == 2
+    assert project["tool"]["uv"]["sources"]["triattention"]["path"] == str(source.resolve())
+    assert "--reinstall-package" in plan.commands[0].argv
+
+
+def test_explicit_build_job_limit_overrides_profile_default(tmp_path: Path):
+    plan = plan_environment(
+        "fastdms",
+        root=tmp_path,
+        max_jobs=2,
+        context=linux_cuda_context(),
+    )
+    calls = []
+
+    def runner(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0)
+
+    synchronize_environment(plan, runner=runner)
+
+    assert plan.max_jobs == 2
+    assert calls[0][1]["env"]["MAX_JOBS"] == "2"
 
 
 def test_minference_is_pinned_past_the_broken_pypi_import():
