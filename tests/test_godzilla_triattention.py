@@ -325,8 +325,10 @@ def test_official_checkout_inspection_requires_expected_markers(tmp_path: Path):
 def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Path):
     python = tmp_path / "python"
     python.write_bytes(b"python")
+    commands = []
 
     def runner(command, **kwargs):
+        commands.append(command)
         return subprocess.CompletedProcess(
             command,
             0,
@@ -341,6 +343,7 @@ def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Pat
 
     assert report["valid"] is True
     assert report["report"]["torch_cuda"] == "12.6"
+    assert "torch.cuda.mem_get_info" in commands[0][-1]
 
 
 def test_calibration_python_preflight_rejects_missing_cuda(tmp_path: Path):

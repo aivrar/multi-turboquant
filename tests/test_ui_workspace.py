@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -120,9 +121,26 @@ def test_informational_addon_source_inspection_is_read_only(tmp_path: Path):
 
     assert result["valid"] is True
     assert result["status"] == "informational_only"
+    assert result["setup"]["automatic"] is False
+    assert result["setup"]["requirements"]
+    assert result["setup"]["next_steps"]
     assert result["path"] == str(source.resolve())
     assert all(result["marker_groups"].values())
     assert not (source / ".mtq").exists()
+
+
+def test_maru_source_reports_current_host_setup_requirements(tmp_path: Path):
+    source = tmp_path / "maru"
+    (source / "maru_resource_manager").mkdir(parents=True)
+    (source / "README.md").write_text("Maru", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]", encoding="utf-8")
+
+    result = inspect_addon_source("maru", source)
+
+    assert result["valid"] is True
+    assert result["setup"]["mode"] == "guided_host_setup"
+    assert any("/dev/dax" in item for item in result["setup"]["requirements"])
+    assert any("install.sh" in item for item in result["setup"]["next_steps"])
 
 
 def test_informational_addon_source_inspection_reports_missing_markers(tmp_path: Path):
@@ -139,7 +157,7 @@ def test_informational_addon_source_inspection_reports_missing_markers(tmp_path:
 @pytest.mark.parametrize(
     ("profile", "markers"),
     [
-        ("maru", ("README.md", "CMakeLists.txt", "resource_manager")),
+        ("maru", ("README.md", "pyproject.toml", "maru_resource_manager")),
         ("speculative_prefill", ("README.md", "requirements.txt", "speculative_prefill")),
         ("rocketkv", ("README.md", "requirements.txt", "rocketkv")),
         ("lexico", ("README.md", "setup.py", "lexico")),
@@ -163,6 +181,7 @@ def test_each_blocked_addon_profile_has_a_read_only_source_contract(
 
     assert result["valid"] is True
     assert result["status"] == "informational_only"
+    assert result["setup"]["automatic"] is False
 
 
 def test_addon_scan_recognizes_blocked_source_as_informational(tmp_path: Path):
@@ -412,3 +431,44 @@ def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
     completed = manager.get(job["id"])
     assert completed["status"] == "completed"
     assert completed["report"] == {"output": str(plan.output), "reused": False}
+
+
+def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypatch):
+    from multi_turboquant.integration import godzilla_workspace
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def make_plan(checkout, gguf, **kwargs):
+        return SimpleNamespace(
+            ready=True,
+            checkout=Path(checkout),
+            gguf=Path(gguf),
+            output=Path(kwargs["output"]),
+            mode="official_python",
+            issues=[],
+        )
+
+    def run_plan(plan, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return {"output": str(plan.output), "reused": False}
+
+    monkeypatch.setattr(godzilla_workspace, "plan_godzilla_triattention", make_plan)
+    monkeypatch.setattr(godzilla_workspace, "run_godzilla_triattention", run_plan)
+    manager = GodzillaCalibrationJobManager()
+    manager.start(
+        tmp_path / "godzilla",
+        tmp_path / "model.gguf",
+        output=tmp_path / "first.triattention",
+    )
+    assert started.wait(5)
+
+    with pytest.raises(RuntimeError, match="one process at a time"):
+        manager.start(
+            tmp_path / "godzilla",
+            tmp_path / "model.gguf",
+            output=tmp_path / "second.triattention",
+        )
+
+    release.set()

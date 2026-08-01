@@ -541,6 +541,29 @@ def plan_godzilla_triattention(
                     "Calibration Python successfully imported torch, transformers, and accelerate.",
                 )
             )
+            if dependency_validation and dependency_validation.get("cuda_total_memory_bytes"):
+                gib = 1024**3
+                total_gib = float(dependency_validation["cuda_total_memory_bytes"]) / gib
+                free_gib = float(dependency_validation.get("cuda_free_memory_bytes", 0)) / gib
+                device_name = dependency_validation.get("cuda_device", "selected CUDA device")
+                issues.append(
+                    GodzillaIssue(
+                        "info",
+                        "calibration_device_memory",
+                        f"{device_name}: {free_gib:.1f} GiB free of {total_gib:.1f} GiB VRAM "
+                        "at preflight time. This is capacity information, not a 200k-token "
+                        "memory guarantee.",
+                    )
+                )
+            elif dependency_validation and dependency_validation.get("cuda_memory_error"):
+                issues.append(
+                    GodzillaIssue(
+                        "warning",
+                        "calibration_device_memory_unavailable",
+                        "Calibration dependencies are valid, but CUDA memory capacity could not "
+                        f"be read: {dependency_validation['cuda_memory_error']}",
+                    )
+                )
         else:
             message = "; ".join(str(item) for item in python_check["issues"])
             if dependency_override:

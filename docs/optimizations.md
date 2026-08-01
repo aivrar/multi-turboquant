@@ -230,7 +230,12 @@ them as informational and does not offer an automatic Create action.
 The Setup source picker can still inspect a local checkout for each blocked
 profile. It checks reviewed marker files and reports upstream metadata without
 importing or executing the source; selecting a folder never changes the
-profile's blocked status or creates an environment. The same read-only inspector
+profile's blocked status or creates an environment. It also returns the
+profile-specific host, licensing, runtime, or artifact requirements and the
+reviewed next steps. Current Maru source uses Python project metadata and the
+`maru_resource_manager`/`maru_server` packages; the inspector no longer requires
+a root `CMakeLists.txt`. Automatic Maru installation remains unavailable because
+the upstream workflow configures CXL DAX access and host services. The same read-only inspector
 recognizes `domvox/triattention-ggml` for the separate experimental TriAttention
 adapter. That adapter belongs to the Godzilla calibration workflow, not to the
 installable Python add-on profiles.

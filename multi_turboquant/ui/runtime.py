@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
+MAX_CONCURRENT_GODZILLA_CALIBRATIONS = 1
+
+
 def _split_env_wrapper(command: Sequence[str]) -> tuple[list[str], dict[str, str]]:
     argv = [str(item) for item in command]
     environment: dict[str, str] = {}
@@ -258,6 +261,8 @@ class EnvironmentJobManager:
 class GodzillaCalibrationJobManager:
     """Run an explicitly confirmed Godzilla TriAttention preparation job."""
 
+    max_concurrent_jobs = MAX_CONCURRENT_GODZILLA_CALIBRATIONS
+
     def __init__(self):
         self._lock = threading.RLock()
         self._jobs: dict[str, dict[str, object]] = {}
@@ -325,6 +330,7 @@ class GodzillaCalibrationJobManager:
             "model": str(plan.gguf),
             "output": str(plan.output),
             "mode": plan.mode,
+            "process_limit": MAX_CONCURRENT_GODZILLA_CALIBRATIONS,
             "created_at": time.time(),
             "finished_at": None,
             "report": None,
@@ -333,12 +339,12 @@ class GodzillaCalibrationJobManager:
         }
         with self._lock:
             if any(
-                item["output"] == str(plan.output)
-                and item["status"] in {"queued", "running"}
+                item["status"] in {"queued", "running"}
                 for item in self._jobs.values()
             ):
                 raise RuntimeError(
-                    f"A Godzilla calibration job for {plan.output} is already running"
+                    "A Godzilla calibration is already queued or running. The local UI limits "
+                    "calibration to one process at a time to avoid overlapping model loads."
                 )
             self._jobs[job_id] = job
         threading.Thread(target=self._run, args=(job_id, plan), daemon=True).start()

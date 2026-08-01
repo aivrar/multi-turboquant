@@ -3,6 +3,7 @@
 
 from .generate_metadata import generate_turboquant_metadata
 from .generate_stats import generate_triattention_stats
+from .text_corpus import CALIBRATION_CORPUS_SCHEMA_VERSION, generate_calibration_text
 from .auto_calibrate import auto_calibrate
 from .godzilla_triattention import (
     LONG_CALIBRATION_THRESHOLD,
@@ -23,6 +24,8 @@ from .godzilla_triattention import (
 __all__ = [
     "generate_turboquant_metadata",
     "generate_triattention_stats",
+    "generate_calibration_text",
+    "CALIBRATION_CORPUS_SCHEMA_VERSION",
     "auto_calibrate",
     "calibrate_official_triattention_for_godzilla",
     "LONG_CALIBRATION_THRESHOLD",

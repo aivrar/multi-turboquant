@@ -4,11 +4,13 @@
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from multi_turboquant import CacheMethod
+from multi_turboquant.hardware import GPU, PlatformInfo
 from multi_turboquant.ui import DEFAULT_UI_SETTINGS, UISettingsStore
 import run_ui
 from run_ui import (
@@ -296,17 +298,40 @@ def test_api_addon_scan_respects_explicit_empty_roots(tmp_path, monkeypatch):
     assert "No add-on roots" in result["warnings"][0]
 
 
+def test_api_status_reports_ram_and_vram_separately(monkeypatch):
+    monkeypatch.setattr(
+        run_ui,
+        "detect_platform",
+        lambda: PlatformInfo(
+            os="linux",
+            arch="x86_64",
+            gpus=[GPU(0, "Test GPU", 24 * 1024, vram_used_mb=8 * 1024)],
+            system_memory_total_mb=64 * 1024,
+            system_memory_available_mb=40 * 1024,
+        ),
+    )
+
+    result = run_ui.api_status()
+
+    assert result["system_ram_gb"] == 64
+    assert result["available_system_ram_gb"] == 40
+    assert result["total_vram_gb"] == 24
+    assert result["available_vram_gb"] == 16
+    assert result["combined_memory_gb"] == 88
+
+
 def test_api_inspects_informational_addon_source(tmp_path):
     source = tmp_path / "maru"
-    (source / "resource_manager").mkdir(parents=True)
+    (source / "maru_resource_manager").mkdir(parents=True)
     (source / "README.md").write_text("Maru", encoding="utf-8")
-    (source / "CMakeLists.txt").write_text("project(maru)", encoding="utf-8")
+    (source / "pyproject.toml").write_text("[project]", encoding="utf-8")
 
     result = run_ui.api_inspect_addon_source({"profile": "maru", "path": str(source)})
 
     assert result["valid"] is True
     assert result["status"] == "informational_only"
     assert result["name"] == "Maru"
+    assert "CMakeLists.txt" not in result["marker_groups"]
 
 
 def test_evaluated_ui_javascript_has_valid_syntax():
@@ -679,6 +704,11 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
         }
     )
     monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(
+        run_ui,
+        "plan_environment",
+        lambda *args, **kwargs: SimpleNamespace(ready=True, issues=()),
+    )
 
     result = run_ui.api_plan_godzilla(
         {
@@ -694,11 +724,116 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
     assert result["ready"] is True
     assert result["python"] == str(calibration_python.resolve())
     assert result["calibrator"] == str(calibrator.resolve())
+    assert result["dependency_repair"]["available"] is True
+    assert result["dependency_repair"]["profile"] == "triattention"
+    assert result["resource_policy"]["max_concurrent_calibrations"] == 1
+
+
+def test_godzilla_plan_does_not_offer_managed_repair_for_manual_python(
+    tmp_path, monkeypatch
+):
+    plan = SimpleNamespace(
+        mode="official_python",
+        issues=[SimpleNamespace(code="calibration_dependencies_missing")],
+        to_dict=lambda: {"ready": False},
+    )
+    monkeypatch.setattr(run_ui, "_godzilla_plan_from_params", lambda params: plan)
+
+    result = run_ui.api_plan_godzilla({"python": str(tmp_path / "custom-python")})
+
+    assert result["dependency_repair"]["available"] is False
+
+
+def test_godzilla_plan_preflights_managed_repair(tmp_path, monkeypatch):
+    environment_root = tmp_path / "envs"
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save({**DEFAULT_UI_SETTINGS, "environment_root": str(environment_root)})
+    plan = SimpleNamespace(
+        mode="official_python",
+        issues=[SimpleNamespace(code="missing_calibration_python")],
+        to_dict=lambda: {"ready": False},
+    )
+    unavailable = SimpleNamespace(
+        ready=False,
+        issues=[SimpleNamespace(severity="error", message="uv is unavailable")],
+    )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "_godzilla_plan_from_params", lambda params: plan)
+    monkeypatch.setattr(run_ui, "plan_environment", lambda *args, **kwargs: unavailable)
+
+    managed_python = run_ui._managed_triattention_python(store.load())
+    result = run_ui.api_plan_godzilla({"python": str(managed_python)})
+
+    assert result["dependency_repair"]["available"] is False
+    assert result["dependency_repair"]["managed_python"] == str(managed_python)
+    assert result["dependency_repair"]["needed"] is True
+    assert "uv is unavailable" in result["dependency_repair"]["message"]
+
+
+def test_managed_triattention_repair_ignores_unreviewed_overrides(tmp_path, monkeypatch):
+    environment_root = tmp_path / "envs"
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save({**DEFAULT_UI_SETTINGS, "environment_root": str(environment_root)})
+    calls = []
+
+    class FakeJobs:
+        def start_create(self, profile, **kwargs):
+            calls.append((profile, kwargs))
+            return {"id": "repair-job", "status": "queued"}
+
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "ENVIRONMENT_JOBS", FakeJobs())
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    result = run_ui.api_repair_triattention_environment(
+        {
+            "confirm": True,
+            "python": "/unreviewed/python",
+            "local_source": "/unreviewed/source",
+            "max_jobs": 64,
+        }
+    )
+
+    assert result == {"id": "repair-job", "status": "queued"}
+    assert calls == [
+        (
+            "triattention",
+            {"root": str(environment_root), "max_jobs": 2},
+        )
+    ]
 
 
 def test_godzilla_creation_requires_confirmation():
     with pytest.raises(ValueError, match="explicit confirmation"):
         run_ui.api_create_godzilla({"confirm": False})
+
+
+def test_calibration_text_generation_is_confirmed_and_bounded_to_model_root(
+    tmp_path, monkeypatch
+):
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save({**DEFAULT_UI_SETTINGS, "model_root": str(model_root)})
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(run_ui, "UI_MUTATIONS_ENABLED", True)
+
+    with pytest.raises(ValueError, match="explicit confirmation"):
+        run_ui.api_generate_calibration_text({"n_tokens": 512})
+
+    result = run_ui.api_generate_calibration_text(
+        {"n_tokens": 512, "confirm": True}
+    )
+
+    output = Path(result["path"])
+    assert output.is_file()
+    assert output.is_relative_to(model_root.resolve())
+    assert result["reused"] is False
+
+    reused = run_ui.api_generate_calibration_text(
+        {"n_tokens": 512, "confirm": True}
+    )
+    assert reused["reused"] is True
 
 
 def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):

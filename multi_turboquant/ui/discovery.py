@@ -23,10 +23,24 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
         "source_url": "https://github.com/xcena-dev/maru",
         "marker_groups": (
             ("README.md",),
-            ("CMakeLists.txt",),
-            ("resource_manager", "resource-manager", "maru"),
+            ("pyproject.toml", "setup.py"),
+            ("maru_resource_manager", "maru_server", "maru"),
         ),
         "summary": "CXL shared-memory KV-cache project; host services and CXL hardware remain required.",
+        "setup": {
+            "mode": "guided_host_setup",
+            "automatic": False,
+            "requirements": (
+                "Ubuntu 24.04 or newer with Python 3.12+, GCC, and CMake",
+                "A configured CXL DAX device (/dev/dax*) or upstream's documented emulation",
+                "Permission to install and operate the Maru resource-manager and server services",
+            ),
+            "next_steps": (
+                "Review the checkout's README.md and install.sh on the target CXL host.",
+                "Complete upstream host/device setup before running its installer.",
+                "Verify maru-resource-manager, maru-server, and maru_lmcache before enabling the catalog entry.",
+            ),
+        },
     },
     "speculative_prefill": {
         "profile": "speculative_prefill",
@@ -38,6 +52,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("speculative_prefill", "vllm", "scripts", "src"),
         ),
         "summary": "Experimental vLLM monkey patch; version-pinned runtime integration is not maintained here.",
+        "setup": {
+            "mode": "research_manual",
+            "automatic": False,
+            "requirements": (
+                "The upstream pinned Torch 2.4.0 and vLLM 0.6.3.post1 stack",
+                "A disposable environment for its source monkey patches",
+            ),
+            "next_steps": (
+                "Reproduce the exact upstream environment independently.",
+                "Validate the patch against a compatible vLLM checkout before serving.",
+            ),
+        },
     },
     "rocketkv": {
         "profile": "rocketkv",
@@ -49,6 +75,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("rocketkv", "src", "evaluation", "eval"),
         ),
         "summary": "Research KV-compression snapshot; packaging is limited by its upstream license and stack.",
+        "setup": {
+            "mode": "research_manual",
+            "automatic": False,
+            "requirements": (
+                "Acceptance of the upstream non-commercial licensing boundary",
+                "The repository's research dependency stack and supported model artifacts",
+            ),
+            "next_steps": (
+                "Review the license before use.",
+                "Run the upstream evaluation workflow outside production serving.",
+            ),
+        },
     },
     "lexico": {
         "profile": "lexico",
@@ -60,6 +98,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("lexico", "src"),
         ),
         "summary": "WIP sparse-coding project; a model-specific trained dictionary is still required.",
+        "setup": {
+            "mode": "artifact_required",
+            "automatic": False,
+            "requirements": (
+                "A compatible model-specific trained dictionary",
+                "The upstream Python environment and evaluation configuration",
+            ),
+            "next_steps": (
+                "Train or obtain the matching dictionary.",
+                "Validate reconstruction quality before runtime integration.",
+            ),
+        },
     },
     "adadecode": {
         "profile": "adadecode",
@@ -71,6 +121,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("adadecode", "src", "scripts", "eval", "evaluation"),
         ),
         "summary": "Research speculative-decoding code; task-specific prediction heads are not a generic add-on.",
+        "setup": {
+            "mode": "artifact_required",
+            "automatic": False,
+            "requirements": (
+                "Compatible trained prediction heads",
+                "A reviewed license and matching research runtime",
+            ),
+            "next_steps": (
+                "Resolve the licensing and artifact requirements upstream.",
+                "Validate the prediction heads for the selected model and task.",
+            ),
+        },
     },
     "resonance_yarn": {
         "profile": "resonance_yarn",
@@ -82,6 +144,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("src", "resonance_rope", "llama", "scripts"),
         ),
         "summary": "RoPE training/fine-tuning fork; it is not a drop-in serving-runtime plugin.",
+        "setup": {
+            "mode": "backend_work_required",
+            "automatic": False,
+            "requirements": (
+                "A maintained native serving implementation for the selected backend",
+                "Model training or fine-tuning artifacts compatible with the RoPE method",
+            ),
+            "next_steps": (
+                "Validate the method in its upstream training workflow.",
+                "Implement and test the required backend support before exposing it at runtime.",
+            ),
+        },
     },
     "domvox_triattention": {
         "profile": "domvox_triattention",
@@ -93,6 +167,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("TRIA_FORMAT.md",),
         ),
         "summary": "Experimental TRIA v2 calibration source; conversion to Godzilla v1 is explicitly lossy.",
+        "setup": {
+            "mode": "supported_calibration_adapter",
+            "automatic": False,
+            "requirements": (
+                "The managed TriAttention Python dependency environment",
+                "The matching Hugging Face checkpoint and explicit lossy-conversion acknowledgement",
+            ),
+            "next_steps": (
+                "Select the detected calibrator in Godzilla Source Setup.",
+                "Check the preparation plan, then run and validate the converted artifact.",
+            ),
+        },
     },
 }
 
@@ -123,6 +209,7 @@ def inspect_addon_source(profile_id: str, path: str | Path) -> dict[str, object]
             "marker_groups": {},
             "issues": ["Select a local source folder to inspect."],
             "summary": spec["summary"],
+            "setup": spec["setup"],
         }
     resolved = Path(raw_path).expanduser().resolve()
     marker_groups = {
@@ -158,6 +245,7 @@ def inspect_addon_source(profile_id: str, path: str | Path) -> dict[str, object]
         "marker_groups": marker_groups,
         "issues": issues,
         "summary": spec["summary"],
+        "setup": spec["setup"],
         "git_remote": _git_remote(resolved) if resolved.is_dir() else None,
         "calibrator": calibrator,
     }
