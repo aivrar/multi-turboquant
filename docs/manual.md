@@ -794,7 +794,20 @@ fields are reported as dropped; this is not a lossless format conversion.
 Calibration lengths from 128 through 200,000 are accepted. Above 32,768 the
 operator must enable long calibration explicitly; the upstream script processes
 one long sequence, so the UI warns about memory and runtime instead of assuming
-chunked aggregation. A GGUF alone remains insufficient for calibration.
+chunked aggregation. The UI runs at most one calibration job at a time and
+reports the selected CUDA device's current free/total VRAM after dependency
+preflight. That snapshot cannot predict the long sequence's peak usage, and
+system RAM is not a substitute for discrete VRAM. A GGUF alone remains
+insufficient for calibration.
+
+The managed dependency path can repair an incomplete TriAttention environment
+after explicit confirmation and a successful host/tool preflight. It ignores
+unrelated manual overrides, re-runs the pinned reviewed `uv` synchronization
+with a conservative two-job limit, checks Torch, Transformers, Accelerate, and
+TriAttention, and automatically checks the plan again. The UI can also generate
+deterministic offline starter text beneath the saved model root. Generated
+files use schema and completion markers and cannot be clobbered by simultaneous
+requests; use representative domain text for final calibration qualification.
 
 `mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
 Python/vLLM integration. That file is not binary-compatible with Godzilla's
@@ -1069,7 +1082,9 @@ for a different port, `--no-browser` to suppress auto-open,
 
 ### What the dashboard shows
 
-- **Hardware panel**: Auto-detected GPUs with VRAM, vendor, compute backend
+- **Hardware panel**: Auto-detected system RAM and GPUs with separate free/total
+  VRAM, vendor, compute backend, and an optional non-substitutable combined
+  capacity inventory
 - **Methods table**: Python-native methods plus backend aliases with bits, ratios, calibration requirements
 - **Presets list**: All 19 named presets
 - **Capacity planner**: Enter model size, agents, context -- get instant feasibility report
@@ -1082,13 +1097,16 @@ for a different port, `--no-browser` to suppress auto-open,
   FlashAttention source folders, select a matching side-by-side CUDA toolkit,
   select a reviewed local checkout for an isolated dependency profile, and
   inspect a Godzilla tree or generate/convert its model-specific TriAttention
-  artifact after explicit confirmation. Advanced Quick Run controls and
+  artifact after explicit confirmation. It can repair the managed calibration
+  environment and create deterministic starter text. Advanced Quick Run controls and
   infrequent setup sections are collapsed until expanded.
 
 The source picker can inspect local folders for the six reviewed-but-blocked
 add-ons and domvox without importing or executing them. Blocked profiles remain
 informational and never receive an automatic Create action merely because a
-folder was selected.
+folder was selected; their inspection results include repository-specific host,
+license, runtime, and artifact requirements. Current Maru source layouts no
+longer require a root `CMakeLists.txt` marker.
 
 ### How it works
 
@@ -1281,6 +1299,7 @@ platform = detect_platform()
 print(platform.summary())
 # Platform: windows x86_64
 #   WSL: available
+#   System RAM: 64.0 GB (40.0 GB available)
 #   GPUs: 2 (36.0 GB total)
 #     [0] NVIDIA GeForce RTX 3090 -- 24576 MB (nvidia/cuda)
 #     [1] NVIDIA GeForce RTX 3060 -- 12288 MB (nvidia/cuda)
@@ -1498,6 +1517,8 @@ multi_turboquant.hardware.get_recommended_engine(platform)
 ```python
 multi_turboquant.calibration.generate_turboquant_metadata(model_path, recipe)
 multi_turboquant.calibration.generate_triattention_stats(model, tokenizer, prompts)
+multi_turboquant.calibration.CALIBRATION_CORPUS_SCHEMA_VERSION
+multi_turboquant.calibration.generate_calibration_text(output_path, target_tokens=2048)
 multi_turboquant.calibration.convert_official_triattention_stats(input_path, output_path, ...)
 multi_turboquant.calibration.convert_domvox_triattention_stats(input_path, output_path, ...)
 multi_turboquant.calibration.calibrate_domvox_triattention_for_godzilla(...)

@@ -19,6 +19,85 @@ import platform
 import shutil
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class SystemMemory:
+    """Detected host RAM capacity in MiB."""
+
+    total_mb: int
+    available_mb: int
+
+
+def _memory_from_proc_text(text: str) -> SystemMemory | None:
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            continue
+        parts = raw_value.strip().split()
+        if parts and parts[0].isdigit():
+            values[key] = int(parts[0]) // 1024
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", values.get("MemFree", 0))
+    if total <= 0:
+        return None
+    return SystemMemory(total_mb=total, available_mb=min(max(available, 0), total))
+
+
+def detect_system_memory() -> SystemMemory:
+    """Detect host RAM without adding a runtime dependency."""
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+
+            class MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MemoryStatusEx()
+            status.dwLength = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                mib = 1024 * 1024
+                total_mb = int(status.ullTotalPhys // mib)
+                return SystemMemory(
+                    total_mb=total_mb,
+                    available_mb=min(int(status.ullAvailPhys // mib), total_mb),
+                )
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    proc_meminfo = Path("/proc/meminfo")
+    if proc_meminfo.is_file():
+        try:
+            detected = _memory_from_proc_text(proc_meminfo.read_text(encoding="utf-8"))
+        except OSError:
+            detected = None
+        if detected is not None:
+            return detected
+
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        total_pages = int(os.sysconf("SC_PHYS_PAGES"))
+        available_pages = int(os.sysconf("SC_AVPHYS_PAGES"))
+        mib = 1024 * 1024
+        total_mb = max(0, page_size * total_pages // mib)
+        return SystemMemory(
+            total_mb=total_mb,
+            available_mb=min(max(0, page_size * available_pages // mib), total_mb),
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return SystemMemory(total_mb=0, available_mb=0)
 
 
 @dataclass
@@ -39,7 +118,7 @@ class GPU:
 
     @property
     def vram_free_mb(self) -> int:
-        return self.vram_total_mb - self.vram_used_mb
+        return max(0, self.vram_total_mb - self.vram_used_mb)
 
     def to_planner_dict(self) -> dict:
         """Format for the capacity planner."""
@@ -58,6 +137,8 @@ class PlatformInfo:
     rocm_available: bool = False
     metal_available: bool = False
     python_version: str = ""
+    system_memory_total_mb: int = 0
+    system_memory_available_mb: int = 0
 
     @property
     def gpu_count(self) -> int:
@@ -66,6 +147,35 @@ class PlatformInfo:
     @property
     def total_vram_gb(self) -> float:
         return sum(g.vram_gb for g in self.gpus)
+
+    @property
+    def available_vram_gb(self) -> float:
+        return sum(g.vram_free_mb for g in self.gpus) / 1024
+
+    @property
+    def system_memory_gb(self) -> float:
+        return self.system_memory_total_mb / 1024
+
+    @property
+    def available_system_memory_gb(self) -> float:
+        return self.system_memory_available_mb / 1024
+
+    @property
+    def unified_memory(self) -> bool:
+        return self.metal_available and any(g.vendor == "apple" for g in self.gpus)
+
+    @property
+    def combined_memory_gb(self) -> float:
+        discrete_vram_gb = sum(
+            gpu.vram_gb for gpu in self.gpus if gpu.vendor != "apple"
+        )
+        if not self.unified_memory:
+            return self.system_memory_gb + discrete_vram_gb
+        apple_capacity_gb = max(
+            (gpu.vram_gb for gpu in self.gpus if gpu.vendor == "apple"),
+            default=0.0,
+        )
+        return max(self.system_memory_gb, apple_capacity_gb) + discrete_vram_gb
 
     @property
     def primary_compute(self) -> str:
@@ -124,6 +234,8 @@ class PlatformInfo:
         lines = [
             f"Platform: {self.os} {self.arch}",
             f"  WSL: {'in WSL' if self.in_wsl else 'available' if self.has_wsl else 'no'}",
+            f"  System RAM: {self.system_memory_gb:.1f} GB "
+            f"({self.available_system_memory_gb:.1f} GB available)",
             f"  GPUs: {self.gpu_count} ({self.total_vram_gb:.1f} GB total)",
         ]
         for g in self.gpus:
@@ -350,6 +462,7 @@ def detect_platform() -> PlatformInfo:
 
     in_wsl, has_wsl = _check_wsl()
     gpus = detect_gpus()
+    system_memory = detect_system_memory()
 
     cuda = any(g.compute == "cuda" for g in gpus)
     rocm = any(g.compute == "rocm" for g in gpus)
@@ -368,6 +481,8 @@ def detect_platform() -> PlatformInfo:
         rocm_available=rocm,
         metal_available=metal,
         python_version=python_ver,
+        system_memory_total_mb=system_memory.total_mb,
+        system_memory_available_mb=system_memory.available_mb,
     )
 
 

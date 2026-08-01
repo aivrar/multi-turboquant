@@ -68,13 +68,23 @@ def inspect_calibration_python(
     script = (
         "import json\n"
         "import accelerate, torch, transformers\n"
-        "print(json.dumps({"
+        "report = {"
         "'torch': torch.__version__, "
         "'torch_cuda': torch.version.cuda, "
         "'cuda_available': torch.cuda.is_available(), "
         "'transformers': transformers.__version__, "
         "'accelerate': accelerate.__version__"
-        "}, sort_keys=True))\n"
+        "}\n"
+        "if report['cuda_available']:\n"
+        "    try:\n"
+        "        device = torch.cuda.current_device()\n"
+        "        free_bytes, total_bytes = torch.cuda.mem_get_info(device)\n"
+        "        report.update({'cuda_device': torch.cuda.get_device_name(device), "
+        "'cuda_device_index': device, 'cuda_free_memory_bytes': free_bytes, "
+        "'cuda_total_memory_bytes': total_bytes})\n"
+        "    except Exception as exc:\n"
+        "        report['cuda_memory_error'] = f'{type(exc).__name__}: {exc}'\n"
+        "print(json.dumps(report, sort_keys=True))\n"
     )
     try:
         result = runner(

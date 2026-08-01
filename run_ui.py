@@ -29,8 +29,12 @@ from multi_turboquant import (
     get_method, get_preset, list_presets, registered_methods,
     plan_agents,
 )
+from multi_turboquant.calibration import (
+    CALIBRATION_CORPUS_SCHEMA_VERSION,
+    generate_calibration_text,
+)
 from multi_turboquant.hardware import detect_platform, detect_gpus
-from multi_turboquant.optimizations.environments import environment_python
+from multi_turboquant.optimizations.environments import environment_python, plan_environment
 from multi_turboquant.compatibility import check_config
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
 from multi_turboquant.integration import (
@@ -82,6 +86,11 @@ def api_status():
         "gpus": gpus,
         "gpu_count": plat.gpu_count,
         "total_vram_gb": round(plat.total_vram_gb, 1),
+        "available_vram_gb": round(plat.available_vram_gb, 1),
+        "system_ram_gb": round(plat.system_memory_gb, 1),
+        "available_system_ram_gb": round(plat.available_system_memory_gb, 1),
+        "combined_memory_gb": round(plat.combined_memory_gb, 1),
+        "unified_memory": plat.unified_memory,
         "cuda": plat.cuda_available,
         "torch_version": torch.__version__,
         "torch_cuda": torch.cuda.is_available(),
@@ -561,9 +570,13 @@ def _validated_hf_model(value) -> str | None:
     return str(resolved)
 
 
-def _default_triattention_python(settings) -> Path | None:
+def _managed_triattention_python(settings) -> Path:
     target = Path(settings["environment_root"]).expanduser().resolve() / "triattention"
-    interpreter = environment_python(target)
+    return environment_python(target).resolve()
+
+
+def _default_triattention_python(settings) -> Path | None:
+    interpreter = _managed_triattention_python(settings)
     return interpreter.resolve() if interpreter.is_file() else None
 
 
@@ -626,7 +639,96 @@ def _godzilla_plan_from_params(params):
 
 
 def api_plan_godzilla(params):
-    return _godzilla_plan_from_params(params).to_dict()
+    plan = _godzilla_plan_from_params(params)
+    result = plan.to_dict()
+    issue_codes = {issue.code for issue in plan.issues}
+    settings = _saved_settings()
+    requested_python = _optional_text(params.get("python"))
+    managed_python = _managed_triattention_python(settings)
+    requested_managed_python = (
+        requested_python is not None
+        and Path(requested_python).expanduser().resolve() == managed_python
+    )
+    managed_python_requested = (
+        (requested_python is None or requested_managed_python)
+        and plan.mode in {"official_python", "official_convert", "domvox"}
+    )
+    repairable_codes = {
+        "missing_calibration_python",
+        "calibration_dependencies_missing",
+        "calibration_dependency_override",
+    }
+    repair_requested = managed_python_requested and bool(issue_codes & repairable_codes)
+    repair_plan = None
+    repair_errors: list[str] = []
+    if repair_requested:
+        repair_plan = plan_environment(
+            "triattention",
+            root=settings["environment_root"],
+            max_jobs=2,
+        )
+        repair_errors = [
+            issue.message for issue in repair_plan.issues if issue.severity == "error"
+        ]
+    result["dependency_repair"] = {
+        "needed": repair_requested,
+        "available": repair_requested and repair_plan is not None and repair_plan.ready,
+        "profile": "triattention",
+        "managed_python": str(managed_python),
+        "message": (
+            "Synchronize the pinned managed TriAttention environment and validate torch, "
+            "transformers, accelerate, and triattention before automatically rechecking "
+            "the plan."
+            if not repair_errors
+            else "Managed repair is unavailable: " + "; ".join(repair_errors)
+        ),
+    }
+    result["resource_policy"] = {
+        "max_concurrent_calibrations": GODZILLA_JOBS.max_concurrent_jobs,
+        "message": (
+            "The local UI permits one calibration job at a time to prevent overlapping "
+            "model loads. This does not reduce the memory used by one long sequence."
+        ),
+    }
+    return result
+
+
+def api_repair_triattention_environment(params):
+    """Repair only the reviewed managed profile, ignoring unrelated UI overrides."""
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    if params.get("confirm") is not True:
+        raise ValueError("TriAttention dependency repair requires explicit confirmation")
+    settings = _saved_settings()
+    return ENVIRONMENT_JOBS.start_create(
+        "triattention",
+        root=settings["environment_root"],
+        max_jobs=2,
+    )
+
+
+def api_generate_calibration_text(params):
+    if not UI_MUTATIONS_ENABLED:
+        raise PermissionError("The UI is running in read-only mode")
+    if params.get("confirm") is not True:
+        raise ValueError("Calibration text generation requires explicit confirmation")
+    settings = _saved_settings()
+    model_root_value = str(settings.get("model_root", "")).strip()
+    if not model_root_value:
+        raise ValueError("Configure and save a model root before generating calibration text")
+    model_root = Path(model_root_value).expanduser().resolve()
+    if not model_root.is_dir():
+        raise ValueError(f"Configured model root is not available: {model_root}")
+    target_tokens = _optional_int(params.get("n_tokens"), 2048)
+    output = (
+        model_root
+        / ".mtq"
+        / "calibration"
+        / f"generic-calibration-v{CALIBRATION_CORPUS_SCHEMA_VERSION}-{target_tokens}.txt"
+    ).resolve()
+    if not output.is_relative_to(model_root):
+        raise ValueError("Generated calibration text must remain inside the saved model root")
+    return generate_calibration_text(output, target_tokens=target_tokens)
 
 
 def api_create_godzilla(params):
@@ -845,6 +947,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
     <div class="card">
       <h2>Hardware</h2>
       <div id="gpu-status">Detecting...</div>
+      <div id="memory-status" class="muted" style="margin-top:10px"></div>
+      <label title="Capacity inventory only. System RAM does not replace discrete GPU VRAM during calibration."><input type="checkbox" id="memory-include-vram" checked onchange="renderMemoryStatus()"> Include VRAM in combined capacity</label>
     </div>
 
     <!-- Quick Stats -->
@@ -1139,7 +1243,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>TriAttention calibrator</label><input type="text" id="godzilla-calibrator" placeholder="Official scripts/calibrate.py or domvox/triattention_calibrate.py"></div>
-          <div style="grid-column:span 2"><label>Calibration text</label><input type="text" id="godzilla-input" placeholder="Non-empty plain-text file inside a saved root"></div>
+          <div style="grid-column:span 2"><label>Calibration text</label><input type="text" id="godzilla-input" placeholder="Non-empty plain-text file inside a saved root"><div class="button-row"><button class="secondary" onclick="generateCalibrationInput()">Generate generic starter text</button></div><div class="muted">Offline and deterministic. Use representative domain text for final quality qualification.</div></div>
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Existing official .pt statistics</label><input type="text" id="godzilla-official-stats" placeholder="Used only by Convert existing official .pt"></div>
@@ -1183,8 +1287,10 @@ let llamaCppCapabilities = null;
 let currentSettings = null;
 let discoveredModels = [];
 let saveTimer = null;
+let pendingTriattentionRepairJob = null;
 let addonScanTimer = null;
 let statusTimer = null;
+let hardwareStatus = null;
 
 async function api(path, body) {
   const opts = body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : {};
@@ -1357,6 +1463,22 @@ async function scanLlamaCpp() {
   generateCommand();
 }
 
+function renderMemoryStatus() {
+  if (!hardwareStatus) return;
+  const includeVram = document.getElementById('memory-include-vram').checked;
+  const combined = includeVram
+    ? hardwareStatus.combined_memory_gb
+    : hardwareStatus.system_ram_gb;
+  const label = hardwareStatus.unified_memory
+    ? 'Unified capacity (not double-counted)'
+    : (includeVram ? 'Combined capacity inventory' : 'System RAM capacity');
+  document.getElementById('memory-status').innerHTML =
+    `<div>System RAM: ${hardwareStatus.system_ram_gb} GB total, ${hardwareStatus.available_system_ram_gb} GB available</div>` +
+    `<div>GPU VRAM: ${hardwareStatus.total_vram_gb} GB total, ${hardwareStatus.available_vram_gb} GB free</div>` +
+    `<div>${label}: ${combined} GB</div>` +
+    '<div>RAM and VRAM remain separate limits; this total is informational.</div>';
+}
+
 async function init() {
   const saved = await loadSettings();
   const [status, methods, presets] = await Promise.all([
@@ -1365,6 +1487,7 @@ async function init() {
 
   document.getElementById('version-info').textContent =
     `v${status.version} | ${status.platform} ${status.arch} | torch ${status.torch_version} | ${status.methods} methods | ${status.presets} presets`;
+  hardwareStatus = status;
 
   // GPUs
   let gpuHtml = '';
@@ -1372,7 +1495,8 @@ async function init() {
     gpuHtml = '<span class="status-dot dot-red"></span>No GPUs detected';
   } else {
     status.gpus.forEach(g => {
-      gpuHtml += `<div class="gpu-badge">${g.name} &mdash; ${(g.vram_mb/1024).toFixed(0)} GB (${g.vendor}/${g.compute})</div> `;
+      const freeGb = Math.max(0, g.vram_mb - g.vram_used_mb) / 1024;
+      gpuHtml += `<div class="gpu-badge">${g.name} &mdash; ${(g.vram_mb/1024).toFixed(1)} GB total, ${freeGb.toFixed(1)} GB free (${g.vendor}/${g.compute})</div> `;
     });
   }
   document.getElementById('gpu-status').innerHTML = gpuHtml;
@@ -1416,6 +1540,7 @@ async function init() {
     cmdV.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
   });
   applyFormValues(saved.form_values || {});
+  renderMemoryStatus();
   persistentControls().forEach(el => {
     el.addEventListener('input', scheduleSave);
     el.addEventListener('change', scheduleSave);
@@ -1526,9 +1651,13 @@ async function scanAddons() {
       if (addon.kind === 'triattention' && addon.source?.valid) {
         features += '<div class="muted">Official scripts/calibrate.py found; output will be converted and validated for Godzilla.</div>';
       }
+      if (addon.environment_profile && addon.local_source?.valid) {
+        features += '<div class="muted">Managed source setup is available: the reviewed profile resolves dependencies, builds the selected checkout when needed, limits build jobs, and validates imports.</div>';
+      }
       if (addon.source_profile && addon.source) {
         features += `<div class="muted">${escapeHtml(addon.source.summary || 'Informational source only; no environment is created.')}</div>`;
-        features += `<div class="cap-warn">Source status: ${escapeHtml(addon.source.status || 'informational_only')} (not installable)</div>`;
+        const setup = addon.source.setup || {};
+        features += `<div class="cap-warn">Setup mode: ${escapeHtml(setup.mode || 'informational_only')}; automatic repository execution is ${setup.automatic ? 'available' : 'disabled'}.</div>`;
       }
       const inspection = addon.source || addon.local_source;
       (inspection?.issues || []).forEach(issue => {
@@ -1578,12 +1707,16 @@ async function inspectSelectedAddonSource() {
       path: document.getElementById('addon-source-path').value,
     });
     const statusClass = result.valid ? 'status-configured' : 'status-failed';
+    const setup = result.setup || {};
     target.innerHTML = `<div class="item"><div class="item-title"><span>${escapeHtml(result.name)}</span>` +
       `<span class="status-pill ${statusClass}">${escapeHtml(result.status)}</span></div>` +
       `<div class="muted">${escapeHtml(result.path)}</div>` +
       `<div class="muted">${escapeHtml(result.summary)}</div>` +
       `${result.source_url ? `<div class="muted"><a href="${escapeHtml(result.source_url)}" target="_blank" rel="noreferrer">Open upstream</a></div>` : ''}` +
       `${result.git_remote ? `<div class="muted">${escapeHtml(result.git_remote)}</div>` : ''}` +
+      `<div class="cap-warn">Setup mode: ${escapeHtml(setup.mode || 'informational_only')}; automatic repository execution is ${setup.automatic ? 'available' : 'disabled'}.</div>` +
+      `${(setup.requirements || []).map(item => `<div class="muted">Requirement: ${escapeHtml(item)}</div>`).join('')}` +
+      `${(setup.next_steps || []).map(item => `<div class="muted">Next: ${escapeHtml(item)}</div>`).join('')}` +
       `${Object.entries(result.marker_groups || {}).map(([marker, present]) =>
         `<div class="${present ? 'muted' : 'cap-bad'}">${present ? 'Found' : 'Missing'}: ${escapeHtml(marker)}</div>`
       ).join('')}` +
@@ -1734,16 +1867,55 @@ function godzillaPayload() {
 function renderGodzillaPlan(plan) {
   const target = document.getElementById('godzilla-plan');
   const status = plan.ready ? 'ready' : 'blocked';
+  const repairAction = plan.dependency_repair?.available
+    ? `<div class="button-row"><button onclick="repairTriAttentionEnvironment()">Repair TriAttention dependencies</button>` +
+      `<span class="muted">${escapeHtml(plan.dependency_repair.message)}</span></div>`
+    : (plan.dependency_repair?.needed
+      ? `<div class="cap-warn">${escapeHtml(plan.dependency_repair.message)}</div>`
+      : '');
   target.innerHTML = `<div class="item"><div class="item-title"><span>TriAttention preparation</span>` +
     `<span class="status-pill status-${status}">${status}</span></div>` +
     `<div class="muted">Mode: ${escapeHtml(plan.mode)}</div>` +
     `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
     `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
+    (plan.resource_policy ? `<div class="muted">${escapeHtml(plan.resource_policy.message)}</div>` : '') +
     (plan.official_stats ? `<div class="muted">Official .pt stats: ${escapeHtml(plan.official_stats)}</div>` : '') +
     (plan.issues || []).map(issue =>
       `<div class="${issue.severity === 'error' ? 'cap-bad' : 'muted'}">${escapeHtml(issue.message)}</div>`
     ).join('') +
+    repairAction +
     `${plan.command?.length ? `<div class="result-box">${escapeHtml(plan.command.join(' '))}</div>` : ''}</div>`;
+}
+
+async function repairTriAttentionEnvironment() {
+  if (!confirm('Repair the managed TriAttention environment? This may download packages and run reviewed package builds with the configured job limit.')) return;
+  try {
+    const job = await api('/api/environments/repair-triattention', {
+      confirm: true,
+    });
+    pendingTriattentionRepairJob = job.id;
+    await refreshJobs();
+    alert('TriAttention dependency repair started. The plan will be checked again automatically when it finishes.');
+  } catch (error) {
+    alert(`TriAttention dependency repair failed: ${error.message}`);
+  }
+}
+
+async function generateCalibrationInput() {
+  if (!confirm('Generate deterministic generic calibration text inside the saved model root? Existing unrelated files will not be overwritten.')) return;
+  try {
+    const result = await api('/api/godzilla/calibration-text', {
+      n_tokens: document.getElementById('godzilla-tokens').value,
+      confirm: true,
+    });
+    document.getElementById('godzilla-input').value = result.path;
+    scheduleSave();
+    alert(result.reused
+      ? 'Existing generated calibration text selected.'
+      : `Generated ${result.characters} characters of generic calibration text.`);
+  } catch (error) {
+    alert(`Calibration text generation failed: ${error.message}`);
+  }
 }
 
 async function planGodzilla() {
@@ -1804,6 +1976,16 @@ async function refreshJobs() {
     `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
     `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\\n'))}</div>` : ''}</div>`
   ).join('');
+  if (pendingTriattentionRepairJob) {
+    const repairJob = result.jobs.find(job => job.id === pendingTriattentionRepairJob);
+    if (repairJob && ['completed', 'failed'].includes(repairJob.status)) {
+      pendingTriattentionRepairJob = null;
+      await planGodzilla();
+      alert(repairJob.status === 'completed'
+        ? 'TriAttention dependency repair completed and the plan was checked again.'
+        : `TriAttention dependency repair failed: ${repairJob.error || 'see the job log for details'}`);
+    }
+  }
 }
 
 function renderRuntime(status) {
@@ -2087,7 +2269,9 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/discovery/addon-source": lambda: api_inspect_addon_source(body),
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
+                "/api/environments/repair-triattention": lambda: api_repair_triattention_environment(body),
                 "/api/godzilla/plan": lambda: api_plan_godzilla(body),
+                "/api/godzilla/calibration-text": lambda: api_generate_calibration_text(body),
                 "/api/godzilla/create": lambda: api_create_godzilla(body),
                 "/api/runtime/start": lambda: api_runtime_start(body),
                 "/api/runtime/stop": api_runtime_stop,

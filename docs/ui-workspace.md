@@ -91,7 +91,27 @@ a GGUF by itself is not sufficient.
 Calibration lengths from 128 through 200,000 tokens are supported. Values above
 32,768 require the explicit **Allow long calibration** checkbox and produce a
 one-shot memory/runtime warning; the UI does not silently chunk or aggregate
-the upstream calibrator's sequence.
+the upstream calibrator's sequence. It permits one calibration job at a time so
+two model loads cannot overlap. A successful dependency preflight reports the
+selected CUDA device's free and total VRAM, but that snapshot is not a memory
+estimate or guarantee for a 200,000-token run.
+
+If the automatically selected managed interpreter is missing `accelerate` or
+another declared dependency, the plan offers **Repair TriAttention
+dependencies** only after the reviewed environment profile passes its host/tool
+preflight. The confirmed action ignores unrelated interpreter and local-source
+overrides, re-synchronizes the pinned `triattention` environment with a
+conservative two-job limit, validates Torch, Transformers, Accelerate, and
+TriAttention, and checks the preparation plan again when the background job
+finishes. A manually selected Python is not modified; repair it outside
+Multi-TurboQuant or select the managed environment.
+
+**Generate generic starter text** creates deterministic offline text under
+`<model-root>/.mtq/calibration/` and selects it as the calibration input. It
+never overwrites unrelated files, uses schema/completion markers, and safely
+handles simultaneous requests and filesystems without hard-link support. Exact
+tokenization depends on the selected model, and representative domain text
+remains preferable for final quality qualification.
 
 The CUDA weight-share controls only prepare the external Linux/CUDA helper's
 environment:
@@ -147,9 +167,13 @@ isolated environment. The scanner never imports or executes the checkout, and
 unrecognized folders cannot be substituted into a profile.
 
 Selecting a blocked add-on source is informational only: the scanner reports
-the reviewed markers, upstream metadata, and the reason automatic installation
-is not offered. It never turns a blocked profile into an installable one or
-executes the selected source.
+the reviewed markers, upstream metadata, repository-specific host/artifact
+requirements, and the reason automatic installation is not offered. It never
+turns a blocked profile into an installable one or executes the selected source.
+Current Maru layouts are recognized by `pyproject.toml`/`setup.py` plus
+`maru_resource_manager`, `maru_server`, or `maru`; a root `CMakeLists.txt` is
+not expected. Maru setup remains guided because upstream requires Linux host
+services and a configured CXL DAX device or its documented emulation.
 
 A local checkout changes only the selected package's source. It does not relax
 the profile's operating-system, Python, PyTorch, or CUDA ABI requirements. In
@@ -189,6 +213,11 @@ Godzilla preparation also runs as a background job and verifies that the
 expected `.triattention` output exists. Custom outputs are limited to the
 selected checkout or model folder. The checkout must remain inside a saved
 add-on root, and the GGUF must remain inside the saved model root.
+
+The Hardware card reports host RAM and discrete GPU VRAM independently, plus an
+optional combined capacity inventory. RAM does not replace VRAM for CUDA model
+loading or KV-cache allocations. Apple unified memory is labeled and is not
+added to itself in the combined figure.
 
 ## Persistent defaults
 

@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-237%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-259%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -89,7 +89,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-248 automated test cases: 237 pass in the current Windows CPU environment and
+270 automated test cases: 259 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -100,8 +100,10 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
 | `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 23 | Official and domvox calibration/conversion, strict format checks, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 57 | Command generation, disconnect handling, rendered JavaScript, settings, dependency-state validation/override, source-profile selection, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
+| `test_run_ui.py` + `test_ui_workspace.py` | 64 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
+| `test_calibration_text.py` | 10 | Deterministic offline corpus generation, size/token bounds, concurrent no-clobber publication, incomplete-file refusal, and concurrent non-hardlink filesystem fallback |
+| `test_hardware.py` | 5 | Host RAM detection, discrete RAM/VRAM accounting, Apple unified-memory handling, and mixed unified/discrete capacity |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
 
@@ -219,7 +221,14 @@ validation. An existing official payload can be converted separately with
 The Setup & Add-ons view recognizes the official checkout, can build its
 isolated calibration environment from that directory with `MAX_JOBS=2`, and
 automatically uses the validated interpreter. Its second official mode converts
-an existing `.pt` payload without repeating the model forward pass.
+an existing `.pt` payload without repeating the model forward pass. If the
+managed interpreter is incomplete—for example, it cannot import `accelerate`—
+the preparation plan offers a confirmed **Repair TriAttention dependencies**
+action. It first checks that the host can create the reviewed environment, then
+re-synchronizes the pinned owned profile with a conservative two-job limit,
+validates every declared module, and automatically checks the preparation plan
+again. The managed repair ignores unrelated Python and local-source overrides;
+a manually selected Python is never modified.
 
 This route does not use `llama-cli`. A native `llama-cli` calibration choice is
 not offered because the current Godzilla binary does not expose a real calibration
@@ -256,9 +265,17 @@ for domvox layer-budget scales or attention scale, so those fields are reported
 as dropped. Calibration lengths from 128 through 200,000 tokens are accepted;
 anything above 32,768 requires `--allow-long-calibration` and is processed as
 one upstream sequence, with substantially higher memory and runtime risk. The
-default remains conservative. Use the matching Hugging Face checkpoint, not a
-GGUF alone, for shape and RoPE metadata, and validate retrieval quality on the
-target model before relying on the result.
+default remains conservative. The local UI accepts only one calibration job at
+a time and reports current CUDA free/total VRAM, but neither measure reduces or
+predicts the memory required by the one long sequence. System RAM and GPU VRAM
+are shown separately; their optional combined figure is capacity inventory,
+not interchangeable calibration memory. The UI can also create deterministic
+offline starter text inside the saved model root without overwriting unrelated
+files. Corpus files carry a schema and completion marker, and simultaneous
+requests cannot clobber one another or reuse a partial file. Use representative
+domain text for final quality qualification, the matching Hugging Face checkpoint
+for shape and RoPE metadata, and validate
+retrieval quality on the target model before relying on the result.
 
 ### Godzilla KVarN and DFlash
 
@@ -438,6 +455,14 @@ mtq-env create fastdms --cuda-toolkit /usr/local/cuda-12.6 --yes
 The Setup & Add-ons view exposes the same override. CUDA 13 `nvcc` is not used
 to compile extensions for the CUDA 12.6 PyTorch profiles.
 
+Reviewed local-source profiles receive managed dependency resolution, bounded
+builds, and import validation. Constrained research sources instead receive a
+repository-specific setup contract. In particular, current Maru checkouts are
+recognized through `pyproject.toml`/`setup.py` and the
+`maru_resource_manager`/`maru_server` packages—no root `CMakeLists.txt` is
+required. Maru remains guided-only because its upstream installer expects a
+dedicated Linux host, CXL DAX device setup, and host services.
+
 ### Plan a multi-agent deployment
 
 ```python
@@ -540,7 +565,8 @@ The browser UI now has two focused views:
 - **Quick Run** keeps hardware detection, cache-method benchmarking, capacity
   planning, presets, and llama.cpp command generation together. It can discover
   models under a configured folder and start or stop a selected GGUF model with
-  the generated argument list.
+  the generated argument list. Host RAM and GPU VRAM are reported separately;
+  Apple unified memory is not double-counted.
 - **Setup & Add-ons** stores the model, environment, add-on, and optional
   FlashAttention source folders; automatically scans only those configured
   folders; and reports the roots, depth, and directories inspected. It can
@@ -550,7 +576,9 @@ The browser UI now has two focused views:
   The view also recognizes renamed Godzilla trees by their marker script,
   reports KVarN/TriAttention support and existing builds, validates or creates
   the official calibrator environment, and can either calibrate and convert or
-  convert existing official statistics after its prerequisites pass. Advanced
+  convert existing official statistics after its prerequisites pass. Failed
+  managed dependency checks can be repaired from the plan, and optional generic
+  starter text can be generated locally. Advanced
   Quick Run controls and infrequent Setup sections are collapsed by default.
   The source picker can inspect local folders for the six blocked add-ons and
   the domvox checkout without importing or executing them; blocked profiles
@@ -570,7 +598,7 @@ multi_turboquant/
   registry.py            Method registration and discovery
   presets.py             19 named presets + auto-recommend
   planner.py             Multi-agent capacity planning, any GPU count
-  hardware.py            GPU auto-detection (NVIDIA, AMD, Metal)
+  hardware.py            GPU and host-memory detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks
   optimizations/         Optional manifests, conflict planner, isolated env manager
   methods/               5 method families, all with encode/decode
@@ -633,6 +661,7 @@ RoPE, LongRoPE, or llama.cpp code.
 | Identified the official TriAttention calibration script and requested a no-`llama-cli` workflow plus clearer CUDA weight-share guidance | [@jawadala](https://github.com/jawadala) | Issue [#29](https://github.com/aivrar/multi-turboquant/issues/29) |
 | Reported remaining dependency-state and calibration workflow friction, prompting bounded local builds, installed-environment validation, and a streamlined official-stats conversion path | [@jawadala](https://github.com/jawadala) | Issue [#31](https://github.com/aivrar/multi-turboquant/issues/31) |
 | Requested domvox TRIA v2 calibration support, a 200k-token ceiling, local source selection for blocked add-ons, and a less-cluttered UI; these requests informed the experimental adapter, source inspector, progressive disclosure, and guardrails | [@jawadala](https://github.com/jawadala) | Issue [#32](https://github.com/aivrar/multi-turboquant/issues/32) |
+| Reported the incomplete TriAttention environment and current Maru layout, and suggested clearer memory accounting, calibration starter text, repair, and source-specific setup guidance | [@jawadala](https://github.com/jawadala) | Issue [#35](https://github.com/aivrar/multi-turboquant/issues/35) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
