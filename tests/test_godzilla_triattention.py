@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import subprocess
 from pathlib import Path
 
@@ -37,6 +38,39 @@ def _write_official_script(path: Path) -> None:
     )
 
 
+def _write_domvox_stats(path: Path, *, layers: int = 1, heads: int = 2) -> None:
+    head_dim = 4
+    freq_count = head_dim // 2
+    header = struct.pack(
+        "<7I2f",
+        0x54524941,
+        2,
+        layers,
+        heads,
+        1,
+        head_dim,
+        freq_count,
+        10_000.0,
+        1.0,
+    )
+    path.write_bytes(
+        header
+        + (b"\0" * (64 - len(header)))
+        + struct.pack(f"<{layers}f", *([1.0] * layers))
+        + b"".join(
+            struct.pack(f"<{freq_count}f", *values)
+            for _layer in range(layers)
+            for _head in range(heads)
+            for values in (
+                (0.1, 0.2),
+                (0.2, 0.1),
+                (0.5, 0.5),
+                (0.4, 0.5),
+            )
+        )
+    )
+
+
 def test_convert_official_stats_writes_strict_godzilla_v1(tmp_path: Path):
     source = tmp_path / "official.pt"
     output = tmp_path / "model.triattention"
@@ -69,6 +103,96 @@ def test_convert_official_stats_writes_strict_godzilla_v1(tmp_path: Path):
         "freq_count": 2,
         "size_bytes": output.stat().st_size,
     }
+
+
+def test_domvox_inspection_and_lossy_conversion_are_strict(tmp_path: Path):
+    source = tmp_path / "domvox.bin"
+    output = tmp_path / "model.triattention"
+    _write_domvox_stats(source, layers=1, heads=2)
+
+    inspection = calibration.inspect_domvox_triattention_file(source)
+    assert inspection["format"] == "domvox-tria-v2"
+    assert inspection["num_attention_heads"] == 2
+
+    with pytest.raises(ValueError, match="lossy"):
+        calibration.convert_domvox_triattention_stats(source, output, model_name="model")
+
+    report = calibration.convert_domvox_triattention_stats(
+        source,
+        output,
+        model_name="model",
+        num_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        rope_theta=10_000.0,
+        expected_head_dim=4,
+        accept_lossy=True,
+    )
+    assert report["source_format"] == "domvox-tria-v2"
+    assert report["lossy"] is True
+    assert report["sampled_heads"] == 2
+
+
+def test_domvox_conversion_rejects_model_shape_mismatch(tmp_path: Path):
+    source = tmp_path / "domvox.bin"
+    _write_domvox_stats(source)
+
+    with pytest.raises(ValueError, match="num_layers"):
+        calibration.convert_domvox_triattention_stats(
+            source,
+            tmp_path / "model.triattention",
+            model_name="model",
+            num_layers=2,
+            accept_lossy=True,
+        )
+
+
+def test_domvox_calibration_runs_then_converts(tmp_path: Path, monkeypatch):
+    script = tmp_path / "triattention_calibrate.py"
+    script.write_text(
+        " ".join(("--model", "--input", "--output", "--max-length", "--device", "TRIA")),
+        encoding="utf-8",
+    )
+    python = tmp_path / "python.exe"
+    python.write_bytes(b"python")
+    calibration_input = tmp_path / "calibration.txt"
+    calibration_input.write_text("text", encoding="utf-8")
+    stats = tmp_path / "domvox.bin"
+    output = tmp_path / "model.triattention"
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        _write_domvox_stats(stats)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        calibration,
+        "load_huggingface_model_metadata",
+        lambda model: {
+            "head_dim": 4,
+            "num_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rope_theta": 10_000.0,
+        },
+    )
+    report = calibration.calibrate_domvox_triattention_for_godzilla(
+        calibrator=script,
+        python=python,
+        model="org/model",
+        input_path=calibration_input,
+        output_path=output,
+        stats_output_path=stats,
+        max_length=512,
+        device="cpu",
+        accept_lossy=True,
+        runner=runner,
+    )
+
+    assert calls[0][0] == str(python.resolve())
+    assert "--max-length" in calls[0]
+    assert report["source_format"] == "domvox-tria-v2"
 
 
 def test_convert_rejects_metadata_stats_mismatch(tmp_path: Path):

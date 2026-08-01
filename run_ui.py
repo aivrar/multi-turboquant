@@ -44,6 +44,7 @@ from multi_turboquant.ui import (
     EnvironmentJobManager,
     GodzillaCalibrationJobManager,
     ManagedProcess,
+    inspect_addon_source,
     UISettingsStore,
     inspect_flashattention_source,
     scan_addon_roots,
@@ -452,6 +453,16 @@ def api_scan_flashattention(params):
     return inspect_flashattention_source(path)
 
 
+def api_inspect_addon_source(params):
+    profile = _optional_text(params.get("profile"))
+    path = _optional_text(params.get("path"))
+    if not profile:
+        raise ValueError("An add-on source profile is required")
+    if not path:
+        raise ValueError("An add-on source folder is required")
+    return inspect_addon_source(profile, path)
+
+
 def api_scan_environments(params):
     settings = _saved_settings()
     root = params.get("root") or settings["environment_root"]
@@ -576,12 +587,17 @@ def _godzilla_plan_from_params(params):
     output = _validated_godzilla_output(params.get("output"), checkout=checkout, model=model)
     mode = _optional_text(params.get("mode")) or "official_python"
     python = _optional_text(params.get("python"))
-    if python is None and mode in {"official_python", "official_convert"}:
+    if python is None and mode in {"official_python", "official_convert", "domvox"}:
         discovered_python = _default_triattention_python(settings)
         python = str(discovered_python) if discovered_python is not None else None
     calibrator = _validated_calibration_file(params.get("calibrator"), label="Calibrator")
     if calibrator is None and mode == "official_python":
         calibrator = _default_triattention_calibrator(settings)
+    domvox_calibrator = _validated_calibration_file(
+        params.get("domvox_calibrator"), label="domvox calibrator"
+    )
+    if domvox_calibrator is None and mode == "domvox":
+        domvox_calibrator = calibrator
     return plan_godzilla_triattention(
         checkout,
         model,
@@ -594,6 +610,9 @@ def _godzilla_plan_from_params(params):
         official_stats_input=_validated_calibration_file(
             params.get("official_stats_input"), label="Official statistics"
         ),
+        domvox_calibrator=domvox_calibrator,
+        domvox_accept_lossy=_truthy(params.get("domvox_accept_lossy")),
+        allow_long_calibration=_truthy(params.get("allow_long_calibration")),
         hf_model=_validated_hf_model(params.get("hf_model")),
         n_tokens=_optional_int(params.get("n_tokens"), 2048),
         device=_optional_text(params.get("device")) or "cuda",
@@ -616,20 +635,28 @@ def api_create_godzilla(params):
     if params.get("confirm") is not True:
         raise ValueError("Godzilla calibration requires explicit confirmation")
     plan = _godzilla_plan_from_params(params)
+    job_kwargs = {
+        "output": plan.output,
+        "python": plan.python,
+        "calibrator": plan.calibrator,
+        "calibration_input": plan.calibration_input,
+        "official_stats_input": plan.official_stats_input,
+        "hf_model": plan.hf_model,
+        "n_tokens": plan.n_tokens,
+        "device": plan.device,
+        "mode": plan.mode,
+        "attention_implementation": plan.attention_implementation,
+        "dependency_override": plan.dependency_override,
+    }
+    if plan.mode == "domvox":
+        job_kwargs["domvox_calibrator"] = plan.domvox_calibrator
+        job_kwargs["domvox_accept_lossy"] = plan.domvox_accept_lossy
+    if getattr(plan, "allow_long_calibration", False):
+        job_kwargs["allow_long_calibration"] = True
     return GODZILLA_JOBS.start(
         plan.checkout,
         plan.gguf,
-        output=plan.output,
-        python=plan.python,
-        calibrator=plan.calibrator,
-        calibration_input=plan.calibration_input,
-        official_stats_input=plan.official_stats_input,
-        hf_model=plan.hf_model,
-        n_tokens=plan.n_tokens,
-        device=plan.device,
-        mode=plan.mode,
-        attention_implementation=plan.attention_implementation,
-        dependency_override=plan.dependency_override,
+        **job_kwargs,
     )
 
 
@@ -711,6 +738,20 @@ h1 { color: #58a6ff; font-size: 24px; margin-bottom: 4px; }
 .card h2 { color: #58a6ff; font-size: 14px; margin-bottom: 12px; text-transform: uppercase;
            letter-spacing: 0.5px; }
 .card.full { grid-column: 1 / -1; }
+details.card { padding: 0; }
+details.card > summary { padding: 16px; }
+details > summary { cursor: pointer; list-style: none; display:flex; justify-content:space-between;
+                    gap:12px; align-items:center; color:#58a6ff; font-size:14px; font-weight:700;
+                    text-transform:uppercase; letter-spacing:0.5px; }
+details > summary::-webkit-details-marker { display:none; }
+details > summary::before { content:'▸'; color:#8b949e; margin-right:8px; }
+details[open] > summary::before { content:'▾'; }
+.section-summary { display:flex; align-items:center; gap:8px; }
+.section-summary .muted { text-transform:none; letter-spacing:0; font-weight:400; }
+.details-body { padding:0 16px 16px; }
+.inline-disclosure { border:1px solid #30363d; border-radius:6px; padding:0 10px; margin:10px 0 12px; }
+.inline-disclosure > summary { padding:9px 0; font-size:12px; text-transform:none; letter-spacing:0; }
+.inline-disclosure .details-body { padding:0 0 2px; }
 .gpu-badge { display: inline-block; background: #1f6feb22; border: 1px solid #1f6feb;
              border-radius: 4px; padding: 4px 10px; margin: 2px; font-size: 12px; }
 .method-row { display: flex; justify-content: space-between; padding: 6px 0;
@@ -883,7 +924,9 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         </select></div>
         <div><label>Context</label><input type="number" id="cmd-ctx" value="4096" onchange="generateCommand()"></div>
       </div>
-      <div class="mini-label">Context Extension</div>
+      <details class="inline-disclosure">
+        <summary>Context extension (RoPE / YaRN)</summary>
+        <div class="details-body">
       <div class="form-row">
         <div><label title="Select the RoPE scaling mode passed to llama.cpp. Leave model default unless extending beyond the model's trained context.">RoPE Mode</label><select id="cmd-rope-scaling" onchange="generateCommand()">
           <option value="" selected>model default</option>
@@ -904,6 +947,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <input type="number" step="0.0001" id="cmd-yarn-beta-fast" value="" placeholder="32" onchange="generateCommand()">
         </div></div>
       </div>
+        </div>
+      </details>
       <div class="form-row">
         <div style="grid-column:1/3"><label>Discovered Model</label>
           <select id="cmd-model-select" onchange="selectDiscoveredModel()">
@@ -924,6 +969,9 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div><label>Server Port</label><input type="number" id="cmd-port" value="8080" onchange="generateCommand()"></div>
         <div><label>Tensor Split</label><input type="text" id="cmd-tensor-split" value="" placeholder="0.7,0.3" onchange="generateCommand()"></div>
       </div>
+      <details class="inline-disclosure">
+        <summary>Speculative decoding (DFlash)</summary>
+        <div class="details-body">
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-spec-dflash" onchange="generateCommand()"> DFlash</label></div>
         <div><label>Draft Model</label><input type="text" id="cmd-spec-draft-model" value="" placeholder="draft.gguf" onchange="generateCommand()"></div>
@@ -936,6 +984,11 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div><label>Draft K Cache</label><input type="text" id="cmd-spec-cache-k" value="" placeholder="f16" onchange="generateCommand()"></div>
         <div><label>Draft V Cache</label><input type="text" id="cmd-spec-cache-v" value="" placeholder="f16" onchange="generateCommand()"></div>
       </div>
+        </div>
+      </details>
+      <details class="inline-disclosure">
+        <summary>TriAttention (experimental)</summary>
+        <div class="details-body">
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri" onchange="generateCommand()"> TriAttention</label></div>
         <div><label><input type="checkbox" id="cmd-tri-custom" onchange="generateCommand()"> Patched llama.cpp (stats required)</label></div>
@@ -948,6 +1001,11 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         </div>
         <div class="setup-note" style="grid-column:1/-1">Godzilla's current policy treats TriAttention as experimental, opt-in, and manually calibrated. Its checkout may not include a calibrator. A GGUF file alone cannot supply the required pre-RoPE query statistics; Multi-TurboQuant's Python <code>.pt</code> stats are a different format.</div>
       </div>
+        </div>
+      </details>
+      <details class="inline-disclosure">
+        <summary>CUDA weight sharing (advanced)</summary>
+        <div class="details-body">
       <div class="form-row">
         <div><label><input type="checkbox" id="cmd-tri-log" onchange="generateCommand()"> TriAttn Log</label></div>
         <div><label><input type="checkbox" id="cmd-weight-share" onchange="generateCommand()"> CUDA Weight Share</label></div>
@@ -967,6 +1025,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div></div>
       </div>
       <div class="setup-note">CUDA weight sharing is a Linux + CUDA feature supplied by an external preload helper. First run one trusted process with <code>MODEL_SIZE=0</code> to discover the model-weight allocation, then reuse the reported byte count for the master and workers. It shares model weights only—not the KV cache or context—and all participating processes must use the same model/build/device setup.</div>
+        </div>
+      </details>
       <div class="result-box" id="cmd-result">Select methods above...</div>
       <div class="mini-label">Managed llama-server</div>
       <div class="runtime-actions">
@@ -1017,6 +1077,22 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <button class="secondary" onclick="scanFlashAttention()">Check FlashAttention</button>
         </div>
         <div id="addon-scan-result" class="item-list"><div class="muted">Not scanned.</div></div>
+        <div class="mini-label">Inspect a local source folder</div>
+        <div class="setup-note">Source inspection is read-only. A recognized source is recorded as informational until its dependencies, runtime integration, and licensing are separately reviewed.</div>
+        <div class="form-row">
+          <div><label>Source profile</label><select id="addon-source-profile">
+            <option value="maru">Maru</option>
+            <option value="speculative_prefill">Speculative Prefill</option>
+            <option value="rocketkv">RocketKV</option>
+            <option value="lexico">Lexico</option>
+            <option value="adadecode">AdaDecode</option>
+            <option value="resonance_yarn">Resonance YaRN</option>
+            <option value="domvox_triattention">domvox TriAttention</option>
+          </select></div>
+          <div style="grid-column:span 3"><label>Local source folder</label><input type="text" id="addon-source-path" placeholder="/path/to/checkout"></div>
+        </div>
+        <div class="button-row"><button class="secondary" onclick="inspectSelectedAddonSource()">Inspect source</button></div>
+        <div id="addon-source-result" class="item-list"><div class="muted">No source selected.</div></div>
       </div>
 
       <div class="card full">
@@ -1047,7 +1123,9 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div id="environment-result" class="item-list"><div class="muted">Not scanned.</div></div>
       </div>
 
-      <div class="card full">
+      <details class="card full setup-section">
+        <summary><span class="section-summary">Godzilla Source Setup <span class="muted">Calibration and conversion</span></span></summary>
+        <div class="details-body">
         <h2>Godzilla Source Setup</h2>
         <div class="setup-note">The recommended mode runs the official WeianMao/triattention Python calibrator, converts its <code>.pt</code> statistics to Godzilla v1, and validates the finished file. Select the recognized TriAttention checkout above and its isolated dependency environment is used automatically after validation. Existing official <code>.pt</code> statistics can be converted without another model forward pass. Neither route needs <code>llama-cli</code>.</div>
         <div class="form-row">
@@ -1055,12 +1133,12 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div style="grid-column:span 2"><label>GGUF model</label><input type="text" id="godzilla-gguf" placeholder="Model inside the saved model root"></div>
         </div>
         <div class="form-row">
-          <div><label>Calibration mode</label><select id="godzilla-mode"><option value="official_python" selected>Generate stats + convert</option><option value="official_convert">Convert existing official .pt</option><option value="godzilla_script">Godzilla checkout script</option></select></div>
+          <div><label>Calibration mode</label><select id="godzilla-mode"><option value="official_python" selected>Generate stats + convert</option><option value="official_convert">Convert existing official .pt</option><option value="godzilla_script">Godzilla checkout script</option><option value="domvox">domvox TRIA v2 (experimental)</option></select></div>
           <div><label>Attention implementation</label><select id="godzilla-attention"><option value="sdpa" selected>SDPA</option><option value="eager">Eager</option><option value="flash_attention_2">FlashAttention 2</option></select></div>
           <div style="grid-column:span 2"><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
         </div>
         <div class="form-row">
-          <div style="grid-column:span 2"><label>Official TriAttention calibrator</label><input type="text" id="godzilla-calibrator" placeholder="/path/to/triattention/scripts/calibrate.py"></div>
+          <div style="grid-column:span 2"><label>TriAttention calibrator</label><input type="text" id="godzilla-calibrator" placeholder="Official scripts/calibrate.py or domvox/triattention_calibrate.py"></div>
           <div style="grid-column:span 2"><label>Calibration text</label><input type="text" id="godzilla-input" placeholder="Non-empty plain-text file inside a saved root"></div>
         </div>
         <div class="form-row">
@@ -1072,7 +1150,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div style="grid-column:span 2"><label>Output .triattention (optional)</label><input type="text" id="godzilla-output" placeholder="Defaults to checkout/calibrations/model.triattention"></div>
         </div>
         <div class="form-row">
-          <div><label>Calibration tokens</label><input type="number" id="godzilla-tokens" value="2048" min="128" max="32768"></div>
+          <div><label>Calibration tokens</label><input type="number" id="godzilla-tokens" value="2048" min="128" max="200000"></div>
           <div><label>Device</label><select id="godzilla-device"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
           <div style="grid-column:span 2" class="button-row">
             <button class="secondary" onclick="planGodzilla()">Check Plan</button>
@@ -1080,15 +1158,21 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <button onclick="startGodzilla()">Prepare TriAttention</button>
           </div>
         </div>
+        <div class="setup-note"><label><input type="checkbox" id="godzilla-long-calibration"> Allow one-shot calibration above 32,768 tokens (up to 200,000; high memory/runtime risk)</label></div>
+        <div class="setup-note"><label><input type="checkbox" id="godzilla-domvox-lossy"> I understand domvox TRIA v2 to Godzilla v1 conversion is experimental and drops fields not represented by Godzilla v1.</label></div>
         <div id="godzilla-plan" class="item-list"><div class="muted">No preparation plan checked.</div></div>
-      </div>
+        </div>
+      </details>
 
-      <div class="card full">
+      <details class="card full setup-section">
+        <summary><span class="section-summary">Background Jobs <span class="muted">Environment and calibration activity</span></span></summary>
+        <div class="details-body">
         <h2>Background Jobs</h2>
         <div id="environment-jobs" class="item-list"><div class="muted">No environment jobs.</div></div>
         <div class="mini-label">Godzilla TriAttention</div>
         <div id="godzilla-jobs" class="item-list"><div class="muted">No Godzilla jobs.</div></div>
-      </div>
+        </div>
+      </details>
     </div>
   </section>
 </div>
@@ -1419,11 +1503,17 @@ async function scanAddons() {
       if (addon.environment_profile && addon.local_source?.valid) {
         action += `<button onclick="useAddonSource('${escapeHtml(addon.environment_profile)}','${encodedPath}')">Use for ${escapeHtml(addon.environment_profile)}</button>`;
       }
+      if (addon.source_profile && addon.source?.valid) {
+        action += `<button class="secondary" onclick="useInformationalAddonSource('${escapeHtml(addon.source_profile)}','${encodedPath}')">Inspect source</button>`;
+      }
       if (addon.kind === 'godzilla' && addon.source?.valid) {
         action += `<button onclick="useGodzillaSource('${encodedPath}','${encodedBinary}')">Use Godzilla checkout</button>`;
       }
       if (addon.kind === 'triattention' && addon.source?.valid) {
         action += `<button onclick="useTriAttentionSource('${encodedCalibrator}','${encodedPath}')">Use calibrator & dependencies</button>`;
+      }
+      if (addon.kind === 'domvox_triattention' && addon.source?.valid) {
+        action += `<button onclick="useDomvoxSource('${encodedCalibrator}','${encodedPath}')">Use domvox calibrator</button>`;
       }
       let features = addon.kind === 'godzilla' && addon.source?.features
         ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
@@ -1436,13 +1526,21 @@ async function scanAddons() {
       if (addon.kind === 'triattention' && addon.source?.valid) {
         features += '<div class="muted">Official scripts/calibrate.py found; output will be converted and validated for Godzilla.</div>';
       }
+      if (addon.source_profile && addon.source) {
+        features += `<div class="muted">${escapeHtml(addon.source.summary || 'Informational source only; no environment is created.')}</div>`;
+        features += `<div class="cap-warn">Source status: ${escapeHtml(addon.source.status || 'informational_only')} (not installable)</div>`;
+      }
       const inspection = addon.source || addon.local_source;
       (inspection?.issues || []).forEach(issue => {
         features += '<div class="cap-bad">' + escapeHtml(issue) + '</div>';
       });
-      const statusClass = inspection && !inspection.valid ? 'status-failed' : 'status-ready';
+      const statusClass = inspection && !inspection.valid ? 'status-failed' :
+        (addon.source_profile ? 'status-configured' : 'status-ready');
+      const statusText = addon.source_profile
+        ? (inspection?.valid ? 'informational' : 'source check failed')
+        : addon.kind;
       return `<div class="item"><div class="item-title"><span>${escapeHtml(addon.name)}</span>` +
-        `<span class="status-pill ${statusClass}">${escapeHtml(addon.kind)}</span></div>` +
+        `<span class="status-pill ${statusClass}">${escapeHtml(statusText)}</span></div>` +
         `<div class="muted">${escapeHtml(addon.path)}</div>` +
         `${addon.git_remote ? `<div class="muted">${escapeHtml(addon.git_remote)}</div>` : ''}` +
         features + (action ? `<div class="button-row">${action}</div>` : '') + '</div>';
@@ -1462,6 +1560,37 @@ function useAddonSource(profile, encodedPath) {
   document.getElementById('env-local-source').value = decodeURIComponent(encodedPath);
   scheduleSave();
   scanEnvironments();
+}
+
+function useInformationalAddonSource(profile, encodedPath) {
+  document.getElementById('addon-source-profile').value = profile;
+  document.getElementById('addon-source-path').value = decodeURIComponent(encodedPath);
+  scheduleSave();
+  inspectSelectedAddonSource();
+}
+
+async function inspectSelectedAddonSource() {
+  const target = document.getElementById('addon-source-result');
+  target.innerHTML = '<div class="muted">Inspecting source markers...</div>';
+  try {
+    const result = await api('/api/discovery/addon-source', {
+      profile: document.getElementById('addon-source-profile').value,
+      path: document.getElementById('addon-source-path').value,
+    });
+    const statusClass = result.valid ? 'status-configured' : 'status-failed';
+    target.innerHTML = `<div class="item"><div class="item-title"><span>${escapeHtml(result.name)}</span>` +
+      `<span class="status-pill ${statusClass}">${escapeHtml(result.status)}</span></div>` +
+      `<div class="muted">${escapeHtml(result.path)}</div>` +
+      `<div class="muted">${escapeHtml(result.summary)}</div>` +
+      `${result.source_url ? `<div class="muted"><a href="${escapeHtml(result.source_url)}" target="_blank" rel="noreferrer">Open upstream</a></div>` : ''}` +
+      `${result.git_remote ? `<div class="muted">${escapeHtml(result.git_remote)}</div>` : ''}` +
+      `${Object.entries(result.marker_groups || {}).map(([marker, present]) =>
+        `<div class="${present ? 'muted' : 'cap-bad'}">${present ? 'Found' : 'Missing'}: ${escapeHtml(marker)}</div>`
+      ).join('')}` +
+      `${(result.issues || []).map(issue => `<div class="cap-bad">${escapeHtml(issue)}</div>`).join('')}</div>`;
+  } catch (error) {
+    renderFailure('addon-source-result', error);
+  }
 }
 
 function useGodzillaSource(encodedPath, encodedBinary) {
@@ -1485,6 +1614,15 @@ function useTriAttentionSource(encodedCalibrator, encodedPath) {
   document.getElementById('env-local-source').value = decodeURIComponent(encodedPath);
   scheduleSave();
   scanEnvironments();
+}
+
+function useDomvoxSource(encodedCalibrator, encodedPath) {
+  document.getElementById('godzilla-mode').value = 'domvox';
+  document.getElementById('godzilla-calibrator').value = decodeURIComponent(encodedCalibrator);
+  document.getElementById('addon-source-profile').value = 'domvox_triattention';
+  document.getElementById('addon-source-path').value = decodeURIComponent(encodedPath);
+  scheduleSave();
+  inspectSelectedAddonSource();
 }
 
 async function scanFlashAttention() {
@@ -1588,6 +1726,8 @@ function godzillaPayload() {
     n_tokens: document.getElementById('godzilla-tokens').value,
     device: document.getElementById('godzilla-device').value,
     dependency_override: document.getElementById('godzilla-dependency-override').checked,
+    allow_long_calibration: document.getElementById('godzilla-long-calibration').checked,
+    domvox_accept_lossy: document.getElementById('godzilla-domvox-lossy').checked,
   };
 }
 
@@ -1944,6 +2084,7 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/discovery/models": lambda: api_scan_models(body),
                 "/api/discovery/addons": lambda: api_scan_addons(body),
                 "/api/discovery/flashattention": lambda: api_scan_flashattention(body),
+                "/api/discovery/addon-source": lambda: api_inspect_addon_source(body),
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
                 "/api/godzilla/plan": lambda: api_plan_godzilla(body),

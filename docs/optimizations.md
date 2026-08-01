@@ -227,6 +227,14 @@ have no create command until the missing hardware contract, licensing,
 artifacts, maintenance baseline, or serving integration exists. The UI labels
 them as informational and does not offer an automatic Create action.
 
+The Setup source picker can still inspect a local checkout for each blocked
+profile. It checks reviewed marker files and reports upstream metadata without
+importing or executing the source; selecting a folder never changes the
+profile's blocked status or creates an environment. The same read-only inspector
+recognizes `domvox/triattention-ggml` for the separate experimental TriAttention
+adapter. That adapter belongs to the Godzilla calibration workflow, not to the
+installable Python add-on profiles.
+
 Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible
 wheel is available, uv may compile a native extension. The plan reports that
@@ -310,3 +318,4 @@ native operator, not a model-specific sparse-attention configuration.
 - Lexico: <https://github.com/krafton-ai/lexico>
 - AdaDecode: <https://github.com/weizhepei/AdaDecode>
 - Resonance RoPE: <https://github.com/sheryc/resonance_rope>
+- domvox TriAttention: <https://github.com/domvox/triattention-ggml>

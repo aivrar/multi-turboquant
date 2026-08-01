@@ -3,6 +3,7 @@
 
 from .discovery import (
     MODEL_FILE_SUFFIXES,
+    inspect_addon_source,
     inspect_flashattention_source,
     scan_addon_roots,
     scan_environment_profiles,
@@ -18,6 +19,7 @@ __all__ = [
     "MODEL_FILE_SUFFIXES",
     "ManagedProcess",
     "UISettingsStore",
+    "inspect_addon_source",
     "inspect_flashattention_source",
     "scan_addon_roots",
     "scan_environment_profiles",

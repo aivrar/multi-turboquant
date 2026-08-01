@@ -13,6 +13,156 @@ MODEL_FILE_SUFFIXES = frozenset({".gguf", ".safetensors", ".bin", ".pt", ".pth"}
 MAX_SCAN_DIRECTORIES = 5_000
 
 
+# These projects are intentionally informational-only.  The marker groups let
+# the UI recognize a checkout without treating it as an installable Python
+# environment or executing anything from the checkout.
+_BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
+    "maru": {
+        "profile": "maru",
+        "name": "Maru",
+        "source_url": "https://github.com/xcena-dev/maru",
+        "marker_groups": (
+            ("README.md",),
+            ("CMakeLists.txt",),
+            ("resource_manager", "resource-manager", "maru"),
+        ),
+        "summary": "CXL shared-memory KV-cache project; host services and CXL hardware remain required.",
+    },
+    "speculative_prefill": {
+        "profile": "speculative_prefill",
+        "name": "Speculative Prefill",
+        "source_url": "https://github.com/Jingyu6/speculative_prefill",
+        "marker_groups": (
+            ("README.md",),
+            ("requirements.txt", "environment.yml", "setup.py", "pyproject.toml"),
+            ("speculative_prefill", "vllm", "scripts", "src"),
+        ),
+        "summary": "Experimental vLLM monkey patch; version-pinned runtime integration is not maintained here.",
+    },
+    "rocketkv": {
+        "profile": "rocketkv",
+        "name": "RocketKV",
+        "source_url": "https://github.com/NVlabs/RocketKV",
+        "marker_groups": (
+            ("README.md",),
+            ("requirements.txt", "environment.yml", "setup.py", "pyproject.toml"),
+            ("rocketkv", "src", "evaluation", "eval"),
+        ),
+        "summary": "Research KV-compression snapshot; packaging is limited by its upstream license and stack.",
+    },
+    "lexico": {
+        "profile": "lexico",
+        "name": "Lexico",
+        "source_url": "https://github.com/krafton-ai/lexico",
+        "marker_groups": (
+            ("README.md",),
+            ("setup.py", "pyproject.toml"),
+            ("lexico", "src"),
+        ),
+        "summary": "WIP sparse-coding project; a model-specific trained dictionary is still required.",
+    },
+    "adadecode": {
+        "profile": "adadecode",
+        "name": "AdaDecode",
+        "source_url": "https://github.com/weizhepei/AdaDecode",
+        "marker_groups": (
+            ("README.md",),
+            ("requirements.txt", "environment.yml", "setup.py", "pyproject.toml"),
+            ("adadecode", "src", "scripts", "eval", "evaluation"),
+        ),
+        "summary": "Research speculative-decoding code; task-specific prediction heads are not a generic add-on.",
+    },
+    "resonance_yarn": {
+        "profile": "resonance_yarn",
+        "name": "Resonance YaRN",
+        "source_url": "https://github.com/sheryc/resonance_rope",
+        "marker_groups": (
+            ("README.md",),
+            ("requirements.txt", "environment.yml", "setup.py", "pyproject.toml"),
+            ("src", "resonance_rope", "llama", "scripts"),
+        ),
+        "summary": "RoPE training/fine-tuning fork; it is not a drop-in serving-runtime plugin.",
+    },
+    "domvox_triattention": {
+        "profile": "domvox_triattention",
+        "name": "domvox TriAttention",
+        "source_url": "https://github.com/domvox/triattention-ggml",
+        "marker_groups": (
+            ("triattention_calibrate.py",),
+            ("triattention_common.py",),
+            ("TRIA_FORMAT.md",),
+        ),
+        "summary": "Experimental TRIA v2 calibration source; conversion to Godzilla v1 is explicitly lossy.",
+    },
+}
+
+
+def _marker_group_present(root: Path, group: tuple[str, ...]) -> bool:
+    return any((root / marker).exists() for marker in group)
+
+
+def inspect_addon_source(profile_id: str, path: str | Path) -> dict[str, object]:
+    """Inspect a reviewed add-on checkout without importing or executing it.
+
+    Blocked profiles are deliberately accepted here for source selection and
+    documentation.  They remain blocked for environment creation.
+    """
+    normalized = str(profile_id).strip().lower()
+    spec = _BLOCKED_ADDON_SPECS.get(normalized)
+    if spec is None:
+        raise ValueError(f"Unknown informational add-on profile: {profile_id}")
+    raw_path = str(path).strip()
+    if not raw_path:
+        return {
+            "profile": normalized,
+            "name": spec["name"],
+            "path": "",
+            "source_url": spec["source_url"],
+            "status": "not_selected",
+            "valid": False,
+            "marker_groups": {},
+            "issues": ["Select a local source folder to inspect."],
+            "summary": spec["summary"],
+        }
+    resolved = Path(raw_path).expanduser().resolve()
+    marker_groups = {
+        " or ".join(group): _marker_group_present(resolved, group)
+        for group in spec["marker_groups"]
+    }
+    issues: list[str] = []
+    if not resolved.is_dir():
+        issues.append(f"Source folder is not a directory: {resolved}")
+    else:
+        issues.extend(
+            f"Missing reviewed source marker (one of: {', '.join(group)})"
+            for group, present in zip(spec["marker_groups"], marker_groups.values())
+            if not present
+        )
+    valid = resolved.is_dir() and not issues
+    calibrator = None
+    if valid and normalized == "domvox_triattention":
+        from ..calibration import inspect_domvox_triattention_checkout
+
+        checkout = inspect_domvox_triattention_checkout(resolved)
+        if not checkout["valid"]:
+            issues.extend(str(item) for item in checkout.get("issues", []))
+            valid = False
+        calibrator = checkout.get("calibrator")
+    return {
+        "profile": normalized,
+        "name": spec["name"],
+        "path": str(resolved),
+        "source_url": spec["source_url"],
+        "status": "informational_only" if valid else "invalid_source",
+        "valid": valid,
+        "marker_groups": marker_groups,
+        "issues": issues,
+        "summary": spec["summary"],
+        "git_remote": _git_remote(resolved) if resolved.is_dir() else None,
+        "calibrator": calibrator,
+    }
+
+
 def _directory(path: str | Path, label: str) -> Path:
     if not str(path).strip():
         raise ValueError(f"{label} is not configured")
@@ -171,6 +321,32 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         return "godzilla"
     if llama_markers:
         return "llamacpp"
+    if {
+        "triattention_calibrate.py",
+        "triattention_common.py",
+        "TRIA_FORMAT.md",
+    }.issubset(files):
+        return "domvox_triattention"
+    # Informational-only projects are recognized conservatively.  A direct
+    # source-folder inspection is available when a checkout is renamed or its
+    # parent directory does not expose these names.
+    blocked_name = name.replace("-", "_")
+    blocked_aliases = {
+        "maru": "maru",
+        "speculative_prefill": "speculative_prefill",
+        "speculativeprefill": "speculative_prefill",
+        "rocketkv": "rocketkv",
+        "lexico": "lexico",
+        "adadecode": "adadecode",
+        "resonance_rope": "resonance_yarn",
+        "resonance_yarn": "resonance_yarn",
+    }
+    blocked_kind = blocked_aliases.get(blocked_name)
+    if blocked_kind is not None and all(
+        _marker_group_present(path, group)
+        for group in _BLOCKED_ADDON_SPECS[blocked_kind]["marker_groups"]
+    ):
+        return blocked_kind
     return None
 
 
@@ -226,6 +402,14 @@ def scan_addon_roots(
                     from ..calibration import inspect_official_triattention_checkout
 
                     item["source"] = inspect_official_triattention_checkout(directory)
+                if kind == "domvox_triattention":
+                    from ..calibration import inspect_domvox_triattention_checkout
+
+                    item["source"] = inspect_domvox_triattention_checkout(directory)
+                    item["source_profile"] = kind
+                if kind in _BLOCKED_ADDON_SPECS:
+                    item["source"] = inspect_addon_source(kind, directory)
+                    item["source_profile"] = kind
                 if kind in {
                     "flashattention",
                     "fastdms",

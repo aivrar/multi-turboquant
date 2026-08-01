@@ -11,6 +11,7 @@ import pytest
 from multi_turboquant.optimizations import EnvironmentContext
 from multi_turboquant.optimizations.environments import environment_python
 from multi_turboquant.ui.discovery import (
+    inspect_addon_source,
     inspect_flashattention_source,
     scan_addon_roots,
     scan_environment_profiles,
@@ -107,6 +108,98 @@ def test_addon_scan_finds_flashattention_under_explicit_root(tmp_path: Path):
     assert result["addons"][0]["local_source"]["valid"] is True
     assert result["scanned_directories"] >= 2
     assert result["max_depth"] == 3
+
+
+def test_informational_addon_source_inspection_is_read_only(tmp_path: Path):
+    source = tmp_path / "RocketKV"
+    (source / "rocketkv").mkdir(parents=True)
+    (source / "README.md").write_text("RocketKV", encoding="utf-8")
+    (source / "requirements.txt").write_text("torch", encoding="utf-8")
+
+    result = inspect_addon_source("rocketkv", source)
+
+    assert result["valid"] is True
+    assert result["status"] == "informational_only"
+    assert result["path"] == str(source.resolve())
+    assert all(result["marker_groups"].values())
+    assert not (source / ".mtq").exists()
+
+
+def test_informational_addon_source_inspection_reports_missing_markers(tmp_path: Path):
+    source = tmp_path / "Lexico"
+    source.mkdir()
+
+    result = inspect_addon_source("lexico", source)
+
+    assert result["valid"] is False
+    assert result["status"] == "invalid_source"
+    assert len(result["issues"]) == 3
+
+
+@pytest.mark.parametrize(
+    ("profile", "markers"),
+    [
+        ("maru", ("README.md", "CMakeLists.txt", "resource_manager")),
+        ("speculative_prefill", ("README.md", "requirements.txt", "speculative_prefill")),
+        ("rocketkv", ("README.md", "requirements.txt", "rocketkv")),
+        ("lexico", ("README.md", "setup.py", "lexico")),
+        ("adadecode", ("README.md", "requirements.txt", "adadecode")),
+        ("resonance_yarn", ("README.md", "requirements.txt", "src")),
+    ],
+)
+def test_each_blocked_addon_profile_has_a_read_only_source_contract(
+    tmp_path: Path, profile: str, markers: tuple[str, ...]
+):
+    source = tmp_path / profile
+    source.mkdir()
+    for marker in markers:
+        target = source / marker
+        if "." in marker:
+            target.write_text("marker", encoding="utf-8")
+        else:
+            target.mkdir()
+
+    result = inspect_addon_source(profile, source)
+
+    assert result["valid"] is True
+    assert result["status"] == "informational_only"
+
+
+def test_addon_scan_recognizes_blocked_source_as_informational(tmp_path: Path):
+    source = tmp_path / "rocketkv"
+    (source / "rocketkv").mkdir(parents=True)
+    (source / "README.md").write_text("RocketKV", encoding="utf-8")
+    (source / "requirements.txt").write_text("torch", encoding="utf-8")
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+    assert addon["kind"] == "rocketkv"
+    assert addon["source_profile"] == "rocketkv"
+    assert addon["source"]["status"] == "informational_only"
+    assert "environment_profile" not in addon
+
+
+def test_addon_scan_does_not_classify_an_empty_blocked_named_folder(tmp_path: Path):
+    (tmp_path / "rocketkv").mkdir()
+
+    result = scan_addon_roots([tmp_path])
+
+    assert result["addons"] == []
+
+
+def test_addon_scan_recognizes_domvox_triattention_checkout(tmp_path: Path):
+    source = tmp_path / "triattention-ggml"
+    source.mkdir()
+    for marker in ("triattention_calibrate.py", "triattention_common.py", "TRIA_FORMAT.md"):
+        (source / marker).write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+    assert addon["kind"] == "domvox_triattention"
+    assert addon["source"]["valid"] is True
+    assert addon["source_profile"] == "domvox_triattention"
 
 
 def test_addon_scan_recognizes_renamed_godzilla_checkout(tmp_path: Path):

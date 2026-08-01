@@ -27,6 +27,12 @@ GODZILLA_TRIATTENTION_VERSION = 1
 _HEADER = struct.Struct("<6Id3I")
 _U32 = struct.Struct("<I")
 _HEAD_INDEX = struct.Struct("<II")
+_DOMVOX_HEADER = struct.Struct("<7I2f")
+_DOMVOX_HEADER_SIZE = 64
+_DOMVOX_VERSION = 2
+_DOMVOX_MAX_BYTES = 512 * 1024 * 1024
+MAX_CALIBRATION_TOKENS = 200_000
+LONG_CALIBRATION_THRESHOLD = 32_768
 _STAT_KEY = re.compile(r"layer(\d+)_head(\d+)")
 _OFFICIAL_CALIBRATOR_MARKERS = (
     "AutoModelForCausalLM",
@@ -35,6 +41,14 @@ _OFFICIAL_CALIBRATOR_MARKERS = (
     "q_mean_real",
     "q_mean_imag",
     "q_abs_mean",
+)
+_DOMVOX_CALIBRATOR_MARKERS = (
+    "--model",
+    "--input",
+    "--output",
+    "--max-length",
+    "--device",
+    "TRIA",
 )
 
 
@@ -154,6 +168,64 @@ def inspect_official_triattention_calibrator(path: str | Path) -> dict[str, obje
     }
 
 
+def inspect_domvox_triattention_calibrator(path: str | Path) -> dict[str, object]:
+    """Check a domvox calibrator without importing or executing it."""
+    calibrator = Path(path).expanduser().resolve()
+    issues: list[str] = []
+    if not calibrator.is_file():
+        issues.append(f"domvox TriAttention calibrator not found: {calibrator}")
+        text = ""
+    else:
+        try:
+            if calibrator.stat().st_size > 2_000_000:
+                issues.append(f"domvox calibration script is unexpectedly large: {calibrator}")
+                text = ""
+            else:
+                text = calibrator.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            issues.append(f"Could not inspect domvox calibration script: {exc}")
+            text = ""
+    missing = [marker for marker in _DOMVOX_CALIBRATOR_MARKERS if marker not in text]
+    if missing:
+        issues.append(
+            "Script does not match the reviewed domvox calibration interface; missing "
+            + ", ".join(missing)
+        )
+    return {
+        "path": str(calibrator),
+        "valid": not issues,
+        "issues": issues,
+    }
+
+
+def inspect_domvox_triattention_checkout(path: str | Path) -> dict[str, object]:
+    """Inspect a domvox/triattention-ggml checkout without executing it."""
+    root = Path(path).expanduser().resolve()
+    calibrator = root / "triattention_calibrate.py"
+    markers = {
+        "triattention_calibrate.py": calibrator.is_file(),
+        "triattention_common.py": (root / "triattention_common.py").is_file(),
+        "TRIA_FORMAT.md": (root / "TRIA_FORMAT.md").is_file(),
+    }
+    issues = [f"Missing domvox marker: {name}" for name, present in markers.items() if not present]
+    if calibrator.is_file():
+        script_inspection = inspect_domvox_triattention_calibrator(calibrator)
+        issues.extend(str(item) for item in script_inspection["issues"])
+    return {
+        "path": str(root),
+        "valid": root.is_dir() and not issues,
+        "kind": "domvox_triattention",
+        "markers": markers,
+        "calibrator": str(calibrator) if calibrator.is_file() else None,
+        "issues": issues,
+        "status": "experimental" if not issues else "invalid_source",
+        "notes": [
+            "domvox TRIA v2 statistics require an explicit experimental conversion to Godzilla v1.",
+            "Layer budget scales, attention scale, and domvox RoPE assumptions are not preserved by the Godzilla v1 format.",
+        ],
+    }
+
+
 def _require_positive_int(value: Any, label: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{label} must be a positive integer")
@@ -164,6 +236,17 @@ def _require_positive_int(value: Any, label: str) -> int:
     if result <= 0:
         raise ValueError(f"{label} must be a positive integer")
     return result
+
+
+def _validate_calibration_length(value: Any, *, allow_long: bool) -> int:
+    length = _require_positive_int(value, "max_length")
+    if not 128 <= length <= MAX_CALIBRATION_TOKENS:
+        raise ValueError(f"max_length must be 128 to {MAX_CALIBRATION_TOKENS}")
+    if length > LONG_CALIBRATION_THRESHOLD and not allow_long:
+        raise ValueError(
+            f"max_length above {LONG_CALIBRATION_THRESHOLD} requires explicit long-calibration acknowledgement"
+        )
+    return length
 
 
 def _load_official_payload(path: Path) -> Mapping[str, Any]:
@@ -378,6 +461,210 @@ def _read_exact(handle, count: int, label: str) -> bytes:
     return value
 
 
+def _domvox_vector(handle, vector: struct.Struct, *, label: str) -> tuple[float, ...]:
+    values = vector.unpack(_read_exact(handle, vector.size, label))
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError(f"Non-finite values in domvox {label}")
+    return values
+
+
+def inspect_domvox_triattention_file(path: str | Path) -> dict[str, object]:
+    """Strictly inspect a domvox TRIA v2 calibration file."""
+    calibration = Path(path).expanduser().resolve()
+    if not calibration.is_file():
+        raise ValueError(f"domvox TriAttention calibration not found: {calibration}")
+    file_size = calibration.stat().st_size
+    if file_size > _DOMVOX_MAX_BYTES:
+        raise ValueError(
+            f"domvox TriAttention calibration is larger than the safe limit of {_DOMVOX_MAX_BYTES} bytes"
+        )
+    with calibration.open("rb") as handle:
+        header = _read_exact(handle, _DOMVOX_HEADER_SIZE, "domvox header")
+        (
+            magic,
+            version,
+            num_layers,
+            num_attention_heads,
+            num_key_value_heads,
+            head_dim,
+            freq_count,
+            rope_theta,
+            attention_scale,
+        ) = _DOMVOX_HEADER.unpack(header[: _DOMVOX_HEADER.size])
+        if magic != GODZILLA_TRIATTENTION_MAGIC or version != _DOMVOX_VERSION:
+            raise ValueError("File is not a supported domvox TRIA v2 calibration")
+        if not 0 < num_layers <= 10_000 or not 0 < num_attention_heads <= 10_000:
+            raise ValueError("Invalid domvox layer or attention-head count")
+        if not 0 < num_key_value_heads <= num_attention_heads:
+            raise ValueError("Invalid domvox KV-head count")
+        if num_attention_heads % num_key_value_heads:
+            raise ValueError("domvox attention-head count is not divisible by KV-head count")
+        if not 0 < head_dim <= 16_384 or head_dim % 2 or freq_count != head_dim // 2:
+            raise ValueError("Invalid domvox head dimension or frequency count")
+        if not math.isfinite(rope_theta) or rope_theta <= 0:
+            raise ValueError("Invalid domvox RoPE theta")
+        if not math.isfinite(attention_scale) or attention_scale <= 0:
+            raise ValueError("Invalid domvox attention scale")
+        expected_size = (
+            _DOMVOX_HEADER_SIZE
+            + num_layers * 4
+            + num_layers * num_attention_heads * (4 * freq_count * 4)
+        )
+        if expected_size != file_size:
+            raise ValueError(
+                f"domvox TRIA v2 size mismatch: expected {expected_size} bytes, found {file_size}"
+            )
+        scales = struct.unpack(
+            f"<{num_layers}f", _read_exact(handle, num_layers * 4, "layer budget scales")
+        )
+        if not all(math.isfinite(value) and value >= 0 for value in scales):
+            raise ValueError("domvox layer budget scales contain invalid values")
+        vector = struct.Struct(f"<{freq_count}f")
+        for layer in range(num_layers):
+            for head in range(num_attention_heads):
+                _domvox_vector(handle, vector, label=f"q_mean_real layer {layer} head {head}")
+                _domvox_vector(handle, vector, label=f"q_mean_imag layer {layer} head {head}")
+                q_abs_mean = _domvox_vector(
+                    handle, vector, label=f"q_abs_mean layer {layer} head {head}"
+                )
+                mrl = _domvox_vector(handle, vector, label=f"mrl layer {layer} head {head}")
+                if any(value < 0 for value in q_abs_mean):
+                    raise ValueError(f"Negative domvox q_abs_mean at layer {layer} head {head}")
+                if any(value < 0 or value > 1 for value in mrl):
+                    raise ValueError(f"Out-of-range domvox mrl at layer {layer} head {head}")
+    return {
+        "format": "domvox-tria-v2",
+        "version": version,
+        "head_dim": head_dim,
+        "num_layers": num_layers,
+        "num_attention_heads": num_attention_heads,
+        "num_key_value_heads": num_key_value_heads,
+        "rope_theta": rope_theta,
+        "attention_scale": attention_scale,
+        "freq_count": freq_count,
+        "layer_budget_scale_min": min(scales),
+        "layer_budget_scale_max": max(scales),
+        "size_bytes": file_size,
+    }
+
+
+def convert_domvox_triattention_stats(
+    input_path: str | Path,
+    output_path: str | Path,
+    *,
+    model_name: str,
+    num_layers: int | None = None,
+    num_attention_heads: int | None = None,
+    num_key_value_heads: int | None = None,
+    rope_theta: float | None = None,
+    rope_style: str | int = "half",
+    expected_head_dim: int | None = None,
+    accept_lossy: bool = False,
+) -> dict[str, object]:
+    """Convert domvox TRIA v2 to Godzilla v1 with explicit loss acknowledgement.
+
+    Godzilla v1 has no fields for domvox layer budget scales or attention scale,
+    so this adapter is deliberately opt-in and reports the dropped fields.
+    """
+    source = Path(input_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve()
+    if not accept_lossy:
+        raise ValueError(
+            "domvox-to-Godzilla conversion is lossy; set accept_lossy=True only after reviewing compatibility"
+        )
+    inspection = inspect_domvox_triattention_file(source)
+    actual_layers = int(inspection["num_layers"])
+    actual_heads = int(inspection["num_attention_heads"])
+    actual_kv_heads = int(inspection["num_key_value_heads"])
+    actual_head_dim = int(inspection["head_dim"])
+    actual_theta = float(inspection["rope_theta"])
+    for label, expected, actual in (
+        ("num_layers", num_layers, actual_layers),
+        ("num_attention_heads", num_attention_heads, actual_heads),
+        ("num_key_value_heads", num_key_value_heads, actual_kv_heads),
+        ("head_dim", expected_head_dim, actual_head_dim),
+    ):
+        if expected is not None and int(expected) != actual:
+            raise ValueError(f"domvox {label} does not match the model configuration")
+    selected_theta = actual_theta if rope_theta is None else float(rope_theta)
+    if not math.isfinite(selected_theta) or selected_theta <= 0:
+        raise ValueError("rope_theta must be a positive finite number")
+    if not math.isclose(selected_theta, actual_theta, rel_tol=1e-6, abs_tol=1e-6):
+        raise ValueError("domvox RoPE theta does not match the model configuration")
+    style = _rope_style_value(rope_style)
+    encoded_name = model_name.strip().encode("utf-8") + b"\0"
+    if len(encoded_name) <= 1 or len(encoded_name) > 255:
+        raise ValueError("model_name must encode to 1-254 UTF-8 bytes")
+    if output.suffix.lower() != ".triattention":
+        raise ValueError("Godzilla output must end in .triattention")
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with source.open("rb") as source_handle, tempfile.NamedTemporaryFile(
+            mode="wb", dir=output.parent, prefix=f".{output.name}.", suffix=".tmp", delete=False
+        ) as handle:
+            temporary_name = handle.name
+            handle.write(
+                _HEADER.pack(
+                    GODZILLA_TRIATTENTION_MAGIC,
+                    GODZILLA_TRIATTENTION_VERSION,
+                    actual_head_dim,
+                    actual_layers,
+                    actual_heads,
+                    actual_kv_heads,
+                    selected_theta,
+                    style,
+                    actual_layers * actual_heads,
+                    actual_head_dim // 2,
+                )
+            )
+            handle.write(_U32.pack(len(encoded_name)))
+            handle.write(encoded_name)
+            source_handle.seek(_DOMVOX_HEADER_SIZE + actual_layers * 4)
+            vector = struct.Struct(f"<{actual_head_dim // 2}f")
+            for layer in range(actual_layers):
+                for head in range(actual_heads):
+                    q_mean_real = _domvox_vector(
+                        source_handle, vector, label=f"q_mean_real layer {layer} head {head}"
+                    )
+                    q_mean_imag = _domvox_vector(
+                        source_handle, vector, label=f"q_mean_imag layer {layer} head {head}"
+                    )
+                    q_abs_mean = _domvox_vector(
+                        source_handle, vector, label=f"q_abs_mean layer {layer} head {head}"
+                    )
+                    mrl = _domvox_vector(
+                        source_handle, vector, label=f"mrl layer {layer} head {head}"
+                    )
+                    if any(value < 0 for value in q_abs_mean):
+                        raise ValueError(f"Negative domvox q_abs_mean at layer {layer} head {head}")
+                    if any(value < 0 or value > 1 for value in mrl):
+                        raise ValueError(f"Out-of-range domvox mrl at layer {layer} head {head}")
+                    handle.write(_HEAD_INDEX.pack(layer, head))
+                    for values in (q_mean_real, q_mean_imag, q_abs_mean, mrl):
+                        handle.write(vector.pack(*values))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, output)
+        temporary_name = None
+    finally:
+        if temporary_name is not None:
+            try:
+                Path(temporary_name).unlink()
+            except FileNotFoundError:
+                pass
+    report = inspect_godzilla_triattention_file(output)
+    return {
+        "input": str(source),
+        "output": str(output),
+        "source_format": "domvox-tria-v2",
+        "lossy": True,
+        "dropped_fields": ["layer_budget_scales", "attention_scale"],
+        **report,
+    }
+
+
 def inspect_godzilla_triattention_file(path: str | Path) -> dict[str, object]:
     """Read and strictly validate a Godzilla v1 calibration artifact."""
     calibration = Path(path).expanduser().resolve()
@@ -516,11 +803,13 @@ def calibrate_official_triattention_for_godzilla(
     output_path: str | Path,
     stats_output_path: str | Path | None = None,
     max_length: int = 2048,
+    allow_long_calibration: bool = False,
     device: str = "cuda",
     attention_implementation: str = "sdpa",
     runner=subprocess.run,
 ) -> dict[str, object]:
     """Run the official calibrator, then convert and verify its output."""
+    max_length = _validate_calibration_length(max_length, allow_long=allow_long_calibration)
     script = Path(calibrator).expanduser().resolve()
     script_report = inspect_official_triattention_calibrator(script)
     if not script_report["valid"]:
@@ -579,6 +868,77 @@ def calibrate_official_triattention_for_godzilla(
     return {"command": command, "official_stats": str(stats_output), **report}
 
 
+def calibrate_domvox_triattention_for_godzilla(
+    *,
+    calibrator: str | Path,
+    python: str | Path,
+    model: str,
+    input_path: str | Path,
+    output_path: str | Path,
+    stats_output_path: str | Path | None = None,
+    max_length: int = 2048,
+    allow_long_calibration: bool = False,
+    device: str = "cuda",
+    rope_style: str | int = "half",
+    accept_lossy: bool = False,
+    runner=subprocess.run,
+) -> dict[str, object]:
+    """Run domvox calibration and explicitly adapt TRIA v2 to Godzilla v1."""
+    max_length = _validate_calibration_length(max_length, allow_long=allow_long_calibration)
+    script = Path(calibrator).expanduser().resolve()
+    script_report = inspect_domvox_triattention_calibrator(script)
+    if not script_report["valid"]:
+        raise ValueError("; ".join(str(item) for item in script_report["issues"]))
+    python_path = Path(python).expanduser().resolve()
+    if not python_path.is_file():
+        raise ValueError(f"domvox calibration Python was not found: {python_path}")
+    calibration_input = Path(input_path).expanduser().resolve()
+    if not calibration_input.is_file() or calibration_input.stat().st_size == 0:
+        raise ValueError(f"Calibration input must be a non-empty plain-text file: {calibration_input}")
+    output = Path(output_path).expanduser().resolve()
+    stats_output = (
+        Path(stats_output_path).expanduser().resolve()
+        if stats_output_path is not None
+        else output.with_suffix(".domvox.bin")
+    )
+    if stats_output == output:
+        raise ValueError("Intermediate domvox stats and final .triattention output must differ")
+    command = [
+        str(python_path),
+        str(script),
+        "--model",
+        model,
+        "--input",
+        str(calibration_input),
+        "--output",
+        str(stats_output),
+        "--max-length",
+        str(max_length),
+        "--device",
+        device,
+    ]
+    result = runner(command, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"domvox TriAttention calibration failed with exit code {result.returncode}")
+    if not stats_output.is_file():
+        raise RuntimeError(f"domvox calibrator did not create {stats_output}")
+    model_metadata = load_huggingface_model_metadata(model)
+    display_name = model.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+    report = convert_domvox_triattention_stats(
+        stats_output,
+        output,
+        model_name=display_name,
+        num_layers=int(model_metadata["num_layers"]),
+        num_attention_heads=int(model_metadata["num_attention_heads"]),
+        num_key_value_heads=int(model_metadata["num_key_value_heads"]),
+        rope_theta=float(model_metadata["rope_theta"]),
+        rope_style=rope_style,
+        expected_head_dim=int(model_metadata["head_dim"]),
+        accept_lossy=accept_lossy,
+    )
+    return {"command": command, "domvox_stats": str(stats_output), **report}
+
+
 def _add_model_shape_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", help="Matching Hugging Face model ID or local directory")
     parser.add_argument("--model-name", help="Display name stored in the Godzilla artifact")
@@ -625,12 +985,31 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--output", required=True)
     calibrate.add_argument("--stats-output")
     calibrate.add_argument("--max-length", type=int, default=2048)
+    calibrate.add_argument(
+        "--allow-long-calibration",
+        action="store_true",
+        help=f"Allow one-shot calibration above {LONG_CALIBRATION_THRESHOLD} tokens (maximum {MAX_CALIBRATION_TOKENS})",
+    )
     calibrate.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     calibrate.add_argument(
         "--attn-implementation",
         choices=("eager", "sdpa", "flash_attention_2"),
         default="sdpa",
     )
+
+    domvox = subparsers.add_parser(
+        "domvox", help="Run domvox TRIA v2 calibration and adapt it to Godzilla v1"
+    )
+    domvox.add_argument("--calibrator", required=True)
+    domvox.add_argument("--python", required=True)
+    domvox.add_argument("--model", required=True)
+    domvox.add_argument("--input", required=True)
+    domvox.add_argument("--output", required=True)
+    domvox.add_argument("--stats-output")
+    domvox.add_argument("--max-length", type=int, default=2048)
+    domvox.add_argument("--allow-long-calibration", action="store_true")
+    domvox.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    domvox.add_argument("--accept-lossy", action="store_true")
 
     convert = subparsers.add_parser("convert", help="Convert an existing official .pt payload")
     convert.add_argument("input")
@@ -645,8 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "calibrate":
-        if not 128 <= args.max_length <= 32_768:
-            raise ValueError("--max-length must be 128 to 32768")
+        _validate_calibration_length(args.max_length, allow_long=args.allow_long_calibration)
         report = calibrate_official_triattention_for_godzilla(
             calibrator=args.calibrator,
             model=args.model,
@@ -654,8 +1032,23 @@ def main(argv: list[str] | None = None) -> int:
             output_path=args.output,
             stats_output_path=args.stats_output,
             max_length=args.max_length,
+            allow_long_calibration=args.allow_long_calibration,
             device=args.device,
             attention_implementation=args.attn_implementation,
+        )
+    elif args.command == "domvox":
+        _validate_calibration_length(args.max_length, allow_long=args.allow_long_calibration)
+        report = calibrate_domvox_triattention_for_godzilla(
+            calibrator=args.calibrator,
+            python=args.python,
+            model=args.model,
+            input_path=args.input,
+            output_path=args.output,
+            stats_output_path=args.stats_output,
+            max_length=args.max_length,
+            allow_long_calibration=args.allow_long_calibration,
+            device=args.device,
+            accept_lossy=args.accept_lossy,
         )
     elif args.command == "convert":
         report = convert_official_triattention_stats(
