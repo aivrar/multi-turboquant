@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import subprocess
 from pathlib import Path
 
@@ -34,6 +35,16 @@ def _godzilla_checkout(root: Path) -> Path:
     (checkout / "scripts" / "resolve-triattention-hf.py").write_text("", encoding="utf-8")
     (checkout / "build" / "bin" / "llama-server.exe").write_bytes(b"exe")
     return checkout
+
+
+def _write_domvox_stats(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = struct.pack("<7I2f", 0x54524941, 2, 1, 2, 1, 4, 2, 10_000.0, 1.0)
+    vectors = b"".join(
+        struct.pack("<2f", *values)
+        for values in ((0.1, 0.2), (0.2, 0.1), (0.5, 0.5), (0.4, 0.5)) * 2
+    )
+    path.write_bytes(header + b"\0" * (64 - len(header)) + struct.pack("<f", 1.0) + vectors)
 
 
 def _write_valid_calibration(output: Path) -> None:
@@ -303,3 +314,110 @@ def test_godzilla_official_convert_plan_skips_model_forward_pass(tmp_path: Path)
     assert "convert" in plan.command
     assert "calibrate" not in plan.command
     assert "--input" not in plan.command
+
+
+def test_domvox_plan_requires_explicit_lossy_acknowledgement(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python.exe"
+    calibrator = tmp_path / "triattention_calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.write_text(
+        "--model --input --output --max-length --device TRIA", encoding="utf-8"
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+
+    blocked = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+    )
+    assert blocked.ready is False
+    assert any(issue.code == "domvox_lossy_confirmation" for issue in blocked.issues)
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+        domvox_accept_lossy=True,
+    )
+    assert plan.ready is True
+    assert plan.official_stats == (checkout / "calibrations" / "model.domvox.bin").resolve()
+    assert plan.command[0] == str(python.resolve())
+    assert "triattention_calibrate.py" in plan.command[1]
+
+
+def test_domvox_run_converts_and_validates_output(tmp_path: Path, monkeypatch):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python.exe"
+    calibrator = tmp_path / "triattention_calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.write_text(
+        "--model --input --output --max-length --device TRIA", encoding="utf-8"
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+        domvox_accept_lossy=True,
+    )
+
+    monkeypatch.setattr(
+        "multi_turboquant.integration.godzilla_workspace.load_huggingface_model_metadata",
+        lambda model: {
+            "head_dim": 4,
+            "num_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rope_theta": 10_000.0,
+        },
+    )
+
+    def runner(argv, **kwargs):
+        _write_domvox_stats(plan.official_stats)
+        return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
+
+    report = run_godzilla_triattention(plan, runner=runner)
+
+    assert report["reused"] is False
+    assert report["conversion"]["source_format"] == "domvox-tria-v2"
+    assert plan.output.is_file()
+
+
+def test_long_calibration_requires_acknowledgement_and_has_hard_cap(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"gguf")
+
+    blocked = plan_godzilla_triattention(
+        checkout,
+        model,
+        n_tokens=200_000,
+    )
+    assert any(issue.code == "long_calibration_confirmation" for issue in blocked.issues)
+
+    capped = plan_godzilla_triattention(
+        checkout,
+        model,
+        n_tokens=200_001,
+        allow_long_calibration=True,
+    )
+    assert any(issue.code == "invalid_token_count" for issue in capped.issues)

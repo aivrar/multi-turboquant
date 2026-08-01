@@ -784,6 +784,18 @@ job, validates new and existing output artifacts, and never builds the Godzilla
 CMake project. KVarN requires no calibration and remains a launch-time cache
 type choice.
 
+The optional **domvox TRIA v2 (experimental)** mode recognizes a
+`domvox/triattention-ggml` checkout and runs its `triattention_calibrate.py`
+script before adapting the resulting binary to Godzilla v1. It requires the
+matching Hugging Face model for shape and RoPE metadata, validates the domvox
+header and exact file length, and requires an explicit acknowledgement because
+Godzilla v1 cannot store domvox layer-budget scales or attention scale. Those
+fields are reported as dropped; this is not a lossless format conversion.
+Calibration lengths from 128 through 200,000 are accepted. Above 32,768 the
+operator must enable long calibration explicitly; the upstream script processes
+one long sequence, so the UI warns about memory and runtime instead of assuming
+chunked aggregation. A GGUF alone remains insufficient for calibration.
+
 `mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
 Python/vLLM integration. That file is not binary-compatible with Godzilla's
 `.triattention` runtime format.
@@ -1070,7 +1082,13 @@ for a different port, `--no-browser` to suppress auto-open,
   FlashAttention source folders, select a matching side-by-side CUDA toolkit,
   select a reviewed local checkout for an isolated dependency profile, and
   inspect a Godzilla tree or generate/convert its model-specific TriAttention
-  artifact after explicit confirmation
+  artifact after explicit confirmation. Advanced Quick Run controls and
+  infrequent setup sections are collapsed until expanded.
+
+The source picker can inspect local folders for the six reviewed-but-blocked
+add-ons and domvox without importing or executing them. Blocked profiles remain
+informational and never receive an automatic Create action merely because a
+folder was selected.
 
 ### How it works
 
@@ -1388,7 +1406,7 @@ multi_turboquant/
   calibration/
     generate_metadata.py    TurboQuant weight-norm calibration
     generate_stats.py       TriAttention frequency stats
-    godzilla_triattention.py Official .pt calibration conversion and verification
+    godzilla_triattention.py Official/domvox calibration conversion and verification
     auto_calibrate.py       Unified calibration dispatcher
 
   integration/
@@ -1481,7 +1499,11 @@ multi_turboquant.hardware.get_recommended_engine(platform)
 multi_turboquant.calibration.generate_turboquant_metadata(model_path, recipe)
 multi_turboquant.calibration.generate_triattention_stats(model, tokenizer, prompts)
 multi_turboquant.calibration.convert_official_triattention_stats(input_path, output_path, ...)
+multi_turboquant.calibration.convert_domvox_triattention_stats(input_path, output_path, ...)
+multi_turboquant.calibration.calibrate_domvox_triattention_for_godzilla(...)
 multi_turboquant.calibration.inspect_godzilla_triattention_file(path)
+multi_turboquant.calibration.inspect_domvox_triattention_checkout(path)
+multi_turboquant.calibration.inspect_domvox_triattention_file(path)
 multi_turboquant.calibration.auto_calibrate(config, model_path)
 ```
 
@@ -1509,6 +1531,7 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | RotorQuant (Cl(3,0) sandwich) | scrya-com / rotorquant (ParaMind2025) | MIT |
 | llama.cpp iso/planar CUDA+Metal kernels | johndpope / llama-cpp-turboquant | MIT |
 | TriAttention (trigonometric token eviction) | WeianMao / triattention | Apache-2.0 |
+| domvox TRIA v2 format and calibrator | domvox / triattention-ggml | See upstream |
 | Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | atomicmilkshake / godzilla-llama.cpp | MIT |
 | BeeLlama / DFlash lineage | Anbeeld / beellama.cpp | MIT |
 | KVarN research and reference implementation | huawei-csl / KVarN | See upstream |
@@ -1519,8 +1542,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Local checkout dependency builds and Godzilla source/setup recognition | jawadala / issue #25 | Community contribution |
 | Official TriAttention calibration discovery, no-llama-cli workflow, and CUDA weight-share documentation | jawadala / issue #29 | Community contribution |
 | Bounded add-on builds, installed-environment validation, and streamlined TriAttention conversion workflow | jawadala / issue #31 | Community contribution |
+| domvox TRIA v2 calibration, 200k-token ceiling, local blocked-source inspection, and UI progressive disclosure | jawadala / issue #32 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, or llama.cpp code. Credit goes to the upstream authors for the technical work and to @jawadala for the sustained issue reports that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, and official TriAttention calibration path.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, or llama.cpp code. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official calibration path, and this experimental domvox adapter.
 
 ---
 

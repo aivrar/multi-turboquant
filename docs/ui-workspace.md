@@ -38,6 +38,11 @@ Quick Run contains the frequently used controls:
 - model selection from the configured model folder;
 - safe command preview plus managed `llama-server` start, status, logs, and stop.
 
+The less-frequently changed context-extension, speculative-decoding,
+TriAttention, and weight-sharing controls are grouped in collapsed advanced
+sections. Expand them when you need to change a non-default launch option;
+the generated command still shows every selected flag before a process starts.
+
 The model library recognizes `.gguf`, `.safetensors`, `.bin`, `.pt`, and `.pth`
 files, plus Transformers directories containing `config.json` and weights.
 Discovery does not load or execute model files. The managed llama.cpp launcher
@@ -73,6 +78,20 @@ mode because the current Godzilla binary has no implemented calibration command.
 The **Godzilla checkout script** mode retains the older
 `scripts/ensure-triattention.ps1` flow for compatible checkouts. KVarN is not
 calibrated: it remains a launch-time K/V cache selection.
+
+The **domvox TRIA v2 (experimental)** mode accepts a recognized
+`domvox/triattention-ggml` checkout and its `triattention_calibrate.py` script.
+It runs the calibrator in the selected Python environment, validates the
+resulting TRIA v2 file, and adapts it to Godzilla v1 only after the explicit
+lossy-conversion acknowledgement is selected. Layer-budget scales and
+attention scale are not representable in Godzilla v1 and are reported as
+dropped. The matching Hugging Face model is required for shape and RoPE checks;
+a GGUF by itself is not sufficient.
+
+Calibration lengths from 128 through 200,000 tokens are supported. Values above
+32,768 require the explicit **Allow long calibration** checkbox and produce a
+one-shot memory/runtime warning; the UI does not silently chunk or aggregate
+the upstream calibrator's sequence.
 
 The CUDA weight-share controls only prepare the external Linux/CUDA helper's
 environment:
@@ -112,9 +131,13 @@ directory count, invalid roots, and missing source markers. The add-on source
 scanner does not search an entire drive, follow directory symlinks, import
 third-party packages, or run source code. Recognized add-ons currently include
 FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
-Godzilla, and llama.cpp checkouts. Renamed Godzilla trees are recognized by
-`scripts/godzilla-paths.ps1`. FlashAttention inspection checks the expected
-source markers and reports version and Git remote metadata when available.
+Godzilla, and llama.cpp checkouts. The source picker can also inspect local
+folders for the six reviewed-but-blocked add-ons (`maru`,
+`speculative_prefill`, `rocketkv`, `lexico`, `adadecode`, and
+`resonance_yarn`) and for domvox TriAttention. Renamed Godzilla trees are
+recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
+the expected source markers and reports version and Git remote metadata when
+available.
 
 For the six reviewed Python add-ons, a recognized checkout has a **Use for
 profile** action. It fills the local-source profile and path controls. Refresh
@@ -122,6 +145,11 @@ the profile plan before creation: the plan validates the checkout markers,
 then `uv` builds that package and resolves its dependencies in the selected
 isolated environment. The scanner never imports or executes the checkout, and
 unrecognized folders cannot be substituted into a profile.
+
+Selecting a blocked add-on source is informational only: the scanner reports
+the reviewed markers, upstream metadata, and the reason automatic installation
+is not offered. It never turns a blocked profile into an installable one or
+executes the selected source.
 
 A local checkout changes only the selected package's source. It does not relax
 the profile's operating-system, Python, PyTorch, or CUDA ABI requirements. In
@@ -133,6 +161,9 @@ source markers, KVarN and TriAttention flags, preparation/resolver scripts,
 bundled-calibrator status, and known `llama-server` build locations. A recognized
 official TriAttention checkout has a separate action that fills its validated
 `scripts/calibrate.py` path and selects its dependency profile.
+The domvox action fills `triattention_calibrate.py` and the experimental
+calibration mode when its `triattention_common.py` and `TRIA_FORMAT.md` markers
+are present.
 Multi-TurboQuant does not configure or compile the CMake project automatically;
 use Godzilla's documented build process. TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1

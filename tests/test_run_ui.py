@@ -296,6 +296,19 @@ def test_api_addon_scan_respects_explicit_empty_roots(tmp_path, monkeypatch):
     assert "No add-on roots" in result["warnings"][0]
 
 
+def test_api_inspects_informational_addon_source(tmp_path):
+    source = tmp_path / "maru"
+    (source / "resource_manager").mkdir(parents=True)
+    (source / "README.md").write_text("Maru", encoding="utf-8")
+    (source / "CMakeLists.txt").write_text("project(maru)", encoding="utf-8")
+
+    result = run_ui.api_inspect_addon_source({"profile": "maru", "path": str(source)})
+
+    assert result["valid"] is True
+    assert result["status"] == "informational_only"
+    assert result["name"] == "Maru"
+
+
 def test_evaluated_ui_javascript_has_valid_syntax():
     match = re.search(r"(?s)<script>(.*?)</script>", run_ui.UI_HTML)
     assert match is not None

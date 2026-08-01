@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-219%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-237%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -89,7 +89,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-230 automated test cases: 219 pass in the current Windows CPU environment and
+248 automated test cases: 237 pass in the current Windows CPU environment and
 11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
 
 | Suite | Tests | What It Proves |
@@ -99,8 +99,8 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 17 | Official calibration/conversion, dependency preflight, strict Godzilla v1 round trips, three planner modes, reuse, and verified preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 45 | Command generation, disconnect handling, rendered JavaScript, settings, dependency-state validation/override, automatic calibrator/interpreter selection, bounded discovery, managed processes, and confirmed background jobs |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 23 | Official and domvox calibration/conversion, strict format checks, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 57 | Command generation, disconnect handling, rendered JavaScript, settings, dependency-state validation/override, source-profile selection, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
 | `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
@@ -230,6 +230,35 @@ The older Godzilla checkout-owned PowerShell workflow remains available as an
 explicit fallback for checkouts that provide it. `mtq-triattention-stats` writes
 a different `.pt` schema for Multi-TurboQuant's Python/vLLM path and cannot be
 passed directly to Godzilla.
+
+#### Optional domvox TRIA v2 adapter
+
+The Setup view and CLI also recognize a reviewed `domvox/triattention-ggml`
+checkout. Its `triattention_calibrate.py` output is a distinct TRIA v2 binary,
+not a Godzilla artifact. The experimental adapter validates the TRIA header,
+model dimensions, RoPE metadata, finite values, and exact file size before
+writing a Godzilla v1 `.triattention` file:
+
+```bash
+mtq-godzilla-triattention domvox \
+  --calibrator /path/to/triattention-ggml/triattention_calibrate.py \
+  --python /path/to/calibration/python \
+  --model organization/original-model \
+  --input calibration.txt \
+  --output model.triattention \
+  --max-length 32768 \
+  --device cuda \
+  --accept-lossy
+```
+
+The conversion is deliberately opt-in and lossy: Godzilla v1 has no fields
+for domvox layer-budget scales or attention scale, so those fields are reported
+as dropped. Calibration lengths from 128 through 200,000 tokens are accepted;
+anything above 32,768 requires `--allow-long-calibration` and is processed as
+one upstream sequence, with substantially higher memory and runtime risk. The
+default remains conservative. Use the matching Hugging Face checkpoint, not a
+GGUF alone, for shape and RoPE metadata, and validate retrieval quality on the
+target model before relying on the result.
 
 ### Godzilla KVarN and DFlash
 
@@ -521,7 +550,11 @@ The browser UI now has two focused views:
   The view also recognizes renamed Godzilla trees by their marker script,
   reports KVarN/TriAttention support and existing builds, validates or creates
   the official calibrator environment, and can either calibrate and convert or
-  convert existing official statistics after its prerequisites pass.
+  convert existing official statistics after its prerequisites pass. Advanced
+  Quick Run controls and infrequent Setup sections are collapsed by default.
+  The source picker can inspect local folders for the six blocked add-ons and
+  the domvox checkout without importing or executing them; blocked profiles
+  remain informational and are not made installable by discovery.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -542,7 +575,7 @@ multi_turboquant/
   optimizations/         Optional manifests, conflict planner, isolated env manager
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
-  calibration/           Weight-norm analysis, frequency stats, auto-calibrate
+  calibration/           Weight-norm analysis, TriAttention adapters, auto-calibrate
   integration/           llama.cpp flags, CUDA weight-share wrapper, vLLM patch
   benchmark/             Head-to-head comparison, perplexity, VRAM profiling
 ```
@@ -572,6 +605,7 @@ This project reimplements algorithms from published research. All original repos
 | IsoQuant / PlanarQuant / RotorQuant | scrya-com/rotorquant (ParaMind2025) |
 | CUDA + Metal kernels | johndpope/llama-cpp-turboquant |
 | TriAttention token eviction | WeianMao/triattention |
+| domvox TRIA v2 format and calibrator | [domvox/triattention-ggml](https://github.com/domvox/triattention-ggml) |
 | Godzilla llama.cpp profile, KVarN alias surface, DFlash flags | [atomicmilkshake/godzilla-llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp) |
 | BeeLlama / DFlash lineage | [Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp) |
 | KVarN research and reference implementation | [huawei-csl/KVarN](https://github.com/huawei-csl/KVarN) |
@@ -598,13 +632,14 @@ RoPE, LongRoPE, or llama.cpp code.
 | Suggested selecting local add-on source folders, resolving their dependencies, and recognizing Godzilla's KVarN/TriAttention setup needs | [@jawadala](https://github.com/jawadala) | Issue [#25](https://github.com/aivrar/multi-turboquant/issues/25) |
 | Identified the official TriAttention calibration script and requested a no-`llama-cli` workflow plus clearer CUDA weight-share guidance | [@jawadala](https://github.com/jawadala) | Issue [#29](https://github.com/aivrar/multi-turboquant/issues/29) |
 | Reported remaining dependency-state and calibration workflow friction, prompting bounded local builds, installed-environment validation, and a streamlined official-stats conversion path | [@jawadala](https://github.com/jawadala) | Issue [#31](https://github.com/aivrar/multi-turboquant/issues/31) |
+| Requested domvox TRIA v2 calibration support, a 200k-token ceiling, local source selection for blocked add-ons, and a less-cluttered UI; these requests informed the experimental adapter, source inspector, progressive disclosure, and guardrails | [@jawadala](https://github.com/jawadala) | Issue [#32](https://github.com/aivrar/multi-turboquant/issues/32) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
-Thanks to [@jawadala](https://github.com/jawadala) for the sustained issue
-reports and feature suggestions that informed the Godzilla/KVarN support,
-context-extension tooling, optimization catalog, and isolated dependency
-system, including the practical UI workflow and official TriAttention calibration
-path that bring those additions together.
+Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
+reports and concrete feature suggestions. They have materially shaped the
+Godzilla/KVarN support, context-extension tooling, optimization catalog,
+isolated dependency system, practical UI workflow, and the official and
+domvox TriAttention calibration paths.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

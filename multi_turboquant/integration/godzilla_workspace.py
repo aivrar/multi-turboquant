@@ -11,8 +11,13 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from ..calibration.godzilla_triattention import (
+    LONG_CALIBRATION_THRESHOLD,
+    MAX_CALIBRATION_TOKENS,
+    convert_domvox_triattention_stats,
     inspect_calibration_python,
+    inspect_domvox_triattention_calibrator,
     inspect_godzilla_triattention_file,
+    load_huggingface_model_metadata,
     inspect_official_triattention_calibrator,
 )
 
@@ -143,6 +148,9 @@ class GodzillaCalibrationPlan:
     attention_implementation: str
     dependency_validation: Mapping[str, object] | None
     dependency_override: bool
+    domvox_calibrator: Path | None
+    domvox_accept_lossy: bool
+    allow_long_calibration: bool
     command: tuple[str, ...]
     environment: tuple[tuple[str, str], ...]
     issues: tuple[GodzillaIssue, ...]
@@ -169,6 +177,11 @@ class GodzillaCalibrationPlan:
             "official_stats_input": (
                 str(self.official_stats_input) if self.official_stats_input is not None else None
             ),
+            "domvox_calibrator": (
+                str(self.domvox_calibrator) if self.domvox_calibrator is not None else None
+            ),
+            "domvox_accept_lossy": self.domvox_accept_lossy,
+            "allow_long_calibration": self.allow_long_calibration,
             "attention_implementation": self.attention_implementation,
             "dependency_validation": self.dependency_validation,
             "dependency_override": self.dependency_override,
@@ -189,6 +202,9 @@ def plan_godzilla_triattention(
     calibrator: str | Path | None = None,
     calibration_input: str | Path | None = None,
     official_stats_input: str | Path | None = None,
+    domvox_calibrator: str | Path | None = None,
+    domvox_accept_lossy: bool = False,
+    allow_long_calibration: bool = False,
     hf_model: str | None = None,
     n_tokens: int = 2048,
     device: str = "cuda",
@@ -224,12 +240,22 @@ def plan_godzilla_triattention(
         or os.environ.get("TRIATTENTION_CALIBRATE_PY")
         or (bundled_calibrator if normalized_mode == "godzilla_script" else None)
     )
+    domvox_calibrator_value = (
+        domvox_calibrator
+        or os.environ.get("TRIATTENTION_DOMVOX_CALIBRATE_PY")
+        or (calibrator if normalized_mode == "domvox" else None)
+    )
     calibration_input_value = calibration_input or os.environ.get("TRIATTENTION_CALIBRATION_TEXT")
     official_stats_input_value = official_stats_input or os.environ.get(
         "TRIATTENTION_OFFICIAL_STATS"
     )
     python_path = Path(python_value).expanduser().resolve() if python_value else None
     calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
+    domvox_calibrator_path = (
+        Path(domvox_calibrator_value).expanduser().resolve()
+        if domvox_calibrator_value
+        else None
+    )
     calibration_input_path = (
         Path(calibration_input_value).expanduser().resolve() if calibration_input_value else None
     )
@@ -241,6 +267,8 @@ def plan_godzilla_triattention(
     official_stats = (
         official_stats_input_path
         if normalized_mode == "official_convert"
+        else output_path.with_suffix(".domvox.bin")
+        if normalized_mode == "domvox"
         else output_path.with_suffix(".official.pt")
     )
     output_exists = output_path.is_file()
@@ -255,12 +283,12 @@ def plan_godzilla_triattention(
                 "; ".join(str(item) for item in inspection.get("issues", [])),
             )
         )
-    if normalized_mode not in {"official_python", "official_convert", "godzilla_script"}:
+    if normalized_mode not in {"official_python", "official_convert", "godzilla_script", "domvox"}:
         issues.append(
             GodzillaIssue(
                 "error",
                 "invalid_calibration_mode",
-                "Calibration mode must be official_python, official_convert, or godzilla_script.",
+                "Calibration mode must be official_python, official_convert, godzilla_script, or domvox.",
             )
         )
     ensure_script = checkout_path / "scripts" / "ensure-triattention.ps1"
@@ -310,7 +338,34 @@ def plan_godzilla_triattention(
                         "; ".join(str(item) for item in calibrator_inspection["issues"]),
                     )
                 )
-    if not output_exists and normalized_mode == "official_python" and (
+    if not output_exists and normalized_mode == "domvox":
+        if domvox_calibrator_path is None or not domvox_calibrator_path.is_file():
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "missing_domvox_calibrator",
+                    "Select domvox/triattention-ggml/triattention_calibrate.py.",
+                )
+            )
+        else:
+            domvox_inspection = inspect_domvox_triattention_calibrator(domvox_calibrator_path)
+            if not domvox_inspection["valid"]:
+                issues.append(
+                    GodzillaIssue(
+                        "error",
+                        "invalid_domvox_calibrator",
+                        "; ".join(str(item) for item in domvox_inspection["issues"]),
+                    )
+                )
+        if not domvox_accept_lossy:
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "domvox_lossy_confirmation",
+                    "domvox TRIA v2 to Godzilla v1 conversion drops layer-budget and attention-scale fields; explicitly acknowledge this experimental conversion.",
+                )
+            )
+    if not output_exists and normalized_mode in {"official_python", "domvox"} and (
         calibration_input_path is None
         or not calibration_input_path.is_file()
         or calibration_input_path.stat().st_size == 0
@@ -334,10 +389,31 @@ def plan_godzilla_triattention(
                 "Select an existing official TriAttention .pt statistics file to convert.",
             )
         )
-    if not 128 <= n_tokens <= 32_768:
+    if not 128 <= n_tokens <= MAX_CALIBRATION_TOKENS:
         issues.append(
-            GodzillaIssue("error", "invalid_token_count", "Calibration tokens must be 128 to 32768.")
+            GodzillaIssue(
+                "error",
+                "invalid_token_count",
+                f"Calibration tokens must be 128 to {MAX_CALIBRATION_TOKENS}.",
+            )
         )
+    elif n_tokens > LONG_CALIBRATION_THRESHOLD:
+        if not allow_long_calibration:
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "long_calibration_confirmation",
+                    f"Calibration above {LONG_CALIBRATION_THRESHOLD} tokens is one-shot and may exhaust memory; explicitly enable long calibration to continue.",
+                )
+            )
+        else:
+            issues.append(
+                GodzillaIssue(
+                    "warning",
+                    "long_calibration_one_shot",
+                    "The upstream calibrator processes one long sequence; no chunked aggregation is being assumed. Expect substantially higher memory and runtime.",
+                )
+            )
     if normalized_device not in {"cuda", "cpu"}:
         issues.append(GodzillaIssue("error", "invalid_device", "Device must be 'cuda' or 'cpu'."))
     if normalized_mode == "official_python" and normalized_attention not in {
@@ -355,7 +431,7 @@ def plan_godzilla_triattention(
     if (
         not output_exists
         and normalized_hf is None
-        and normalized_mode in {"official_python", "official_convert"}
+        and normalized_mode in {"official_python", "official_convert", "domvox"}
     ):
         issues.append(
             GodzillaIssue(
@@ -434,11 +510,19 @@ def plan_godzilla_triattention(
                 "Conversion loads only matching Hugging Face configuration metadata, not model weights.",
             )
         )
+    elif normalized_mode == "domvox":
+        issues.append(
+            GodzillaIssue(
+                "warning",
+                "domvox_experimental_adapter",
+                "domvox TRIA v2 is adapted to Godzilla v1; validate model metadata and retrieval quality before serving.",
+            )
+        )
 
     if (
         not output_exists
         and verify_dependencies
-        and normalized_mode in {"official_python", "official_convert"}
+        and normalized_mode in {"official_python", "official_convert", "domvox"}
         and python_path is not None
         and python_path.is_file()
     ):
@@ -477,7 +561,7 @@ def plan_godzilla_triattention(
                     )
                 )
 
-    if normalized_mode in {"official_python", "official_convert"}:
+    if normalized_mode in {"official_python", "official_convert", "domvox"}:
         issues.append(
             GodzillaIssue(
                 "info",
@@ -486,8 +570,12 @@ def plan_godzilla_triattention(
                     "This mode runs the official Python/Hugging Face calibrator and a validated "
                     "Godzilla format conversion; it does not use llama-cli."
                     if normalized_mode == "official_python"
-                    else "This mode converts existing official .pt statistics to the validated "
-                    "Godzilla format; it does not rerun calibration or use llama-cli."
+                    else (
+                        "This mode converts existing official .pt statistics to the validated "
+                        "Godzilla format; it does not rerun calibration or use llama-cli."
+                        if normalized_mode == "official_convert"
+                        else "This mode runs the domvox Python calibrator, then adapts its TRIA v2 output to Godzilla v1; it does not use llama-cli."
+                    )
                 ),
             )
         )
@@ -543,6 +631,28 @@ def plan_godzilla_triattention(
         ]
     elif (
         not output_exists
+        and normalized_mode == "domvox"
+        and python_path is not None
+        and domvox_calibrator_path is not None
+        and calibration_input_path is not None
+        and normalized_hf is not None
+    ):
+        command = [
+            str(python_path),
+            str(domvox_calibrator_path),
+            "--model",
+            normalized_hf,
+            "--input",
+            str(calibration_input_path),
+            "--output",
+            str(official_stats),
+            "--max-length",
+            str(n_tokens),
+            "--device",
+            normalized_device,
+        ]
+    elif (
+        not output_exists
         and normalized_mode == "official_convert"
         and python_path is not None
         and official_stats_input_path is not None
@@ -580,6 +690,8 @@ def plan_godzilla_triattention(
         environment.append(("TRIATTENTION_PYTHON", str(python_path)))
     if calibrator_path is not None:
         environment.append(("TRIATTENTION_CALIBRATE_PY", str(calibrator_path)))
+    if domvox_calibrator_path is not None:
+        environment.append(("TRIATTENTION_DOMVOX_CALIBRATE_PY", str(domvox_calibrator_path)))
     return GodzillaCalibrationPlan(
         checkout=checkout_path,
         gguf=gguf_path,
@@ -593,13 +705,16 @@ def plan_godzilla_triattention(
         calibration_input=calibration_input_path,
         official_stats=(
             official_stats
-            if normalized_mode in {"official_python", "official_convert"}
+            if normalized_mode in {"official_python", "official_convert", "domvox"}
             else None
         ),
         official_stats_input=official_stats_input_path,
         attention_implementation=normalized_attention,
         dependency_validation=dependency_validation,
         dependency_override=dependency_override,
+        domvox_calibrator=domvox_calibrator_path,
+        domvox_accept_lossy=domvox_accept_lossy,
+        allow_long_calibration=allow_long_calibration,
         command=tuple(command),
         environment=tuple(environment),
         issues=tuple(issues),
@@ -629,9 +744,14 @@ def run_godzilla_triattention(
         }
     existed = plan.output.is_file()
     environment: Mapping[str, str] = {**os.environ, **dict(plan.environment)}
+    run_cwd = (
+        plan.domvox_calibrator.parent
+        if plan.mode == "domvox" and plan.domvox_calibrator is not None
+        else plan.checkout
+    )
     result = runner(
         list(plan.command),
-        cwd=plan.checkout,
+        cwd=run_cwd,
         env=environment,
         capture_output=True,
         text=True,
@@ -644,6 +764,38 @@ def run_godzilla_triattention(
             + (f": {details}" if details else "")
         )
     if not plan.output.is_file():
+        if plan.mode == "domvox":
+            if plan.official_stats is None or not plan.official_stats.is_file():
+                raise RuntimeError(
+                    f"domvox calibration command did not create {plan.official_stats}"
+                )
+            if not plan.hf_model:
+                raise RuntimeError("domvox conversion requires a matching Hugging Face model")
+            model_metadata = load_huggingface_model_metadata(plan.hf_model)
+            display_name = (
+                plan.hf_model.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            )
+            conversion = convert_domvox_triattention_stats(
+                plan.official_stats,
+                plan.output,
+                model_name=display_name,
+                num_layers=int(model_metadata["num_layers"]),
+                num_attention_heads=int(model_metadata["num_attention_heads"]),
+                num_key_value_heads=int(model_metadata["num_key_value_heads"]),
+                rope_theta=float(model_metadata["rope_theta"]),
+                expected_head_dim=int(model_metadata["head_dim"]),
+                accept_lossy=plan.domvox_accept_lossy,
+            )
+            artifact = inspect_godzilla_triattention_file(plan.output)
+            return {
+                "output": str(plan.output),
+                "reused": existed,
+                "artifact": artifact,
+                "domvox_stats": str(plan.official_stats),
+                "conversion": conversion,
+                "stdout": result.stdout or "",
+                "stderr": result.stderr or "",
+            }
         raise RuntimeError(f"Godzilla calibration command did not create {plan.output}")
     try:
         artifact = inspect_godzilla_triattention_file(plan.output)
