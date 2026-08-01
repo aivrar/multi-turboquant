@@ -475,7 +475,7 @@ from multi_turboquant.compatibility import check_config, get_recommended_config
 
 platform = detect_platform()
 print(platform.summary())
-# NVIDIA: all 10 methods | AMD: iso/planar only | Mac: iso/planar only
+# NVIDIA: TurboQuant/TCQ + Iso/Planar cache types | AMD/Mac: Iso/Planar only
 
 config = get_recommended_config(platform)
 issues = check_config(config, platform)
