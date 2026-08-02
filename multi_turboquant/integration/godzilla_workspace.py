@@ -43,6 +43,10 @@ def _candidate_binaries(root: Path) -> list[Path]:
         root / "build-cuda" / "bin" / "Release",
         root / "build-king" / "bin",
         root / "build-king" / "bin" / "Release",
+        root / "build-gigatoken-cpu" / "bin",
+        root / "build-gigatoken-cpu" / "bin" / "Release",
+        root / "build-gigatoken-cuda" / "bin",
+        root / "build-gigatoken-cuda" / "bin" / "Release",
     )
     return [directory / name for directory in directories for name in names if (directory / name).is_file()]
 

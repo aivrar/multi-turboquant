@@ -1252,7 +1252,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div><label>Tokenizer backend</label><select id="godzilla-tokenizer"><option value="transformers" selected>Hugging Face (default)</option><option value="gigatoken">Gigatoken (parity required)</option></select></div>
           <div><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
         </div>
-        <div class="setup-note">Gigatoken is opt-in for the recommended official mode. Before model loading, Multi-TurboQuant compares every token ID it produces for the selected calibration text with Hugging Face and stops on any mismatch. The separate gigatoken-llama.cpp fork is an experimental Windows x64 runtime integration, not automatically part of Godzilla.</div>
+        <div class="setup-note">Gigatoken is opt-in for the recommended official calibration mode. Before model loading, Multi-TurboQuant compares every token ID it produces with Hugging Face and stops on any mismatch. For inference, <code>mtq-godzilla-gigatoken</code> can prepare and qualify a separate pinned Godzilla v0.3.7 + Gigatoken runtime tree; this view never patches an arbitrary checkout.</div>
         <div class="button-row"><button class="secondary" onclick="scanGigatoken()">Scan Python and pyenv environments for Gigatoken</button></div>
         <div id="gigatoken-scan" class="item-list"><div class="muted">Not scanned.</div></div>
         <div class="form-row">
@@ -1656,7 +1656,7 @@ async function scanAddons() {
         action += `<button onclick="useDomvoxSource('${encodedCalibrator}','${encodedPath}')">Use domvox calibrator</button>`;
       }
       let features = addon.kind === 'godzilla' && addon.source?.features
-        ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
+        ? `<div class="muted">KVarN ${addon.source.features.kvarn ? 'found' : 'missing'}; TriAttention ${addon.source.features.triattention ? 'found' : 'missing'}; Gigatoken runtime ${addon.source.features.gigatoken ? 'found' : 'missing'}; preparation script ${addon.source.features.triattention_prepare ? 'found' : 'missing'}</div>`
         : '';
       if (addon.kind === 'godzilla' && addon.source?.features) {
         features += '<div class="muted">Calibrator ' +

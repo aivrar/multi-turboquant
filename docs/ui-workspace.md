@@ -170,9 +170,11 @@ Godzilla, and llama.cpp checkouts. The source picker can also inspect local
 folders for the six reviewed-but-blocked add-ons (`maru`,
 `speculative_prefill`, `rocketkv`, `lexico`, `adadecode`, and
 `resonance_yarn`) and for domvox TriAttention. It also recognizes the separate
-`chynggi/gigatoken-llama.cpp` checkout as an informational-only experimental
-Windows x64 runtime fork. This does not make it a Godzilla build or add automatic
-compilation; porting and differential validation remain necessary. Renamed
+`chynggi/gigatoken-llama.cpp` checkout as an informational experimental
+Windows x64/Linux x86_64 runtime fork. Discovery does not make it a Godzilla
+build or compile it. Use `mtq-godzilla-gigatoken` separately to create and
+qualify the pinned Godzilla v0.3.7 port; the command refuses arbitrary or
+existing target trees. Renamed
 Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
 the expected source markers and reports version and Git remote metadata when
 available.
@@ -208,8 +210,9 @@ calibration mode when its `triattention_common.py` and `TRIA_FORMAT.md` markers
 are present.
 If the chosen script belongs to the other calibration mode, the planner now
 identifies the official/domvox mismatch and names the appropriate mode.
-Multi-TurboQuant does not configure or compile the CMake project automatically;
-use Godzilla's documented build process. TriAttention remains experimental and
+The UI does not configure or compile a Godzilla CMake project automatically.
+Use Godzilla's documented process for ordinary checkouts, or the explicit
+`mtq-godzilla-gigatoken` workflow for its pinned combined runtime. TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1
 header, dimensions, sampled indices, numeric arrays, and exact file length pass
 validation.

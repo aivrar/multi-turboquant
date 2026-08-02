@@ -348,6 +348,28 @@ def test_addon_scan_recognizes_gigatoken_llamacpp_as_separate_runtime(tmp_path: 
     assert "Godzilla" in addon["source"]["summary"]
 
 
+def test_addon_scan_keeps_combined_godzilla_gigatoken_tree_as_godzilla(tmp_path: Path):
+    source = tmp_path / "godzilla-gigatoken"
+    (source / "ggml").mkdir(parents=True)
+    (source / "common").mkdir()
+    (source / "src").mkdir()
+    (source / "scripts").mkdir()
+    (source / "cmake").mkdir()
+    (source / "patches").mkdir()
+    (source / "CMakeLists.txt").write_text("project(godzilla)", encoding="utf-8")
+    (source / "GODZILLA_KING.md").write_text("Godzilla", encoding="utf-8")
+    (source / "common" / "arg.cpp").write_text("kvarn", encoding="utf-8")
+    (source / "src" / "llama-gigatoken.cpp").write_text("cpp", encoding="utf-8")
+    (source / "cmake" / "gigatoken.cmake").write_text("cmake", encoding="utf-8")
+    (source / "patches" / "gigatoken-llama-cpp.patch").write_text("patch", encoding="utf-8")
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+    assert addon["kind"] == "godzilla"
+    assert addon["source"]["features"]["gigatoken"] is True
+
+
 def test_addon_scan_does_not_classify_the_parent_as_a_python_addon(tmp_path: Path):
     addon_root = tmp_path / "addons"
     source = addon_root / "FastDMS"

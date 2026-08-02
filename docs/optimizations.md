@@ -255,11 +255,13 @@ inspect up to 64 interpreters across current, `PATH`, active virtual/Conda,
 managed `.mtq`, and conventional pyenv locations. Inspection is isolated,
 bounded, and does not recursively scan a drive.
 
-The source inspector also recognizes `chynggi/gigatoken-llama.cpp`. That project
-is a separate experimental Windows x64 runtime fork and is informational only:
-Multi-TurboQuant does not build it or claim that it is compatible with Godzilla.
-A Godzilla runtime integration would require a deliberate port to the target
-revision followed by the fork's differential tokenization tests.
+The source inspector also recognizes `chynggi/gigatoken-llama.cpp` as a separate
+experimental Windows x64/Linux x86_64 runtime fork. Discovery remains
+informational and never executes it. The explicit `mtq-godzilla-gigatoken`
+workflow now performs a deliberate port onto pinned Godzilla v0.3.7 in a new
+target tree, verifies all source revisions and hashes, builds with
+`LLAMA_GIGATOKEN=ON`, and runs both the differential and legacy tokenizer
+suites. It does not patch a selected or arbitrary checkout.
 
 Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible

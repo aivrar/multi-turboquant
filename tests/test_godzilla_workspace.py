@@ -96,6 +96,17 @@ def test_godzilla_checkout_inspection_reports_features_and_binary(tmp_path: Path
     assert any("KVarN" in note for note in inspection["notes"])
 
 
+def test_godzilla_inspection_finds_gigatoken_build_output(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    runtime_binary = checkout / "build-gigatoken-cpu" / "bin" / "Release" / "llama-server.exe"
+    runtime_binary.parent.mkdir(parents=True)
+    runtime_binary.write_bytes(b"exe")
+
+    inspection = inspect_godzilla_checkout(checkout)
+
+    assert str(runtime_binary.resolve()) in inspection["binaries"]
+
+
 def test_godzilla_checkout_is_recognized_as_an_addon(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
 

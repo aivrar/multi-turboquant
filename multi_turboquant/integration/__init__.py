@@ -40,6 +40,15 @@ from .godzilla_workspace import (
     plan_godzilla_triattention,
     run_godzilla_triattention,
 )
+from .godzilla_gigatoken import (
+    GodzillaGigatokenPlan,
+    RuntimeIssue,
+    build_godzilla_gigatoken,
+    inspect_godzilla_gigatoken,
+    plan_godzilla_gigatoken,
+    prepare_godzilla_gigatoken,
+    verify_godzilla_gigatoken,
+)
 
 __all__ = [
     "patch_vllm",
@@ -66,4 +75,11 @@ __all__ = [
     "inspect_godzilla_checkout",
     "plan_godzilla_triattention",
     "run_godzilla_triattention",
+    "GodzillaGigatokenPlan",
+    "RuntimeIssue",
+    "build_godzilla_gigatoken",
+    "inspect_godzilla_gigatoken",
+    "plan_godzilla_gigatoken",
+    "prepare_godzilla_gigatoken",
+    "verify_godzilla_gigatoken",
 ]

@@ -832,6 +832,46 @@ requests; use representative domain text for final calibration qualification.
 Python/vLLM integration. That file is not binary-compatible with Godzilla's
 `.triattention` runtime format.
 
+### Godzilla + Gigatoken runtime preparation
+
+The Python Gigatoken calibration backend above does not affect inference. For
+native Godzilla runtime tokenization, `mtq-godzilla-gigatoken` creates a new
+combined source tree pinned to Godzilla v0.3.7 (`ea1e799`), the reviewed
+Gigatoken llama.cpp port (`b47a0fc`), Gigatoken 0.10.0 (`34a1599`), and Rust
+`nightly-2026-07-22`. It downloads a commit-to-commit review diff, selects only
+the tokenizer integration files, verifies both diff hashes, applies exact
+Godzilla-layout adaptations, normalizes the nested C-ABI patch for Windows,
+and records hashes for every adapted runtime file. Existing targets and
+arbitrary Godzilla checkouts are rejected.
+
+```bash
+mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken
+mtq-godzilla-gigatoken all /opt/godzilla-gigatoken \
+  --backend cpu --max-jobs 2 --yes
+
+# Separate CUDA build; use the toolkit that should compile this source tree
+mtq-godzilla-gigatoken build /opt/godzilla-gigatoken \
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+```
+
+The reviewed platforms are Windows x64 and Linux x86_64. CPU is the default;
+CUDA requires explicit selection and `nvcc` on `PATH` or `--cuda-toolkit`.
+Server URL-download support is off by default for the qualified minimum build;
+add `--with-curl` if it is required. Each backend has its own
+`build-gigatoken-<backend>` directory. A clean two-worker Windows CPU build
+took about eight minutes, while later builds are incremental.
+
+Supported BPE and SentencePiece pre-tokenizers use Gigatoken transparently
+during normal server completion and chat requests. llama.cpp retains special
+token partitioning, BOS/EOS behavior, and detokenization. Unsupported vocabularies
+fall back to the existing C++ path; malformed supported vocabularies and runtime
+ABI errors stop rather than silently changing token IDs. The required tests are
+9 Gigatoken/C++ differential cases and all 15 existing Godzilla tokenizer
+fixtures. DeepSeek V3, GPT-OSS, and Kimi K2.7 vocab-only GGUF fixtures are
+optional and can be supplied with `--fixture-dir`; missing optional fixtures
+are not registered as failures. `verify` reruns the suites and checks the
+resulting `llama-server --version` output.
+
 ### CUDA weight-share launch wrapper
 
 For Linux + CUDA multi-process serving, you can wrap the launch command for an
@@ -1453,6 +1493,8 @@ multi_turboquant/
 
   integration/
     llamacpp_args.py        Generate llama.cpp CLI flags
+    godzilla_gigatoken.py   Pinned combined-source preparation, build, and verification
+    godzilla_gigatoken_cli.py Confirmed runtime workflow CLI
     weight_share.py         CUDA LD_PRELOAD launch wrapper
     vllm_patch.py           Monkeypatch vLLM for all methods
     bridge_adapter.py       Adapter for Llama_TQ bridge apps
@@ -1520,6 +1562,10 @@ multi_turboquant.integration.LlamaCppProfile
 multi_turboquant.integration.LlamaCppSpeculativeConfig
 multi_turboquant.integration.inspect_godzilla_checkout(path)
 multi_turboquant.integration.plan_godzilla_triattention(checkout, gguf, ...)
+multi_turboquant.integration.plan_godzilla_gigatoken(target, action="prepare")
+multi_turboquant.integration.prepare_godzilla_gigatoken(plan, confirmed=True)
+multi_turboquant.integration.build_godzilla_gigatoken(plan, confirmed=True)
+multi_turboquant.integration.verify_godzilla_gigatoken(plan)
 multi_turboquant.integration.patch_vllm(config)
 multi_turboquant.integration.is_vllm_patched()
 multi_turboquant.integration.BridgeAdapter(config)
@@ -1581,7 +1627,7 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | KVarN research and reference implementation | huawei-csl / KVarN | See upstream |
 | Context extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | ggml-org / llama.cpp, sheryc / resonance_rope, published papers | See upstream |
 | Gigatoken Python tokenizer accelerator | marcelroed / gigatoken | MIT |
-| Experimental Gigatoken llama.cpp integration | chynggi / gigatoken-llama.cpp | MIT |
+| Gigatoken llama.cpp runtime integration lineage | chynggi / gigatoken-llama.cpp | MIT |
 | Godzilla + KVarN integration request and issue context | jawadala / issue #9 | Community contribution |
 | Context extension, Resonance RoPE review, UI scanner, and KVarN/TriAttention compatibility request | jawadala / issue #11 | Community contribution |
 | Local UI workspace, persistent defaults, model/add-on discovery, and recent option exposure | jawadala / issue #19 | Community contribution |
@@ -1591,8 +1637,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | domvox TRIA v2 calibration, 200k-token ceiling, local blocked-source inspection, and UI progressive disclosure | jawadala / issue #32 | Community contribution |
 | Linux managed-interpreter symlink regression report | jawadala / issue #37 | Community contribution |
 | Gigatoken calibration, environment discovery, and llama.cpp integration proposal | jawadala / issue #38 | Community contribution |
+| Direct Gigatoken tokenization for Godzilla runtime/inference | jawadala / issue #39 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp code. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken option.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp source trees; the confirmed Gigatoken runtime workflow clones exact upstream revisions into a separate target and records their provenance. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken calibration and runtime options.
 
 ---
 

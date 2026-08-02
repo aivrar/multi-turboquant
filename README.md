@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-259%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-283%20passing-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -35,6 +35,9 @@ SageAttention, and the official TriAttention calibrator are managed through
 `mtq-env`. Each receives its own reviewed,
 locked `uv` project and virtual environment, so experimenting with an add-on
 does not replace packages in the core Multi-TurboQuant environment.
+The separate `mtq-godzilla-gigatoken` workflow can also prepare, build, and
+qualify a revision-pinned Godzilla llama.cpp runtime with native Gigatoken
+tokenization without modifying an existing checkout.
 
 ```bash
 git clone https://github.com/aivrar/multi-turboquant
@@ -89,7 +92,7 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-286 automated test cases: 272 pass in the current Windows CPU environment and
+297 automated test cases: 283 pass in the current Windows CPU environment and
 14 POSIX-symlink or hardware-specific GPU/Metal cases skip when their required
 platform or device is unavailable.
 
@@ -100,8 +103,9 @@ platform or device is unavailable.
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 29 | Official and domvox calibration/conversion, strict format checks, exact-parity tokenizer selection, POSIX interpreter paths, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 68 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, Gigatoken/source discovery, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 30 | Official and domvox calibration/conversion, strict format checks, exact-parity tokenizer selection, POSIX interpreter paths, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
+| `test_godzilla_gigatoken.py` | 9 | Read-only planning, exact source pins, confirmation, reviewed-diff filtering, Windows line endings, optional fixtures, build/verify boundaries, and prepared-tree integrity |
+| `test_run_ui.py` + `test_ui_workspace.py` | 69 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, Gigatoken/source discovery, combined-runtime classification, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
 | `test_llamacpp_scan.py` | 4 | Capability discovery, Gigatoken self-identification, and failure reporting without executing inference |
 | `test_tokenizer_backends.py` | 5 | Exact token-ID parity, mismatch refusal, reviewed-version checks, and bounded managed/pyenv interpreter discovery |
 | `test_calibration_text.py` | 10 | Deterministic offline corpus generation, size/token bounds, concurrent no-clobber publication, incomplete-file refusal, and concurrent non-hardlink filesystem fallback |
@@ -294,12 +298,60 @@ domain text for final quality qualification, the matching Hugging Face checkpoin
 for shape and RoPE metadata, and validate retrieval quality on the target model
 before relying on the result.
 
-The separate [`chynggi/gigatoken-llama.cpp`](https://github.com/chynggi/gigatoken-llama.cpp)
-project is recognized by the local source inspector, but it is an experimental
-Windows x64 llama.cpp fork rather than a Godzilla extension. Multi-TurboQuant
-does not build, patch, or run it automatically. Its C++ changes would need to be
-ported onto the intended Godzilla revision and differential-tested before any
-runtime compatibility claim could be made.
+### Godzilla + Gigatoken runtime
+
+`mtq-godzilla-gigatoken` now performs the reviewed runtime port requested in
+issue #39. It creates a **new** combined source tree from Godzilla v0.3.7,
+selects only the tokenizer-related changes from the pinned
+[`chynggi/gigatoken-llama.cpp`](https://github.com/chynggi/gigatoken-llama.cpp)
+revision, and vendors a separate checkout of Gigatoken 0.10.0 at its exact
+commit. The complete upstream diff, selected diff, dependency patch, Git
+revisions, and adapted runtime files are hash-verified. It refuses an existing
+target and never applies this port to an arbitrary Godzilla checkout.
+
+```bash
+# Read-only: checks platform, tools, output safety, pins, and planned commands
+mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken
+
+# Prepare, compile the CPU runtime, and run both tokenizer suites
+mtq-godzilla-gigatoken all /opt/godzilla-gigatoken --backend cpu --max-jobs 2 --yes
+
+# Or qualify a CUDA build with a matching side-by-side toolkit
+mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken --for-action build \
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6
+mtq-godzilla-gigatoken build /opt/godzilla-gigatoken \
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+```
+
+On Windows, use a fresh destination such as `D:\src\godzilla-gigatoken` and a
+CUDA toolkit root or `nvcc.exe` path. The reviewed port supports Windows x64
+and Linux x86_64, pins Rust `nightly-2026-07-22`, defaults to local-model server
+support (`LLAMA_CURL=OFF`), and accepts `--with-curl` when URL downloads are
+needed. CPU is the conservative default; CUDA remains explicit and runs the
+same tests after building. A clean two-worker Windows CPU build took about
+eight minutes in validation, dominated by the first Rust dependency build.
+
+For supported BPE and SentencePiece pre-tokenizers, model loading creates the
+Gigatoken backend and normal `/completion` and `/v1/chat/completions` requests
+use it transparently. llama.cpp still handles special-token partitioning,
+BOS/EOS behavior, and detokenization. Unsupported vocabulary families retain
+the original C++ tokenizer; malformed supported vocabularies and runtime ABI
+errors fail closed rather than silently changing token IDs.
+
+Every build runs 9 differential cases (including GPT-2, Llama BPE/SPM, MPT,
+Qwen2, Qwen3.5, Gemma 4, long input, invalid UTF-8, concurrency, and fallback)
+plus Godzilla's 15 existing tokenizer fixtures. Optional DeepSeek V3, GPT-OSS,
+and Kimi K2.7 vocab-only GGUF fixtures can be supplied with `--fixture-dir` and
+are registered only when their files exist. `verify` reruns qualification for
+an existing build:
+
+```bash
+mtq-godzilla-gigatoken verify /opt/godzilla-gigatoken --backend cpu
+```
+
+The validated server is under `build-gigatoken-<backend>/bin` (and
+`bin/Release` for multi-config Windows builds). The default build may serve the
+API without an embedded browser UI; launch it with a local GGUF model path.
 
 ### Godzilla KVarN and DFlash
 
@@ -607,7 +659,8 @@ The browser UI now has two focused views:
   The source picker can inspect local folders for the six blocked add-ons,
   domvox, and the separate Gigatoken llama.cpp fork without importing or
   executing source code; blocked and informational profiles are not made
-  installable by discovery.
+  installable by discovery. The pinned Godzilla + Gigatoken source preparation
+  and build remains an explicit `mtq-godzilla-gigatoken` CLI operation.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -630,7 +683,7 @@ multi_turboquant/
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, TriAttention adapters, parity wrapper
-  integration/           llama.cpp flags, CUDA weight-share wrapper, vLLM patch
+  integration/           llama.cpp flags, Godzilla/Gigatoken builder, weight sharing, vLLM patch
   benchmark/             Head-to-head comparison, perplexity, VRAM profiling
 ```
 
@@ -665,14 +718,15 @@ This project reimplements algorithms from published research. All original repos
 | KVarN research and reference implementation | [huawei-csl/KVarN](https://github.com/huawei-csl/KVarN) |
 | Context-extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | [llama.cpp](https://github.com/ggml-org/llama.cpp), [sheryc/resonance_rope](https://github.com/sheryc/resonance_rope), published papers |
 | Gigatoken Python tokenizer accelerator | [marcelroed/gigatoken](https://github.com/marcelroed/gigatoken) |
-| Experimental Gigatoken llama.cpp integration | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
+| Gigatoken llama.cpp runtime integration lineage | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
 is a command-generation, source-inspection, and preparation-workflow
 integration; context-extension
 support is a llama.cpp command-generation and capability-scanning integration
-only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance
-RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp code.
+only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance
+RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp source trees; the confirmed
+runtime workflow clones exact upstream revisions into a separate target.
 
 ## Community Contributors
 
@@ -692,6 +746,7 @@ RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp code.
 | Reported the incomplete TriAttention environment and current Maru layout, and suggested clearer memory accounting, calibration starter text, repair, and source-specific setup guidance | [@jawadala](https://github.com/jawadala) | Issue [#35](https://github.com/aivrar/multi-turboquant/issues/35) |
 | Reported the Linux managed-interpreter symlink regression that caused `uv`'s base Python to be selected instead of the TriAttention virtual environment | [@jawadala](https://github.com/jawadala) | Issue [#37](https://github.com/aivrar/multi-turboquant/issues/37) |
 | Suggested evaluating Gigatoken for TriAttention calibration, discovering compatible Python/pyenv environments, and reviewing the separate llama.cpp integration | [@jawadala](https://github.com/jawadala) | Issue [#38](https://github.com/aivrar/multi-turboquant/issues/38) |
+| Requested a direct Gigatoken tokenizer path for Godzilla runtime/inference, prompting the pinned combined-source workflow and differential qualification suite | [@jawadala](https://github.com/jawadala) | Issue [#39](https://github.com/aivrar/multi-turboquant/issues/39) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue

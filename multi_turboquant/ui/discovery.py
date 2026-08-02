@@ -27,18 +27,18 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("src/llama-gigatoken.cpp", "src/llama-gigatoken.h"),
             ("patches/gigatoken-llama-cpp.patch",),
         ),
-        "summary": "Experimental Windows x64 llama.cpp fork; its C++ integration is separate from Godzilla and must be ported and differential-tested there before use.",
+        "summary": "Experimental Windows x64/Linux x86_64 llama.cpp fork; Multi-TurboQuant can port its reviewed tokenizer changes onto the pinned Godzilla v0.3.7 release through mtq-godzilla-gigatoken.",
         "setup": {
             "mode": "separate_runtime_fork",
             "automatic": False,
             "requirements": (
-                "Windows x64, clang-cl, Ninja, CMake, and the pinned nightly Rust toolchain",
+                "Windows x64 or Linux x86_64, CMake, a C++ toolchain, and the pinned nightly Rust toolchain",
                 "The pinned Gigatoken submodule and reviewed upstream patch",
                 "A separate build tree with LLAMA_GIGATOKEN=ON",
             ),
             "next_steps": (
                 "Run the fork's differential tokenizer tests against its preserved C++ path.",
-                "Do not treat this checkout as a Godzilla build; port and retest its patch against the exact Godzilla revision first.",
+                "Use mtq-godzilla-gigatoken to prepare a separate, pinned Godzilla v0.3.7 tree; arbitrary checkouts are not patched.",
                 "Keep the normal tokenizer fallback for unsupported vocabularies.",
             ),
         },
@@ -426,13 +426,6 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         return "minference"
     if "sageattention" in directories and "setup.py" in files and "csrc" in directories:
         return "sageattention"
-    if (
-        (path / "docs" / "gigatoken.md").is_file()
-        and (path / "cmake" / "gigatoken.cmake").is_file()
-        and (path / "src" / "llama-gigatoken.cpp").is_file()
-        and (path / "patches" / "gigatoken-llama-cpp.patch").is_file()
-    ):
-        return "gigatoken_llamacpp"
     llama_markers = "CMakeLists.txt" in files and "ggml" in directories
     if (
         "GODZILLA_KING.md" in files
@@ -440,6 +433,13 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         or ("godzilla" in name and llama_markers)
     ):
         return "godzilla"
+    if (
+        (path / "docs" / "gigatoken.md").is_file()
+        and (path / "cmake" / "gigatoken.cmake").is_file()
+        and (path / "src" / "llama-gigatoken.cpp").is_file()
+        and (path / "patches" / "gigatoken-llama-cpp.patch").is_file()
+    ):
+        return "gigatoken_llamacpp"
     if llama_markers:
         return "llamacpp"
     if {
