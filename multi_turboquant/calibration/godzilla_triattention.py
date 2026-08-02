@@ -930,6 +930,7 @@ def calibrate_domvox_triattention_for_godzilla(
     device: str = "cuda",
     rope_style: str | int = "half",
     accept_lossy: bool = False,
+    tokenizer_backend: str = "transformers",
     runner=subprocess.run,
 ) -> dict[str, object]:
     """Run domvox calibration and explicitly adapt TRIA v2 to Godzilla v1."""
@@ -952,9 +953,23 @@ def calibrate_domvox_triattention_for_godzilla(
     )
     if stats_output == output:
         raise ValueError("Intermediate domvox stats and final .triattention output must differ")
+    stats_output.parent.mkdir(parents=True, exist_ok=True)
+    normalized_tokenizer = tokenizer_backend.strip().lower()
+    if normalized_tokenizer not in {"transformers", "gigatoken"}:
+        raise ValueError("Tokenizer backend must be 'transformers' or 'gigatoken'")
+    executable = [str(python_path), str(script)]
+    if normalized_tokenizer == "gigatoken":
+        wrapper = Path(__file__).with_name("gigatoken_runner.py")
+        executable = [
+            str(python_path),
+            str(wrapper),
+            "--kind",
+            "domvox",
+            "--calibrator",
+            str(script),
+        ]
     command = [
-        str(python_path),
-        str(script),
+        *executable,
         "--model",
         model,
         "--input",
@@ -985,7 +1000,12 @@ def calibrate_domvox_triattention_for_godzilla(
         expected_head_dim=int(model_metadata["head_dim"]),
         accept_lossy=accept_lossy,
     )
-    return {"command": command, "domvox_stats": str(stats_output), **report}
+    return {
+        "command": command,
+        "domvox_stats": str(stats_output),
+        "tokenizer_backend": normalized_tokenizer,
+        **report,
+    }
 
 
 def _add_model_shape_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1065,6 +1085,12 @@ def build_parser() -> argparse.ArgumentParser:
     domvox.add_argument("--allow-long-calibration", action="store_true")
     domvox.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     domvox.add_argument("--accept-lossy", action="store_true")
+    domvox.add_argument(
+        "--tokenizer-backend",
+        choices=("transformers", "gigatoken"),
+        default="transformers",
+        help="Tokenizer used by domvox calibration; Gigatoken requires exact ID parity",
+    )
 
     convert = subparsers.add_parser("convert", help="Convert an existing official .pt payload")
     convert.add_argument("input")
@@ -1105,6 +1131,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_long_calibration=args.allow_long_calibration,
             device=args.device,
             accept_lossy=args.accept_lossy,
+            tokenizer_backend=args.tokenizer_backend,
         )
     elif args.command == "convert":
         report = convert_official_triattention_stats(

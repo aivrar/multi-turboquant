@@ -37,6 +37,7 @@ def test_builtin_catalog_is_explicit_and_disabled_by_default():
     assert len(ids) == len(set(ids))
     assert "lmcache" in ids
     assert "resonance_yarn" in ids
+    assert {"triattention", "gigatoken", "cuda_weight_share"} <= set(ids)
     assert all(not plugin.descriptor.default_enabled for plugin in plugins)
 
 
@@ -144,6 +145,65 @@ def test_active_existing_feature_can_conflict_with_plugin():
         context(engine="gpt-fast", active_features=frozenset({"triattention"})),
     )
     assert any(issue.code == "optimization_conflict" for issue in reverse_sort.issues)
+
+
+def test_godzilla_gigatoken_requires_triattention_and_exact_linux_cuda_stack():
+    missing = plan_optimizations(
+        ["gigatoken"],
+        context(
+            engine="godzilla",
+            installed_modules=frozenset({"gigatoken"}),
+            installed_executables=frozenset(),
+        ),
+    )
+    assert any(issue.code == "missing_optimization_dependency" for issue in missing.issues)
+
+    ready = plan_optimizations(
+        ["triattention", "gigatoken"],
+        context(
+            engine="godzilla",
+            installed_modules=frozenset({"triattention", "gigatoken"}),
+            installed_executables=frozenset(),
+        ),
+    )
+    assert ready.ready
+
+
+def test_godzilla_triattention_rejects_active_kvarn():
+    plan = plan_optimizations(
+        ["triattention"],
+        context(
+            engine="godzilla",
+            active_features=frozenset({"kvarn"}),
+            installed_modules=frozenset({"triattention"}),
+            installed_executables=frozenset(),
+        ),
+    )
+    assert any(issue.code == "optimization_conflict" for issue in plan.issues)
+
+
+def test_cuda_weight_share_is_limited_to_linux_cuda_x86_64():
+    ready = plan_optimizations(
+        ["cuda_weight_share"],
+        context(
+            engine="godzilla",
+            architecture="x86_64",
+            installed_modules=frozenset(),
+            installed_executables=frozenset({"gcc"}),
+        ),
+    )
+    assert ready.ready
+
+    arm = plan_optimizations(
+        ["cuda_weight_share"],
+        context(
+            engine="godzilla",
+            architecture="aarch64",
+            installed_modules=frozenset(),
+            installed_executables=frozenset({"gcc"}),
+        ),
+    )
+    assert any(issue.code == "unsupported_architecture" for issue in arm.issues)
 
 
 def test_context_values_are_normalized():

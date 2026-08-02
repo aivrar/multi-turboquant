@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: MIT
-from setuptools import setup, find_packages
+from pathlib import Path
+
+from setuptools import find_packages, setup
 
 setup(
     name="multi-turboquant",
     version="0.1.0",
-    description="Unified KV cache compression for LLM inference — TurboQuant, TCQ, IsoQuant, PlanarQuant, TriAttention",
-    long_description=open("README.md", encoding="utf-8").read(),
+    description=(
+        "Unified KV cache compression for LLM inference — "
+        "TurboQuant, TCQ, IsoQuant, PlanarQuant, TriAttention"
+    ),
+    long_description=Path("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     author="aivrar",
     license="MIT",
@@ -18,7 +23,7 @@ setup(
     extras_require={
         "calibration": [
             "safetensors>=0.4.0",
-            "transformers>=4.36.0",
+            "transformers>=4.36.0,<5",
         ],
         "triton": [
             "triton>=2.1.0",
@@ -36,7 +41,7 @@ setup(
         ],
         "all": [
             "safetensors>=0.4.0",
-            "transformers>=4.36.0",
+            "transformers>=4.36.0,<5",
             "triton>=2.1.0",
             "datasets",
             "requests",
@@ -49,6 +54,7 @@ setup(
             "mtq-triattention-stats=multi_turboquant.calibration.generate_stats:main",
             "mtq-godzilla-triattention=multi_turboquant.calibration.godzilla_triattention:main",
             "mtq-godzilla-gigatoken=multi_turboquant.integration.godzilla_gigatoken_cli:main",
+            "mtq-weight-share=multi_turboquant.integration.weight_share_cli:main",
             "mtq-benchmark=multi_turboquant.benchmark.run_benchmark:main",
             "mtq-optimizations=multi_turboquant.optimizations.cli:main",
             "mtq-env=multi_turboquant.optimizations.env_cli:main",
@@ -63,6 +69,7 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
 )

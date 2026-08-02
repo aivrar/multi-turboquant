@@ -12,6 +12,7 @@ from .environments import (
     BUILTIN_ENVIRONMENT_PROFILES,
     DEFAULT_ENVIRONMENT_ROOT,
     check_environment,
+    diagnose_environment,
     plan_environment,
     run_in_environment,
     synchronize_environment,
@@ -104,11 +105,24 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_profile_arguments(create_parser, allow_source_build=True)
     create_parser.add_argument("--yes", action="store_true", help="Confirm downloads/builds")
     create_parser.add_argument("--upgrade", action="store_true", help="Refresh locked versions")
+    create_parser.add_argument(
+        "--recreate",
+        action="store_true",
+        help="Preserve the existing managed .venv and create a clean replacement",
+    )
     create_parser.add_argument("--no-check", action="store_true", help="Skip post-install imports")
 
     check_parser = subparsers.add_parser("check", help="Validate an existing environment")
     _add_common_profile_arguments(check_parser)
     check_parser.add_argument("--json", action="store_true")
+
+    diagnose_parser = subparsers.add_parser(
+        "diagnose", help="Collect a redacted environment, interpreter, dependency, and CUDA report"
+    )
+    _add_common_profile_arguments(diagnose_parser)
+    diagnose_parser.add_argument(
+        "--output", type=Path, help="Write the JSON report to a file in an existing directory"
+    )
 
     run_parser = subparsers.add_parser("run", help="Run a command in an existing environment")
     _add_common_profile_arguments(run_parser)
@@ -148,14 +162,41 @@ def main(argv: list[str] | None = None) -> int:
             print("Creation not confirmed; rerun with --yes after reviewing the plan.")
             return 2
         try:
-            synchronize_environment(plan, upgrade=args.upgrade)
+            backup = synchronize_environment(
+                plan,
+                upgrade=args.upgrade,
+                recreate=args.recreate,
+            )
         except RuntimeError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 2
         print(f"Created locked environment at {plan.target}")
+        if backup is not None:
+            print(f"Previous managed environment preserved at {backup}")
         if not args.no_check:
-            report = check_environment(plan)
+            try:
+                report = check_environment(plan)
+            except RuntimeError as exc:
+                print(f"ERROR: post-install validation failed: {exc}", file=sys.stderr)
+                print(
+                    f"Run mtq-env diagnose {plan.profile.id} --root {args.root} for details.",
+                    file=sys.stderr,
+                )
+                return 2
             print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    if args.action == "diagnose":
+        report = diagnose_environment(plan)
+        rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
+        if args.output is not None:
+            output = args.output.expanduser().resolve()
+            if not output.parent.is_dir():
+                print(f"ERROR: diagnostic output directory does not exist: {output.parent}", file=sys.stderr)
+                return 2
+            output.write_text(rendered, encoding="utf-8", newline="\n")
+            print(f"Wrote redacted diagnostics to {output}")
+        else:
+            print(rendered, end="")
         return 0
     if args.action == "check":
         try:

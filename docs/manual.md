@@ -750,11 +750,12 @@ mtq-godzilla-triattention calibrate \
 
 The default tokenizer backend is Hugging Face. Add
 `--tokenizer-backend gigatoken` to use the reviewed Gigatoken 0.10.x Python API
-for the official calibration workflow. Before the official script loads the
+for either reviewed Python calibration workflow (official or domvox). Before the script loads the
 model, Multi-TurboQuant tokenizes the complete selected text with both backends
 using the same truncation and maximum length and requires exact token-ID parity.
 It stops on the first mismatch. The option is intentionally unavailable for
-conversion-only, checkout-script, and experimental domvox modes.
+conversion-only and checkout-script modes because those paths either do not
+tokenize or have not been API-qualified.
 
 Then put the generated `model.triattention` path into the web UI's
 `TriAttention Stats Path` field or `CacheConfig.triattention_stats_path`.
@@ -817,6 +818,8 @@ reports the selected CUDA device's current free/total VRAM after dependency
 preflight. That snapshot cannot predict the long sequence's peak usage, and
 system RAM is not a substitute for discrete VRAM. A GGUF alone remains
 insufficient for calibration.
+Selecting Gigatoken runs domvox through the same fail-closed parity wrapper as
+the official script and forwards only domvox-supported arguments afterward.
 
 The managed dependency path can repair an incomplete TriAttention environment
 after explicit confirmation and a successful host/tool preflight. It ignores
@@ -828,6 +831,14 @@ deterministic offline starter text beneath the saved model root. Generated
 files use schema and completion markers and cannot be clobbered by simultaneous
 requests; use representative domain text for final calibration qualification.
 
+On Debian 12 and 13, the environment planner reports the distribution release
+explicitly; both releases are covered by Linux CI. For an incomplete owned
+environment, `mtq-env create triattention --recreate --yes` preserves the old
+`.venv`, creates and validates a clean replacement, and restores the old one if
+synchronization fails. `mtq-env diagnose triattention --output report.json`
+writes redacted distro, interpreter/prefix, import traceback, Accelerate, Torch,
+CUDA, uv, Git, `nvidia-smi`, and `nvcc` details for troubleshooting.
+
 `mtq-triattention-stats` produces a PyTorch `.pt` file for this project's
 Python/vLLM integration. That file is not binary-compatible with Godzilla's
 `.triattention` runtime format.
@@ -836,7 +847,8 @@ Python/vLLM integration. That file is not binary-compatible with Godzilla's
 
 The Python Gigatoken calibration backend above does not affect inference. For
 native Godzilla runtime tokenization, `mtq-godzilla-gigatoken` creates a new
-combined source tree pinned to Godzilla v0.3.7 (`ea1e799`), the reviewed
+combined source tree pinned to either Godzilla v0.3.7 (`ea1e799`) or the exact
+`09214b160` compatibility baseline, plus the reviewed
 Gigatoken llama.cpp port (`b47a0fc`), Gigatoken 0.10.0 (`34a1599`), and Rust
 `nightly-2026-07-22`. It downloads a commit-to-commit review diff, selects only
 the tokenizer integration files, verifies both diff hashes, applies exact
@@ -846,6 +858,8 @@ arbitrary Godzilla checkouts are rejected.
 
 ```bash
 mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken
+mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken \
+  --godzilla-profile 09214b160
 mtq-godzilla-gigatoken all /opt/godzilla-gigatoken \
   --backend cpu --max-jobs 2 --yes
 
@@ -874,10 +888,23 @@ resulting `llama-server --version` output.
 
 ### CUDA weight-share launch wrapper
 
-For Linux + CUDA multi-process serving, you can wrap the launch command for an
-external `LD_PRELOAD` helper such as `pontostroy/cuda-llm-weight-share`.
-Multi-TurboQuant only generates the environment prefix; build and provide the
-preload library separately.
+For Linux x86-64 + CUDA multi-process serving, Multi-TurboQuant recognizes and
+builds the exact reviewed `pontostroy/cuda-llm-weight-share` source revision,
+validates the library, and can wrap the launch command with its `LD_PRELOAD`
+environment.
+
+```bash
+git clone https://github.com/pontostroy/cuda-llm-weight-share.git
+git -C cuda-llm-weight-share checkout 15bcecaebdbcec479f13df1c4396d5318b5bb85d
+mtq-weight-share inspect cuda-llm-weight-share
+mtq-weight-share plan cuda-llm-weight-share --cuda-toolkit /usr/local/cuda
+mtq-weight-share build cuda-llm-weight-share --cuda-toolkit /usr/local/cuda --yes
+mtq-weight-share validate cuda-llm-weight-share/cuda-llm-weight-share.so
+```
+
+The build requires GCC, CUDA runtime headers, `file`, `nm`, and `ldd`.
+Validation requires an ELF shared object with exported `cudaMalloc` and
+`cudaFree` hooks and no hard `libcudart` dependency.
 
 ```python
 from multi_turboquant.integration import CudaWeightShareConfig
@@ -896,7 +923,7 @@ cmd = get_llamacpp_command(
 # env LD_PRELOAD=/opt/cuda-llm-weight-share.so MODEL_SIZE=32060375552 ...
 ```
 
-Run the external helper once in reconnaissance mode (`MODEL_SIZE=0`) to find the
+Run the helper once in reconnaissance mode (`MODEL_SIZE=0`) to find the
 model weight allocation size, then reuse that value for the master and worker
 processes.
 
@@ -914,7 +941,7 @@ processes.
 
 The helper shares model weights, not KV cache entries or process context. All
 participating processes must use matching model, build, CUDA device, size, and
-IPC-name settings. The external helper ultimately defines the variable behavior;
+IPC-name settings. The upstream helper ultimately defines the variable behavior;
 Multi-TurboQuant validates values and constructs the environment-prefixed command.
 
 ### Build flags
@@ -1161,7 +1188,8 @@ for a different port, `--no-browser` to suppress auto-open,
   infrequent setup sections are collapsed until expanded.
 
 The source picker can inspect local folders for the six reviewed-but-blocked
-add-ons, domvox, and the separate Gigatoken llama.cpp fork without importing or
+add-ons, domvox, the reviewed CUDA weight-share source, and the separate
+Gigatoken llama.cpp fork without importing or
 executing source code. Blocked and informational profiles never receive an
 automatic Create action merely because a folder was selected; their inspection
 results include repository-specific host, license, runtime, and artifact
@@ -1604,6 +1632,7 @@ multi_turboquant.compatibility.check_config(config, platform)
 multi_turboquant.compatibility.get_available_methods(platform)
 multi_turboquant.compatibility.get_recommended_config(platform)
 multi_turboquant.compatibility.get_cmake_flags(platform)
+multi_turboquant.optimizations.plan_optimizations(selected, context)
 ```
 
 ---
@@ -1638,8 +1667,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Linux managed-interpreter symlink regression report | jawadala / issue #37 | Community contribution |
 | Gigatoken calibration, environment discovery, and llama.cpp integration proposal | jawadala / issue #38 | Community contribution |
 | Direct Gigatoken tokenization for Godzilla runtime/inference | jawadala / issue #39 | Community contribution |
+| Debian 12/13 support, exact Godzilla `09214b160` profile, domvox/Gigatoken integration, diagnostics, and reviewed CUDA weight-share source workflow | jawadala / issue #40 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp source trees; the confirmed Gigatoken runtime workflow clones exact upstream revisions into a separate target and records their provenance. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken calibration and runtime options.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, or llama.cpp source trees; the confirmed workflows clone or accept only exact reviewed upstream revisions and record or validate their provenance. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken calibration and runtime options.
 
 ---
 

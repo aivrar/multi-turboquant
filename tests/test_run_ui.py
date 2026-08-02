@@ -533,6 +533,7 @@ def test_environment_creation_forwards_cuda_toolkit_selection(monkeypatch):
                 "local_source": None,
                 "build_from_source": False,
                 "max_jobs": 2,
+                "recreate": False,
             },
         )
     ]
@@ -683,7 +684,7 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
     triattention = addon_root / "triattention"
     calibrator = triattention / "scripts" / "calibrate.py"
     environment_root = tmp_path / "envs"
-    calibration_python = environment_root / "triattention" / ".venv" / "Scripts" / "python.exe"
+    calibration_python = run_ui.environment_python(environment_root / "triattention")
     model_root = tmp_path / "models"
     model = model_root / "model.gguf"
     calibration_input = model_root / "calibration.txt"
@@ -838,7 +839,7 @@ def test_managed_triattention_repair_ignores_unreviewed_overrides(tmp_path, monk
     assert calls == [
         (
             "triattention",
-            {"root": str(environment_root), "max_jobs": 2},
+            {"root": str(environment_root), "max_jobs": 2, "recreate": True},
         )
     ]
 

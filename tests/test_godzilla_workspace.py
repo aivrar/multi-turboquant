@@ -475,7 +475,7 @@ def test_long_calibration_requires_acknowledgement_and_has_hard_cap(tmp_path: Pa
     assert any(issue.code == "invalid_token_count" for issue in capped.issues)
 
 
-def test_gigatoken_plan_is_official_only_and_forwards_backend(tmp_path: Path):
+def test_gigatoken_plan_forwards_backend_and_wraps_domvox(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
     model = tmp_path / "model.gguf"
     python = tmp_path / "python"
@@ -505,6 +505,29 @@ def test_gigatoken_plan_is_official_only_and_forwards_backend(tmp_path: Path):
     assert plan.ready
     assert plan.tokenizer_backend == "gigatoken"
     assert plan.command[-2:] == ("--tokenizer-backend", "gigatoken")
+
+    domvox = tmp_path / "triattention_calibrate.py"
+    domvox.write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+    domvox_plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=domvox,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+        domvox_accept_lossy=True,
+        tokenizer_backend="gigatoken",
+    )
+    assert domvox_plan.ready
+    assert Path(domvox_plan.command[1]).name == "gigatoken_runner.py"
+    assert domvox_plan.command[2:6] == (
+        "--kind",
+        "domvox",
+        "--calibrator",
+        str(domvox.resolve()),
+    )
+    assert any(issue.code == "gigatoken_parity_required" for issue in domvox_plan.issues)
 
     blocked = plan_godzilla_triattention(
         checkout,

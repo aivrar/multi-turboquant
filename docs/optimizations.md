@@ -82,6 +82,9 @@ a separately implemented and validated LMCache SERDE.
 | SageAttention | Experimental Python manifest | No maintained llama.cpp or vLLM connector |
 | Speculative Prefill | Experimental manifest | Old vLLM monkeypatch and draft-model quality tradeoffs |
 | FastDMS | Standalone engine only | Requires DMS checkpoints and scheduler/cache changes |
+| TriAttention | Experimental Godzilla calibration path | Requires model-specific stats; conflicts with KVarN in both reviewed Godzilla profiles |
+| Gigatoken | Optional TriAttention tokenizer | Requires TriAttention and exact Hugging Face token-ID parity for the selected text |
+| CUDA LLM Weight Share | Reviewed Linux preload source | Linux/CUDA/x86-64 only; shares one measured model-weight allocation, not KV cache |
 | RocketKV | Research only | Research snapshot and non-commercial source license |
 | Lexico | Research only | WIP and requires per-model dictionaries |
 | AdaDecode | Blocked | No source license and requires trained prediction heads |
@@ -99,6 +102,20 @@ Startup benchmarking and accuracy qualification should operate only on a
 shortlist that has already passed this compatibility plan. Results must be
 cached by model, runtime, plugin versions, GPU, driver, and workload shape; a
 full Cartesian benchmark at every startup is intentionally out of scope.
+
+For the Godzilla workflow, `triattention` and `gigatoken` are first-class
+planner entries. Selecting Gigatoken without TriAttention is an error. An
+active `kvarn` feature conflicts with TriAttention because both the v0.3.7 and
+`09214b160` source profiles reject that pairing until KVarN-aware pruning is
+implemented. `cuda_weight_share` is eligible only for llama.cpp/Godzilla on
+Linux CUDA x86-64 with GCC available. These checks describe a single runtime;
+independent add-ons for other engines remain separate processes/environments.
+
+```bash
+mtq-optimizations --engine godzilla --select triattention --select gigatoken
+mtq-optimizations --engine godzilla --active-feature kvarn --select triattention
+mtq-optimizations --engine godzilla --select cuda_weight_share
+```
 
 ## Isolated dependency environments
 
@@ -143,6 +160,10 @@ mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
 # Official TriAttention checkout and calibrator dependencies
 mtq-env plan triattention --local-source /opt/addons/triattention --max-jobs 2
 mtq-env create triattention --local-source /opt/addons/triattention --max-jobs 2 --yes
+
+# Preserve and replace an incomplete owned environment, then collect redacted evidence
+mtq-env create triattention --recreate --yes
+mtq-env diagnose triattention --output triattention-diagnostics.json
 ```
 
 Source mode is opt-in and is currently reviewed only for the `flashattention`
@@ -193,6 +214,15 @@ than canonicalized through their final symlink. For example,
 the symlink is what activates the virtual environment's prefix and packages.
 Resolving it first would silently inspect or run the wrong environment.
 
+Debian 12 and Debian 13 are explicitly detected and covered by the Linux CI
+matrix (Python 3.11 and 3.13 respectively). `--recreate` moves the current owned
+`.venv` to a timestamped backup before synchronizing a clean replacement. A
+failed sync preserves the incomplete replacement for inspection and restores
+the previous environment. `mtq-env diagnose` emits a redacted JSON report with
+the distribution, lexical/resolved interpreter paths, Python prefixes, module
+versions and import tracebacks, Torch/CUDA state, uv/Git/NVIDIA/CUDA tools, and
+Accelerate environment details.
+
 For profiles that compile CUDA extensions, `nvcc` must use the same CUDA major
 as the profile's PyTorch build. NVIDIA driver backward compatibility does not
 make a CUDA 13 compiler interchangeable with a CUDA 12.6 PyTorch extension
@@ -220,7 +250,7 @@ eligible for the reviewed profile.
 | `lmcache` | Installable | LMCache 0.5.2, PyTorch 2.11.0 CUDA 13.0, and OpenAI 2.46.0 | Linux CUDA; imports `lmcache.c_ops`, checks Torch CUDA 13, and exposes the standalone CLI |
 | `minference` | Installable | Official v0.1.6 source commit `d76b76e`, Transformers 4.x, and PyTorch 2.7.1 CUDA 12.6 | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports Torch, Triton, and MInference |
 | `sageattention` | Installable | Audited upstream commit `d1a57a5`, PyTorch 2.7.1 CUDA 12.6, and build helpers | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports SageAttention |
-| `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers, Accelerate, SentencePiece, and Gigatoken 0.10.0 | Linux CUDA + Git; imports the official calibration stack and supplies the UI's automatic calibration Python |
+| `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.6, Accelerate 1.14.0, SentencePiece 0.2.2, and Gigatoken 0.10.0 | Linux CUDA + Git; imports the official/domvox calibration stack and supplies the UI's automatic calibration Python |
 | `maru` | Blocked | Upstream installer builds a host C++ resource manager and expects CXL `/dev/dax` | Use upstream installation on a dedicated CXL host |
 | `speculative_prefill` | Blocked | Unpackaged monkeypatch pinned to Torch 2.4.0 and vLLM 0.6.3.post1 | Requires a separately qualified legacy source checkout |
 | `rocketkv` | Blocked | Unpackaged research snapshot under a non-commercial research license | Not exposed as a supported serving add-on |
@@ -246,8 +276,8 @@ recognizes `domvox/triattention-ggml` for the separate experimental TriAttention
 adapter. That adapter belongs to the Godzilla calibration workflow, not to the
 installable Python add-on profiles.
 
-Gigatoken is an opt-in tokenizer backend for the official TriAttention
-calibrator, not a separate installable profile. The `triattention` profile pins
+Gigatoken is an opt-in tokenizer backend for the reviewed official and domvox
+TriAttention calibrators, not a separate installable profile. The `triattention` profile pins
 the reviewed 0.10.0 release. Before loading model weights, the wrapper requires
 exact Hugging Face/Gigatoken token-ID parity for the complete selected text with
 matching truncation and maximum length; a mismatch aborts the run. The UI can
@@ -258,10 +288,34 @@ bounded, and does not recursively scan a drive.
 The source inspector also recognizes `chynggi/gigatoken-llama.cpp` as a separate
 experimental Windows x64/Linux x86_64 runtime fork. Discovery remains
 informational and never executes it. The explicit `mtq-godzilla-gigatoken`
-workflow now performs a deliberate port onto pinned Godzilla v0.3.7 in a new
-target tree, verifies all source revisions and hashes, builds with
+workflow performs a deliberate port onto either the pinned v0.3.7 baseline
+(`ea1e799`) or the exact `09214b160` compatibility baseline in a new target
+tree, verifies all source revisions and hashes, builds with
 `LLAMA_GIGATOKEN=ON`, and runs both the differential and legacy tokenizer
 suites. It does not patch a selected or arbitrary checkout.
+
+### CUDA weight-share source
+
+The source picker recognizes `pontostroy/cuda-llm-weight-share` only when its
+origin, marker files, and exact commit
+`15bcecaebdbcec479f13df1c4396d5318b5bb85d` match. The dedicated CLI keeps
+inspection/planning read-only and requires confirmation before compiling:
+
+```bash
+git clone https://github.com/pontostroy/cuda-llm-weight-share.git
+git -C cuda-llm-weight-share checkout 15bcecaebdbcec479f13df1c4396d5318b5bb85d
+mtq-weight-share inspect cuda-llm-weight-share
+mtq-weight-share plan cuda-llm-weight-share --cuda-toolkit /usr/local/cuda
+mtq-weight-share build cuda-llm-weight-share --cuda-toolkit /usr/local/cuda --yes
+mtq-weight-share validate cuda-llm-weight-share/cuda-llm-weight-share.so
+```
+
+Build planning requires Linux x86-64, GCC, CUDA runtime headers, and the
+`file`/`nm`/`ldd` validators. Validation checks for an ELF shared object,
+exported `cudaMalloc`/`cudaFree` hooks, and no hard `libcudart` dependency.
+Production configuration is rejected until reconnaissance has supplied a
+nonzero measured allocation and a non-default IPC name. This integration does
+not claim KV-cache sharing or cross-model compatibility.
 
 Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible

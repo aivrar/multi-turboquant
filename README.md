@@ -16,7 +16,7 @@
   <a href="#"><img src="https://img.shields.io/badge/Apple-Metal-000000?style=flat-square&logo=apple&logoColor=white" alt="Metal"></a>
   <a href="#gpu-validated-results"><img src="https://img.shields.io/badge/TurboQuant-WHT%20KV%20Cache-ff6b6b?style=flat-square" alt="TurboQuant"></a>
   <a href="#what-it-does"><img src="https://img.shields.io/badge/Methods-12%20compression-blueviolet?style=flat-square" alt="12 Methods"></a>
-  <a href="#tests"><img src="https://img.shields.io/badge/Tests-283%20passing-brightgreen?style=flat-square" alt="Tests"></a>
+  <a href="#tests"><img src="https://img.shields.io/badge/Tests-pytest%20suite-brightgreen?style=flat-square" alt="Tests"></a>
   <a href="#isolated-add-on-environments"><img src="https://img.shields.io/badge/Add--ons-Isolated%20uv%20environments-6f42c1?style=flat-square" alt="Isolated add-on environments"></a>
   <a href="#"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT"></a>
@@ -92,26 +92,24 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-297 automated test cases: 283 pass in the current Windows CPU environment and
-14 POSIX-symlink or hardware-specific GPU/Metal cases skip when their required
-platform or device is unavailable.
+The suite is exercised on Windows and in CI containers for Debian 12 with
+Python 3.11 and Debian 13 with Python 3.13. Hardware-specific CUDA, ROCm, and
+Metal cases skip when their required device is unavailable.
 
-| Suite | Tests | What It Proves |
-|-------|:-----:|----------------|
-| `test_methods.py` | 64 | All 12 methods encode/decode, config, presets, integration |
-| `test_integration.py` | 34 | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
-| `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
-| `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
-| `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 30 | Official and domvox calibration/conversion, strict format checks, exact-parity tokenizer selection, POSIX interpreter paths, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
-| `test_godzilla_gigatoken.py` | 9 | Read-only planning, exact source pins, confirmation, reviewed-diff filtering, Windows line endings, optional fixtures, build/verify boundaries, and prepared-tree integrity |
-| `test_run_ui.py` + `test_ui_workspace.py` | 69 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, Gigatoken/source discovery, combined-runtime classification, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
-| `test_llamacpp_scan.py` | 4 | Capability discovery, Gigatoken self-identification, and failure reporting without executing inference |
-| `test_tokenizer_backends.py` | 5 | Exact token-ID parity, mismatch refusal, reviewed-version checks, and bounded managed/pyenv interpreter discovery |
-| `test_calibration_text.py` | 10 | Deterministic offline corpus generation, size/token bounds, concurrent no-clobber publication, incomplete-file refusal, and concurrent non-hardlink filesystem fallback |
-| `test_hardware.py` | 5 | Host RAM detection, discrete RAM/VRAM accounting, Apple unified-memory handling, and mixed unified/discrete capacity |
-| `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
-| `test_metal_fused.py` | 2 | Fused Metal path when Apple hardware is available |
+| Suite | What It Proves |
+|-------|----------------|
+| `test_methods.py` | All 12 methods encode/decode, config, presets, integration |
+| `test_integration.py` | Vectorized kernels, paged KV cache, dispatch, TriAttention composition |
+| `test_lmcache.py` | LMCache connector payloads, commands, version and input validation |
+| `test_optimizations.py` | Catalog isolation, add-on dependencies, conflicts, and platform/KV/architecture validation |
+| `test_environments.py` + `test_env_cli.py` | Locked profiles, Debian detection, clean repair/rollback, redacted diagnostics, local builds, CUDA selection, overwrite safety, and isolated validation |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | Official and domvox calibration/conversion, fail-closed tokenizer parity, interpreter paths, length guardrails, preflight, reuse, and artifact validation |
+| `test_godzilla_gigatoken.py` | Exact Godzilla source profiles, source pins, confirmation, reviewed-diff filtering, optional fixtures, build/verify boundaries, and tree integrity |
+| `test_weight_share.py` | Exact source provenance, Linux build planning, ELF/symbol/dependency validation, reconnaissance rules, and safe launch configuration |
+| `test_run_ui.py` + `test_ui_workspace.py` | Command generation, settings, dependency repair, discovery, source-specific setup, bounded background work, managed process cleanup, and confirmed jobs |
+| `test_tokenizer_backends.py` | Exact token-ID parity, mismatch refusal, reviewed-version checks, and bounded managed/pyenv interpreter discovery |
+| `test_calibration_text.py` | Deterministic offline corpus generation, bounds, concurrent publication, and incomplete-file refusal |
+| Hardware suites | Host/GPU detection, real-GPU inference, and fused Metal behavior when available |
 
 ```bash
 pytest tests/                              # full suite
@@ -222,8 +220,8 @@ accelerator, add `--tokenizer-backend gigatoken`. Multi-TurboQuant supports the
 reviewed Gigatoken 0.10.x API only and compares every token ID for the complete
 selected calibration text against the Hugging Face tokenizer before the model
 is loaded. Any mismatch stops calibration; it never silently substitutes a
-different token sequence. Gigatoken is available only in the recommended
-official-calibrator mode.
+different token sequence. The same guard is used by the reviewed official and
+domvox Python calibrators; conversion of existing statistics does not tokenize.
 
 The command retains the official stats as `model.official.pt`, loads the matching
 Hugging Face config for layer/head/RoPE metadata, writes the Godzilla artifact
@@ -278,6 +276,7 @@ mtq-godzilla-triattention domvox \
   --output model.triattention \
   --max-length 32768 \
   --device cuda \
+  --tokenizer-backend gigatoken \
   --accept-lossy
 ```
 
@@ -301,7 +300,9 @@ before relying on the result.
 ### Godzilla + Gigatoken runtime
 
 `mtq-godzilla-gigatoken` now performs the reviewed runtime port requested in
-issue #39. It creates a **new** combined source tree from Godzilla v0.3.7,
+issue #39. It creates a **new** combined source tree from one exact reviewed
+Godzilla profile: `v0.3.7` (`ea1e799`) by default, or the issue #40
+compatibility baseline `09214b160` (`09214b160b402011359f0ef9d5fa8f8be1112e85`),
 selects only the tokenizer-related changes from the pinned
 [`chynggi/gigatoken-llama.cpp`](https://github.com/chynggi/gigatoken-llama.cpp)
 revision, and vendors a separate checkout of Gigatoken 0.10.0 at its exact
@@ -312,6 +313,10 @@ target and never applies this port to an arbitrary Godzilla checkout.
 ```bash
 # Read-only: checks platform, tools, output safety, pins, and planned commands
 mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken
+
+# Select the older reviewed compatibility baseline explicitly
+mtq-godzilla-gigatoken plan /opt/godzilla-gigatoken \
+  --godzilla-profile 09214b160
 
 # Prepare, compile the CPU runtime, and run both tokenizer suites
 mtq-godzilla-gigatoken all /opt/godzilla-gigatoken --backend cpu --max-jobs 2 --yes
@@ -389,8 +394,21 @@ for target cache types only.
 
 ### CUDA weight-share launcher
 
-For multi-process serving on Linux + CUDA, the launcher can wrap commands for
-`pontostroy/cuda-llm-weight-share` without vendoring the preload library:
+For multi-process serving on Linux x86-64 + CUDA, Multi-TurboQuant recognizes
+the exact reviewed `pontostroy/cuda-llm-weight-share` source revision, plans a
+GCC build without writing, and validates the resulting ELF library before it is
+used:
+
+```bash
+git clone https://github.com/pontostroy/cuda-llm-weight-share.git
+git -C cuda-llm-weight-share checkout 15bcecaebdbcec479f13df1c4396d5318b5bb85d
+mtq-weight-share inspect cuda-llm-weight-share
+mtq-weight-share plan cuda-llm-weight-share --cuda-toolkit /usr/local/cuda
+mtq-weight-share build cuda-llm-weight-share --cuda-toolkit /usr/local/cuda --yes
+mtq-weight-share validate cuda-llm-weight-share/cuda-llm-weight-share.so
+```
+
+The launcher then wraps a checked command with the preload environment:
 
 ```python
 from multi_turboquant.integration import CudaWeightShareConfig, get_llamacpp_command
@@ -423,8 +441,8 @@ The wrapper exposes the external helper's environment contract:
 | `CUDA_VRAM_IPC_TRACE_NORMAL_ALLOCS` | Also traces allocations not classified as model weights. This adds diagnostic noise and overhead. |
 
 Weight sharing shares model weights between matching Linux/CUDA processes. It
-does not share KV caches or contexts, reduce a single process's VRAM use, or
-replace the external helper. Use the same model, build, device configuration,
+does not share KV caches or contexts or reduce a single process's VRAM use.
+Use the same model, build, device configuration,
 `MODEL_SIZE`, and IPC name for every process in one sharing group.
 
 ### Optional optimization planner and LMCache
@@ -436,7 +454,14 @@ third-party projects:
 
 ```bash
 mtq-optimizations --engine vllm --kv-format fp16 --select lmcache
+mtq-optimizations --engine godzilla --select triattention --select gigatoken
+mtq-optimizations --engine godzilla --active-feature kvarn --select triattention
 ```
+
+The Godzilla plan models the exact boundaries: Gigatoken calibration requires
+TriAttention, KVarN conflicts with TriAttention in the reviewed source profiles,
+and CUDA weight sharing is limited to Linux/CUDA/x86-64 with a validated source
+build. Add-ons for different engines are not forced into one process.
 
 The LMCache integration generates its documented vLLM connector configuration
 and optional multiprocess server command without launching processes or changing
@@ -490,6 +515,10 @@ mtq-env create fastdms --local-source /opt/addons/FastDMS --yes
 # Build the official calibrator environment from its checkout with bounded jobs
 mtq-env create triattention --local-source /opt/addons/triattention --max-jobs 2 --yes
 
+# Preserve a broken managed .venv, recreate it cleanly, and collect a redacted report
+mtq-env create triattention --recreate --yes
+mtq-env diagnose triattention --output triattention-diagnostics.json
+
 # Run the standalone engine without activating or modifying the current environment
 mtq-env run fastdms -- python -c "import fastdms; print(fastdms.__version__)"
 ```
@@ -504,6 +533,13 @@ and creation always requires the explicit `--yes` flag. The optional
 profiles. It forces a fresh local FlashAttention compilation without changing
 the normal wheel-first behavior of either profile. See
 [the dependency-profile table and validation record](docs/optimizations.md#built-in-profiles).
+
+Debian 12 and 13 are explicitly detected and covered by the Linux CI matrix.
+Clean repair first preserves the existing managed `.venv`; if synchronization
+fails, the incomplete replacement is retained for inspection and the previous
+environment is restored. Diagnostics redact token/password-like values and
+report distro, lexical and resolved interpreters, prefixes, import failures,
+CUDA/toolchain state, and Accelerate environment information.
 
 `--local-source` is a separate option for a checkout you already have. It is
 accepted only for the six reviewed installable profiles, verifies the
@@ -657,7 +693,7 @@ The browser UI now has two focused views:
   starter text can be generated locally. Advanced
   Quick Run controls and infrequent Setup sections are collapsed by default.
   The source picker can inspect local folders for the six blocked add-ons,
-  domvox, and the separate Gigatoken llama.cpp fork without importing or
+  domvox, the reviewed CUDA weight-share source, and the separate Gigatoken llama.cpp fork without importing or
   executing source code; blocked and informational profiles are not made
   installable by discovery. The pinned Godzilla + Gigatoken source preparation
   and build remains an explicit `mtq-godzilla-gigatoken` CLI operation.
@@ -725,7 +761,7 @@ is a command-generation, source-inspection, and preparation-workflow
 integration; context-extension
 support is a llama.cpp command-generation and capability-scanning integration
 only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance
-RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp source trees; the confirmed
+RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, or llama.cpp source trees; the confirmed
 runtime workflow clones exact upstream revisions into a separate target.
 
 ## Community Contributors
@@ -747,6 +783,7 @@ runtime workflow clones exact upstream revisions into a separate target.
 | Reported the Linux managed-interpreter symlink regression that caused `uv`'s base Python to be selected instead of the TriAttention virtual environment | [@jawadala](https://github.com/jawadala) | Issue [#37](https://github.com/aivrar/multi-turboquant/issues/37) |
 | Suggested evaluating Gigatoken for TriAttention calibration, discovering compatible Python/pyenv environments, and reviewing the separate llama.cpp integration | [@jawadala](https://github.com/jawadala) | Issue [#38](https://github.com/aivrar/multi-turboquant/issues/38) |
 | Requested a direct Gigatoken tokenizer path for Godzilla runtime/inference, prompting the pinned combined-source workflow and differential qualification suite | [@jawadala](https://github.com/jawadala) | Issue [#39](https://github.com/aivrar/multi-turboquant/issues/39) |
+| Requested Debian 12/13 hardening, deeper diagnostics, the exact Godzilla `09214b160` compatibility profile, domvox/Gigatoken support, and reviewed CUDA weight-share source handling | [@jawadala](https://github.com/jawadala) | Issue [#40](https://github.com/aivrar/multi-turboquant/issues/40) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue

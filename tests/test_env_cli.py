@@ -52,8 +52,47 @@ def test_confirmed_create_can_skip_validation(tmp_path: Path, monkeypatch):
     result = env_cli.main(["create", "fastdms", "--root", str(tmp_path), "--yes", "--no-check"])
 
     assert result == 0
-    assert synchronized == [{"upgrade": False}]
+    assert synchronized == [{"upgrade": False, "recreate": False}]
     assert checked == []
+
+
+def test_confirmed_create_forwards_recreate(tmp_path: Path, monkeypatch):
+    plan = ready_plan(tmp_path)
+    synchronized = []
+    monkeypatch.setattr(env_cli, "plan_environment", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        env_cli,
+        "synchronize_environment",
+        lambda *args, **kwargs: synchronized.append(kwargs),
+    )
+
+    result = env_cli.main(
+        [
+            "create",
+            "fastdms",
+            "--root",
+            str(tmp_path),
+            "--yes",
+            "--no-check",
+            "--recreate",
+        ]
+    )
+
+    assert result == 0
+    assert synchronized == [{"upgrade": False, "recreate": True}]
+
+
+def test_diagnose_prints_redacted_json(tmp_path: Path, monkeypatch, capsys):
+    plan = ready_plan(tmp_path)
+    monkeypatch.setattr(env_cli, "plan_environment", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        env_cli,
+        "diagnose_environment",
+        lambda *args, **kwargs: {"schema": 1, "stderr": "HF_TOKEN=<redacted>"},
+    )
+
+    assert env_cli.main(["diagnose", "fastdms", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["stderr"] == "HF_TOKEN=<redacted>"
 
 
 def test_run_requires_a_command(tmp_path: Path, monkeypatch):

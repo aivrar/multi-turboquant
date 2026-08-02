@@ -411,6 +411,10 @@ def test_managed_process_starts_collects_output_and_stops(tmp_path: Path):
     assert manager.status()["running"] is True
     assert "ready" in manager.status()["log"]
     assert manager.stop(timeout=2)["running"] is False
+    assert manager._collector is None
+    assert manager._process is not None
+    assert manager._process.stdout is not None
+    assert manager._process.stdout.closed
 
 
 def test_environment_job_reports_completion(tmp_path: Path, monkeypatch):

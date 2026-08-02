@@ -13,10 +13,35 @@ MODEL_FILE_SUFFIXES = frozenset({".gguf", ".safetensors", ".bin", ".pt", ".pth"}
 MAX_SCAN_DIRECTORIES = 5_000
 
 
-# These projects are intentionally informational-only.  The marker groups let
-# the UI recognize a checkout without treating it as an installable Python
-# environment or executing anything from the checkout.
-_BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
+# These source projects are not installable Python profiles. Marker groups let
+# the UI inspect them without executing checkout code; each setup contract says
+# whether a separate reviewed build workflow exists.
+_SOURCE_ADDON_SPECS: dict[str, dict[str, object]] = {
+    "cuda_weight_share": {
+        "profile": "cuda_weight_share",
+        "name": "CUDA LLM Weight Share",
+        "source_url": "https://github.com/pontostroy/cuda-llm-weight-share",
+        "marker_groups": (
+            ("README.md",),
+            ("LICENSE",),
+            ("cuda-llm-weight-share.c",),
+        ),
+        "summary": "Pinned Linux CUDA LD_PRELOAD helper for sharing one model-weight allocation.",
+        "setup": {
+            "mode": "reviewed_source_build",
+            "automatic": True,
+            "requirements": (
+                "Linux x86_64, CUDA toolkit headers, GCC, nm, ldd, and file",
+                "The exact reviewed source commit",
+                "A reconnaissance run before any production MODEL_SIZE is accepted",
+            ),
+            "next_steps": (
+                "Run mtq-weight-share plan, then build with explicit confirmation.",
+                "Use MODEL_SIZE=0 once to identify the exact weight allocation.",
+                "Use a unique IPC name per model, GPU, allocation, and runtime build.",
+            ),
+        },
+    },
     "gigatoken_llamacpp": {
         "profile": "gigatoken_llamacpp",
         "name": "Gigatoken llama.cpp",
@@ -27,7 +52,7 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ("src/llama-gigatoken.cpp", "src/llama-gigatoken.h"),
             ("patches/gigatoken-llama-cpp.patch",),
         ),
-        "summary": "Experimental Windows x64/Linux x86_64 llama.cpp fork; Multi-TurboQuant can port its reviewed tokenizer changes onto the pinned Godzilla v0.3.7 release through mtq-godzilla-gigatoken.",
+        "summary": "Experimental Windows x64/Linux x86_64 llama.cpp fork; Multi-TurboQuant can port its reviewed tokenizer changes onto exact Godzilla v0.3.7 or 09214b160 through mtq-godzilla-gigatoken.",
         "setup": {
             "mode": "separate_runtime_fork",
             "automatic": False,
@@ -38,7 +63,7 @@ _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
             ),
             "next_steps": (
                 "Run the fork's differential tokenizer tests against its preserved C++ path.",
-                "Use mtq-godzilla-gigatoken to prepare a separate, pinned Godzilla v0.3.7 tree; arbitrary checkouts are not patched.",
+                "Use mtq-godzilla-gigatoken to prepare a separate exact Godzilla v0.3.7 or 09214b160 tree; arbitrary checkouts are not patched.",
                 "Keep the normal tokenizer fallback for unsupported vocabularies.",
             ),
         },
@@ -220,7 +245,11 @@ def inspect_addon_source(profile_id: str, path: str | Path) -> dict[str, object]
     documentation.  They remain blocked for environment creation.
     """
     normalized = str(profile_id).strip().lower()
-    spec = _BLOCKED_ADDON_SPECS.get(normalized)
+    if normalized == "cuda_weight_share":
+        from ..integration import inspect_cuda_weight_share_source
+
+        return inspect_cuda_weight_share_source(path)
+    spec = _SOURCE_ADDON_SPECS.get(normalized)
     if spec is None:
         raise ValueError(f"Unknown informational add-on profile: {profile_id}")
     raw_path = str(path).strip()
@@ -448,11 +477,12 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         "TRIA_FORMAT.md",
     }.issubset(files):
         return "domvox_triattention"
-    # Informational-only projects are recognized conservatively.  A direct
-    # source-folder inspection is available when a checkout is renamed or its
-    # parent directory does not expose these names.
-    blocked_name = name.replace("-", "_")
-    blocked_aliases = {
+    if "cuda-llm-weight-share.c" in files and {"README.md", "LICENSE"}.issubset(files):
+        return "cuda_weight_share"
+    # Non-profile source projects are recognized conservatively. A direct
+    # source-folder inspection is available when a checkout is renamed.
+    source_name = name.replace("-", "_")
+    source_aliases = {
         "maru": "maru",
         "speculative_prefill": "speculative_prefill",
         "speculativeprefill": "speculative_prefill",
@@ -463,13 +493,15 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         "resonance_yarn": "resonance_yarn",
         "gigatoken_llama.cpp": "gigatoken_llamacpp",
         "gigatoken_llamacpp": "gigatoken_llamacpp",
+        "cuda_llm_weight_share": "cuda_weight_share",
+        "cuda_weight_share": "cuda_weight_share",
     }
-    blocked_kind = blocked_aliases.get(blocked_name)
-    if blocked_kind is not None and all(
+    source_kind = source_aliases.get(source_name)
+    if source_kind is not None and all(
         _marker_group_present(path, group)
-        for group in _BLOCKED_ADDON_SPECS[blocked_kind]["marker_groups"]
+        for group in _SOURCE_ADDON_SPECS[source_kind]["marker_groups"]
     ):
-        return blocked_kind
+        return source_kind
     return None
 
 
@@ -530,7 +562,12 @@ def scan_addon_roots(
 
                     item["source"] = inspect_domvox_triattention_checkout(directory)
                     item["source_profile"] = kind
-                if kind in _BLOCKED_ADDON_SPECS:
+                if kind == "cuda_weight_share":
+                    from ..integration import inspect_cuda_weight_share_source
+
+                    item["source"] = inspect_cuda_weight_share_source(directory)
+                    item["source_profile"] = kind
+                elif kind in _SOURCE_ADDON_SPECS:
                     item["source"] = inspect_addon_source(kind, directory)
                     item["source_profile"] = kind
                 if kind in {
@@ -670,6 +707,8 @@ def scan_environment_profiles(
         "context": {
             "os": context.os,
             "compute": context.compute,
+            "os_release_id": context.os_release_id,
+            "os_release_version": context.os_release_version,
             "cuda_toolkit_version": context.cuda_toolkit_version,
             "cuda_toolkit_root": context.cuda_toolkit_root,
         },

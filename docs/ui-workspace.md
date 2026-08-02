@@ -69,7 +69,7 @@ model. The official script may download model data and uses
 `trust_remote_code=True`; only continue with a model source you trust.
 
 Hugging Face is the default tokenizer. **Gigatoken (parity required)** is an
-opt-in choice for this official mode only. The wrapper accepts the reviewed
+opt-in choice for the reviewed official and domvox Python modes. The wrapper accepts the reviewed
 0.10.x API and, before model loading, compares every token ID for the complete
 selected calibration text against Hugging Face with the same truncation and
 maximum length. It stops on any mismatch.
@@ -93,6 +93,9 @@ lossy-conversion acknowledgement is selected. Layer-budget scales and
 attention scale are not representable in Godzilla v1 and are reported as
 dropped. The matching Hugging Face model is required for shape and RoPE checks;
 a GGUF by itself is not sufficient.
+When Gigatoken is selected, domvox is launched through the same fail-closed
+parity wrapper as the official calibrator; its script receives only supported
+arguments after parity succeeds.
 
 Calibration lengths from 128 through 200,000 tokens are supported. Values above
 32,768 require the explicit **Allow long calibration** checkbox and produce a
@@ -147,6 +150,11 @@ environment:
 
 The helper shares weights, not KV caches or contexts. Participating processes
 must use matching model, build, CUDA device, size, and IPC-name settings.
+The source picker recognizes the helper only at the reviewed upstream origin
+and exact commit. Use `mtq-weight-share inspect`, `plan`, `build --yes`, and
+`validate` to compile and verify the Linux x86-64 ELF helper before selecting
+it. Validation checks the exported allocation hooks and dynamic dependencies;
+`MODEL_SIZE=0` reconnaissance remains mandatory afterward.
 
 ## Setup & Add-ons
 
@@ -169,12 +177,13 @@ FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
 Godzilla, and llama.cpp checkouts. The source picker can also inspect local
 folders for the six reviewed-but-blocked add-ons (`maru`,
 `speculative_prefill`, `rocketkv`, `lexico`, `adadecode`, and
-`resonance_yarn`) and for domvox TriAttention. It also recognizes the separate
+`resonance_yarn`), domvox TriAttention, and the reviewed CUDA weight-share
+source. It also recognizes the separate
 `chynggi/gigatoken-llama.cpp` checkout as an informational experimental
 Windows x64/Linux x86_64 runtime fork. Discovery does not make it a Godzilla
 build or compile it. Use `mtq-godzilla-gigatoken` separately to create and
-qualify the pinned Godzilla v0.3.7 port; the command refuses arbitrary or
-existing target trees. Renamed
+qualify either pinned Godzilla v0.3.7 or the exact `09214b160` compatibility
+profile; the command refuses arbitrary or existing target trees. Renamed
 Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
 the expected source markers and reports version and Git remote metadata when
 available.
@@ -216,6 +225,13 @@ Use Godzilla's documented process for ordinary checkouts, or the explicit
 model-specific. Existing `.triattention` output is reused only after its v1
 header, dimensions, sampled indices, numeric arrays, and exact file length pass
 validation.
+
+Managed Linux plans report Debian 12 and 13 explicitly. Repair cleanly
+preserves the old owned `.venv`, validates a replacement, and restores the old
+environment if synchronization fails. For deeper troubleshooting,
+`mtq-env diagnose PROFILE` emits a redacted report covering distribution,
+lexical/resolved interpreters, Python prefixes, imports, Accelerate, and the
+CUDA/toolchain state.
 
 Creating a dependency environment reuses the reviewed `mtq-env` profiles and
 runs as a background job. The UI requires explicit confirmation because the

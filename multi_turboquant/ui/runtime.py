@@ -41,13 +41,21 @@ class ManagedProcess:
         self._command: list[str] = []
         self._started_at: float | None = None
         self._log: deque[str] = deque(maxlen=log_lines)
+        self._collector: threading.Thread | None = None
 
     def _collect_output(self, process: subprocess.Popen[str]) -> None:
-        if process.stdout is None:
+        stream = process.stdout
+        if stream is None:
             return
-        for line in process.stdout:
+        try:
+            for line in stream:
+                with self._lock:
+                    self._log.append(line.rstrip())
+        finally:
+            stream.close()
             with self._lock:
-                self._log.append(line.rstrip())
+                if self._collector is threading.current_thread():
+                    self._collector = None
 
     def start(
         self,
@@ -67,6 +75,15 @@ class ManagedProcess:
             argv[0] = str(executable_path)
         elif shutil.which(executable) is None:
             raise ValueError(f"llama-server binary was not found on PATH: {executable}")
+
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                raise RuntimeError("A llama-server process is already running")
+            previous_collector = self._collector
+        if previous_collector is not None:
+            previous_collector.join(timeout=2)
+            if previous_collector.is_alive():
+                raise RuntimeError("The previous llama-server output stream is still draining")
 
         with self._lock:
             if self._process is not None and self._process.poll() is None:
@@ -93,11 +110,12 @@ class ManagedProcess:
             )
             self._command = argv
             self._started_at = time.time()
-            threading.Thread(
+            self._collector = threading.Thread(
                 target=self._collect_output,
                 args=(self._process,),
                 daemon=True,
-            ).start()
+            )
+            self._collector.start()
             return self.status()
 
     def stop(self, *, timeout: float = 10.0) -> dict[str, object]:
@@ -110,6 +128,10 @@ class ManagedProcess:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+        with self._lock:
+            collector = self._collector
+        if collector is not None and collector is not threading.current_thread():
+            collector.join(timeout=max(1.0, min(timeout, 5.0)))
         return self.status()
 
     def status(self) -> dict[str, object]:
@@ -154,6 +176,7 @@ class EnvironmentJobManager:
         local_source: str | Path | None = None,
         build_from_source: bool = False,
         max_jobs: int | None = None,
+        recreate: bool = False,
     ) -> dict[str, object]:
         from ..optimizations.environments import plan_environment
 
@@ -178,6 +201,7 @@ class EnvironmentJobManager:
             "status": "queued",
             "build_from_source": build_from_source,
             "max_jobs": getattr(plan, "max_jobs", max_jobs),
+            "recreate": recreate,
             "cuda_toolkit_root": (
                 str(plan.cuda_toolkit_root) if plan.cuda_toolkit_root is not None else None
             ),
@@ -188,6 +212,8 @@ class EnvironmentJobManager:
             "created_at": time.time(),
             "finished_at": None,
             "report": None,
+            "diagnostics": None,
+            "backup": None,
             "error": None,
             "log": deque(maxlen=500),
         }
@@ -198,11 +224,19 @@ class EnvironmentJobManager:
             ):
                 raise RuntimeError(f"An environment job for {profile_id} is already running")
             self._jobs[job_id] = job
-        threading.Thread(target=self._run_create, args=(job_id, plan), daemon=True).start()
+        threading.Thread(
+            target=self._run_create,
+            args=(job_id, plan, recreate),
+            daemon=True,
+        ).start()
         return self.get(job_id)
 
-    def _run_create(self, job_id: str, plan: object) -> None:
-        from ..optimizations.environments import check_environment, synchronize_environment
+    def _run_create(self, job_id: str, plan: object, recreate: bool) -> None:
+        from ..optimizations.environments import (
+            check_environment,
+            diagnose_environment,
+            synchronize_environment,
+        )
 
         with self._lock:
             job = self._jobs[job_id]
@@ -225,19 +259,29 @@ class EnvironmentJobManager:
             return result
 
         try:
-            synchronize_environment(plan, runner=runner)  # type: ignore[arg-type]
+            backup = synchronize_environment(  # type: ignore[arg-type]
+                plan,
+                recreate=recreate,
+                runner=runner,
+            )
             report = check_environment(plan)  # type: ignore[arg-type]
         except Exception as exc:
+            try:
+                diagnostics = diagnose_environment(plan)  # type: ignore[arg-type]
+            except Exception as diagnostic_exc:
+                diagnostics = {"error": f"Diagnostic collection failed: {diagnostic_exc}"}
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "failed"
                 job["error"] = str(exc)
+                job["diagnostics"] = diagnostics
                 job["finished_at"] = time.time()
         else:
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "completed"
                 job["report"] = dict(report)
+                job["backup"] = str(backup) if backup is not None else None
                 job["finished_at"] = time.time()
 
     def get(self, job_id: str) -> dict[str, object]:
