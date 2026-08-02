@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Fail-closed Gigatoken wrapper for the official TriAttention calibrator."""
+"""Fail-closed Gigatoken wrapper for reviewed TriAttention calibrators."""
 
 from __future__ import annotations
 
@@ -88,15 +88,16 @@ def _patch_auto_tokenizer(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the official TriAttention calibrator with validated Gigatoken"
+        description="Run a reviewed TriAttention calibrator with validated Gigatoken"
     )
+    parser.add_argument("--kind", choices=("official", "domvox"), default="official")
     parser.add_argument("--calibrator", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-length", type=int, required=True)
     parser.add_argument("--device", required=True)
-    parser.add_argument("--attn-implementation", required=True)
+    parser.add_argument("--attn-implementation")
     return parser
 
 
@@ -105,9 +106,13 @@ def main(argv: list[str] | None = None) -> int:
     calibrator = Path(args.calibrator).expanduser().resolve()
     calibration_input = Path(args.input).expanduser().resolve()
     if not calibrator.is_file():
-        raise ValueError(f"Official TriAttention calibrator not found: {calibrator}")
+        raise ValueError(f"{args.kind} TriAttention calibrator not found: {calibrator}")
     if not calibration_input.is_file() or calibration_input.stat().st_size == 0:
         raise ValueError(f"Calibration input must be non-empty: {calibration_input}")
+    if args.kind == "official" and not args.attn_implementation:
+        raise ValueError("Official calibration requires --attn-implementation")
+    if args.kind == "domvox" and args.attn_implementation:
+        raise ValueError("domvox calibration does not accept --attn-implementation")
     text = calibration_input.read_text(encoding="utf-8")
     _patch_auto_tokenizer(validation_text=text, max_length=args.max_length)
     sys.argv = [
@@ -122,9 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         str(args.max_length),
         "--device",
         args.device,
-        "--attn-implementation",
-        args.attn_implementation,
     ]
+    if args.kind == "official":
+        sys.argv.extend(("--attn-implementation", args.attn_implementation))
     runpy.run_path(str(calibrator), run_name="__main__")
     return 0
 

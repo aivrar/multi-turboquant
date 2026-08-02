@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
@@ -310,9 +314,9 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         default_python="3.11",
         packages=(
             "torch==2.7.1",
-            "transformers>=4.48.1,<5",
-            "accelerate",
-            "sentencepiece",
+            "transformers==4.57.6",
+            "accelerate==1.14.0",
+            "sentencepiece==0.2.2",
             "gigatoken==0.10.0",
             "triattention @ git+https://github.com/WeianMao/triattention.git@81552bb91eedcdda239a3ff02ca985f49f866031",
         ),
@@ -501,6 +505,8 @@ class EnvironmentContext:
     available_executables: frozenset[str] = field(default_factory=frozenset)
     cuda_toolkit_version: tuple[int, int] | None = None
     cuda_toolkit_root: str | None = None
+    os_release_id: str | None = None
+    os_release_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "os", self.os.strip().lower())
@@ -516,6 +522,35 @@ class EnvironmentContext:
                 "cuda_toolkit_root",
                 str(Path(self.cuda_toolkit_root).expanduser().resolve()),
             )
+        if self.os_release_id is not None:
+            object.__setattr__(self, "os_release_id", self.os_release_id.strip().lower())
+        if self.os_release_version is not None:
+            object.__setattr__(self, "os_release_version", self.os_release_version.strip())
+
+
+def read_os_release(path: str | Path = "/etc/os-release") -> dict[str, str]:
+    """Read Linux distribution metadata without executing shell content."""
+    release_path = Path(path)
+    if not release_path.is_file():
+        return {}
+    values: dict[str, str] = {}
+    try:
+        lines = release_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            continue
+        if len(value) >= 2 and value[:1] == value[-1:] and value.startswith(("'", '"')):
+            value = value[1:-1]
+        values[key] = value.replace(r"\n", "\n").replace(r'\"', '"').replace(r"\\", "\\")
+    return values
 
 
 def _cuda_toolkit_paths(cuda_toolkit: str | Path | None) -> tuple[Path | None, Path | None]:
@@ -547,6 +582,7 @@ def detect_environment_context(
     from ..hardware import detect_platform
 
     platform_info = detect_platform()
+    os_release = read_os_release() if platform_info.os == "linux" else {}
     known_executables = ("uv", "pyenv", "git", "nvidia-smi", "rocminfo")
     available = frozenset(name for name in known_executables if shutil.which(name))
     toolkit_root, nvcc = _cuda_toolkit_paths(cuda_toolkit)
@@ -572,6 +608,8 @@ def detect_environment_context(
         available_executables=available,
         cuda_toolkit_version=cuda_toolkit_version,
         cuda_toolkit_root=str(toolkit_root) if toolkit_root is not None else None,
+        os_release_id=os_release.get("ID"),
+        os_release_version=os_release.get("VERSION_ID"),
     )
 
 
@@ -607,6 +645,8 @@ class EnvironmentPlan:
     local_source: Path | None = None
     build_from_source: bool = False
     max_jobs: int | None = None
+    os_release_id: str | None = None
+    os_release_version: str | None = None
 
     @property
     def ready(self) -> bool:
@@ -617,6 +657,10 @@ class EnvironmentPlan:
             "profile": self.profile.to_dict(),
             "target": str(self.target),
             "python_request": self.python_request,
+            "os_release": {
+                "id": self.os_release_id,
+                "version": self.os_release_version,
+            },
             "cuda_toolkit_root": (
                 str(self.cuda_toolkit_root) if self.cuda_toolkit_root is not None else None
             ),
@@ -813,6 +857,8 @@ def plan_environment(
             cuda_toolkit_root=toolkit_root,
             cuda_toolkit_version=context.cuda_toolkit_version,
             local_source=local_source_path,
+            os_release_id=context.os_release_id,
+            os_release_version=context.os_release_version,
         )
 
     if context.os not in profile.supported_os:
@@ -823,6 +869,26 @@ def plan_environment(
                 f"{profile.name} supports {profile.supported_os}, not {context.os!r}.",
             )
         )
+    if context.os == "linux" and context.os_release_id == "debian":
+        release_major = (context.os_release_version or "").split(".", 1)[0]
+        if release_major in {"12", "13"}:
+            issues.append(
+                EnvironmentIssue(
+                    "info",
+                    "debian_supported",
+                    f"Detected Debian {release_major}; this release is covered by the Linux "
+                    "environment workflow.",
+                )
+            )
+        else:
+            issues.append(
+                EnvironmentIssue(
+                    "warning",
+                    "debian_unqualified",
+                    f"Detected Debian {context.os_release_version or 'unknown'}; Debian 12 and "
+                    "13 are the explicitly qualified releases.",
+                )
+            )
     if context.compute not in profile.supported_compute:
         issues.append(
             EnvironmentIssue(
@@ -959,6 +1025,8 @@ def plan_environment(
         cuda_toolkit_root=toolkit_root,
         cuda_toolkit_version=context.cuda_toolkit_version,
         local_source=local_source_path,
+        os_release_id=context.os_release_id,
+        os_release_version=context.os_release_version,
     )
 
 
@@ -998,6 +1066,83 @@ def materialize_environment_project(plan: EnvironmentPlan) -> Path:
     return project_file
 
 
+def _managed_venv_backup_path(target: Path, *, label: str) -> Path:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return target / f".venv.mtq-{label}-{timestamp}-{uuid.uuid4().hex[:8]}"
+
+
+def _quarantine_managed_venv(plan: EnvironmentPlan) -> Path | None:
+    """Move only an owned profile's venv aside so repair remains recoverable."""
+    project_file = plan.target / "pyproject.toml"
+    if _read_owned_profile(project_file) != plan.profile.id:
+        raise RuntimeError(f"Refusing to recreate an unmanaged environment: {plan.target}")
+    venv = plan.target / ".venv"
+    if not venv.exists():
+        return None
+    if not venv.is_dir():
+        raise RuntimeError(f"Managed environment path is not a directory: {venv}")
+    backup = _managed_venv_backup_path(plan.target, label="backup")
+    try:
+        venv.rename(backup)
+    except OSError as exc:
+        raise RuntimeError(f"Could not preserve the existing managed environment: {exc}") from exc
+    return backup
+
+
+def _restore_quarantined_venv(plan: EnvironmentPlan, backup: Path | None) -> list[str]:
+    if backup is None:
+        return []
+    notes: list[str] = []
+    incomplete = plan.target / ".venv"
+    try:
+        if incomplete.exists():
+            failed = _managed_venv_backup_path(plan.target, label="failed")
+            incomplete.rename(failed)
+            notes.append(f"incomplete replacement preserved at {failed}")
+        backup.rename(incomplete)
+        notes.append("previous environment restored")
+    except OSError as exc:
+        notes.append(f"automatic rollback failed: {exc}")
+    return notes
+
+
+def _snapshot_managed_metadata(plan: EnvironmentPlan) -> dict[str, bytes | None]:
+    """Capture the small owned project files needed for transactional repair."""
+    snapshot: dict[str, bytes | None] = {}
+    for name in ("pyproject.toml", "uv.lock"):
+        path = plan.target / name
+        if path.exists() and not path.is_file():
+            raise RuntimeError(f"Managed environment metadata is not a file: {path}")
+        snapshot[name] = path.read_bytes() if path.is_file() else None
+    return snapshot
+
+
+def _restore_managed_metadata(
+    plan: EnvironmentPlan,
+    snapshot: Mapping[str, bytes | None] | None,
+) -> list[str]:
+    if snapshot is None:
+        return []
+    notes: list[str] = []
+    for name, content in snapshot.items():
+        path = plan.target / name
+        try:
+            if content is None:
+                if path.is_file():
+                    path.unlink()
+                elif path.exists():
+                    raise OSError(f"replacement metadata is not a file: {path}")
+            else:
+                temporary = path.with_name(f".{name}.mtq-restore-{uuid.uuid4().hex[:8]}")
+                temporary.write_bytes(content)
+                os.replace(temporary, path)
+        except OSError as exc:
+            notes.append(f"could not restore {name}: {exc}")
+    if not notes:
+        notes.append("previous project metadata restored")
+    return notes
+
+
 RunCommand = Callable[..., subprocess.CompletedProcess]
 
 
@@ -1019,13 +1164,20 @@ def synchronize_environment(
     plan: EnvironmentPlan,
     *,
     upgrade: bool = False,
+    recreate: bool = False,
     runner: RunCommand = subprocess.run,
-) -> None:
+) -> Path | None:
     """Materialize and sync an explicitly requested, compatible plan."""
     if not plan.ready:
         errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")
         raise RuntimeError(f"Environment plan is not ready: {errors}")
+    existing_venv = plan.target / ".venv"
+    project_file = plan.target / "pyproject.toml"
+    if recreate and existing_venv.exists() and _read_owned_profile(project_file) != plan.profile.id:
+        raise RuntimeError(f"Refusing to recreate an unmanaged environment: {plan.target}")
+    metadata_snapshot = _snapshot_managed_metadata(plan) if recreate else None
     materialize_environment_project(plan)
+    backup = _quarantine_managed_venv(plan) if recreate else None
     argv = list(plan.commands[0].argv)
     if upgrade:
         argv.append("--upgrade")
@@ -1035,9 +1187,28 @@ def synchronize_environment(
         child_environment["MAX_JOBS"] = str(plan.max_jobs)
     if plan.build_from_source:
         child_environment.update(dict(plan.profile.source_build_environment))
-    result = runner(argv, cwd=plan.target, env=child_environment, check=False)
+    try:
+        result = runner(argv, cwd=plan.target, env=child_environment, check=False)
+    except Exception as exc:
+        rollback_notes = _restore_quarantined_venv(plan, backup)
+        rollback_notes.extend(_restore_managed_metadata(plan, metadata_snapshot))
+        rollback = f" ({'; '.join(rollback_notes)})" if rollback_notes else ""
+        raise RuntimeError(
+            f"uv sync could not run{rollback}: {redact_diagnostic_text(str(exc))}"
+        ) from exc
     if result.returncode != 0:
-        raise RuntimeError(f"uv sync failed with exit code {result.returncode}")
+        rollback_notes = _restore_quarantined_venv(plan, backup)
+        rollback_notes.extend(_restore_managed_metadata(plan, metadata_snapshot))
+        stderr = redact_diagnostic_text(str(getattr(result, "stderr", "") or "").strip())
+        stdout = redact_diagnostic_text(str(getattr(result, "stdout", "") or "").strip())
+        detail = stderr or stdout or "uv did not return diagnostic output"
+        if len(detail) > 4000:
+            detail = "..." + detail[-3997:]
+        rollback = f" ({'; '.join(rollback_notes)})" if rollback_notes else ""
+        raise RuntimeError(
+            f"uv sync failed with exit code {result.returncode}{rollback}: {detail}"
+        )
+    return backup
 
 
 def environment_python(target: Path, *, os_name: str | None = None) -> Path:
@@ -1071,6 +1242,145 @@ def validation_script(profile: DependencyProfile) -> str:
         "    pass\n"
         "print(json.dumps(versions, sort_keys=True))\n"
     )
+
+
+_SENSITIVE_VALUE = re.compile(
+    r"(?i)((?:token|password|passwd|secret|api[_-]?key)\s*[=:]\s*)([^\s,;]+)"
+)
+
+
+def redact_diagnostic_text(value: str) -> str:
+    """Redact common credential assignments before diagnostics leave the process."""
+    return _SENSITIVE_VALUE.sub(r"\1<redacted>", value)
+
+
+def diagnostic_script(profile: DependencyProfile) -> str:
+    """Return a fail-soft interpreter and dependency inspection script."""
+    modules = json.dumps(list(profile.validation_modules))
+    return (
+        "import importlib, importlib.metadata, json, platform, sys, traceback\n"
+        f"modules = {modules}\n"
+        "data = {'interpreter': {'executable': sys.executable, 'prefix': sys.prefix, "
+        "'base_prefix': sys.base_prefix, 'version': sys.version, "
+        "'platform': platform.platform()}, 'modules': {}}\n"
+        "for name in modules:\n"
+        "    try:\n"
+        "        module = importlib.import_module(name)\n"
+        "        version = getattr(module, '__version__', None)\n"
+        "        if version is None:\n"
+        "            try:\n"
+        "                version = importlib.metadata.version(name.replace('_', '-'))\n"
+        "            except importlib.metadata.PackageNotFoundError:\n"
+        "                version = 'unknown'\n"
+        "        data['modules'][name] = {'status': 'ok', 'version': str(version)}\n"
+        "    except Exception as exc:\n"
+        "        data['modules'][name] = {'status': 'error', 'error': "
+        "f'{type(exc).__name__}: {exc}', 'traceback': traceback.format_exc(limit=8)}\n"
+        "try:\n"
+        "    import torch\n"
+        "    data['cuda'] = {'torch_cuda': torch.version.cuda, "
+        "'available': torch.cuda.is_available(), 'device_count': torch.cuda.device_count()}\n"
+        "    if torch.cuda.is_available():\n"
+        "        data['cuda']['devices'] = [torch.cuda.get_device_name(i) "
+        "for i in range(torch.cuda.device_count())]\n"
+        "except Exception as exc:\n"
+        "    data['cuda'] = {'error': f'{type(exc).__name__}: {exc}'}\n"
+        "print('MTQ_DIAGNOSTICS=' + json.dumps(data, sort_keys=True))\n"
+    )
+
+
+def _run_diagnostic_command(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    runner: RunCommand,
+    timeout: int = 30,
+) -> dict[str, object]:
+    try:
+        result = runner(
+            list(argv),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"argv": list(argv), "error": redact_diagnostic_text(str(exc))}
+    return {
+        "argv": list(argv),
+        "returncode": int(result.returncode),
+        "stdout": redact_diagnostic_text((result.stdout or "").strip())[-8000:],
+        "stderr": redact_diagnostic_text((result.stderr or "").strip())[-8000:],
+    }
+
+
+def diagnose_environment(
+    plan: EnvironmentPlan,
+    *,
+    runner: RunCommand = subprocess.run,
+) -> dict[str, object]:
+    """Collect a redacted, copyable report without importing the host environment."""
+    interpreter = environment_python(plan.target)
+    report: dict[str, object] = {
+        "schema": 1,
+        "profile": plan.profile.id,
+        "target": str(plan.target),
+        "plan": plan.to_dict(),
+        "host": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "host_python": sys.version,
+            "os_release": read_os_release(),
+        },
+        "files": {
+            "project": (plan.target / "pyproject.toml").is_file(),
+            "lock": (plan.target / "uv.lock").is_file(),
+            "venv": (plan.target / ".venv").is_dir(),
+            "interpreter": interpreter.is_file(),
+            "interpreter_lexical": str(interpreter),
+            "interpreter_resolved": str(interpreter.resolve(strict=False)),
+        },
+        "commands": {},
+    }
+    commands = report["commands"]
+    assert isinstance(commands, dict)
+    command_cwd = plan.target if plan.target.is_dir() else Path.cwd()
+    for name in ("uv", "git", "nvidia-smi", "nvcc"):
+        executable = shutil.which(name)
+        if executable:
+            commands[name] = _run_diagnostic_command(
+                [executable, "--version"], cwd=command_cwd, runner=runner
+            )
+        else:
+            commands[name] = {"available": False}
+    if interpreter.is_file():
+        python_report = _run_diagnostic_command(
+            [str(interpreter), "-c", diagnostic_script(plan.profile)],
+            cwd=plan.target,
+            runner=runner,
+            timeout=60,
+        )
+        stdout = str(python_report.get("stdout", ""))
+        marker = "MTQ_DIAGNOSTICS="
+        payload = next(
+            (line[len(marker) :] for line in reversed(stdout.splitlines()) if line.startswith(marker)),
+            None,
+        )
+        if payload is not None:
+            try:
+                python_report["parsed"] = json.loads(payload)
+            except json.JSONDecodeError:
+                python_report["parse_error"] = "Interpreter diagnostics returned invalid JSON"
+        commands["managed_python"] = python_report
+        accelerate = interpreter.parent / ("accelerate.exe" if os.name == "nt" else "accelerate")
+        if accelerate.is_file():
+            commands["accelerate_env"] = _run_diagnostic_command(
+                [str(accelerate), "env"], cwd=plan.target, runner=runner, timeout=60
+            )
+        else:
+            commands["accelerate_env"] = {"available": False}
+    return report
 
 
 def check_environment(

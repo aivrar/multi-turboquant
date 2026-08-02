@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tomllib
 from pathlib import Path
@@ -11,9 +12,11 @@ from multi_turboquant.optimizations import (
     BUILTIN_ENVIRONMENT_PROFILES,
     EnvironmentContext,
     check_environment,
+    diagnose_environment,
     get_environment_profile,
     inspect_profile_source,
     plan_environment,
+    read_os_release,
     render_profile_project,
     synchronize_environment,
 )
@@ -174,6 +177,44 @@ def test_triattention_profile_supports_the_official_local_checkout(tmp_path: Pat
     assert plan.max_jobs == 2
     assert project["tool"]["uv"]["sources"]["triattention"]["path"] == str(source.resolve())
     assert "--reinstall-package" in plan.commands[0].argv
+
+
+def test_triattention_profile_pins_the_reviewed_calibration_stack():
+    profile = get_environment_profile("triattention")
+
+    assert "transformers==4.57.6" in profile.packages
+    assert "accelerate==1.14.0" in profile.packages
+    assert "sentencepiece==0.2.2" in profile.packages
+    assert "gigatoken==0.10.0" in profile.packages
+
+
+def test_read_os_release_is_data_only_and_debian_is_reported(tmp_path: Path):
+    release = tmp_path / "os-release"
+    release.write_text(
+        'ID=debian\nVERSION_ID="13"\nBAD KEY=value\nNAME="Debian GNU/Linux"\n',
+        encoding="utf-8",
+    )
+
+    assert read_os_release(release) == {
+        "ID": "debian",
+        "VERSION_ID": "13",
+        "NAME": "Debian GNU/Linux",
+    }
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=EnvironmentContext(
+            os="linux",
+            compute="cuda",
+            available_executables=frozenset({"uv", "git"}),
+            os_release_id="debian",
+            os_release_version="13",
+        ),
+    )
+
+    assert plan.os_release_id == "debian"
+    assert plan.to_dict()["os_release"] == {"id": "debian", "version": "13"}
+    assert any(issue.code == "debian_supported" for issue in plan.issues)
 
 
 def test_explicit_build_job_limit_overrides_profile_default(tmp_path: Path):
@@ -412,6 +453,142 @@ def test_sync_materializes_owned_project_and_uses_argv(tmp_path: Path):
     assert calls[0][1]["check"] is False
     assert calls[0][1]["env"]["MAX_JOBS"] == "4"
     assert "FLASH_ATTENTION_FORCE_BUILD" not in calls[0][1]["env"]
+
+
+def test_recreate_preserves_the_previous_managed_venv(tmp_path: Path):
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=linux_cuda_context("uv", "git"),
+    )
+    materialize_environment_project(plan)
+    old_venv = plan.target / ".venv"
+    old_venv.mkdir()
+    (old_venv / "old.txt").write_text("old", encoding="utf-8")
+
+    def runner(argv, **kwargs):
+        replacement = Path(kwargs["cwd"]) / ".venv"
+        assert not replacement.exists()
+        replacement.mkdir()
+        (replacement / "new.txt").write_text("new", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout="synced", stderr="")
+
+    backup = synchronize_environment(plan, recreate=True, runner=runner)
+
+    assert backup is not None
+    assert (backup / "old.txt").read_text(encoding="utf-8") == "old"
+    assert (plan.target / ".venv" / "new.txt").read_text(encoding="utf-8") == "new"
+
+
+def test_recreate_rolls_back_and_redacts_sync_failures(tmp_path: Path):
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=linux_cuda_context("uv", "git"),
+    )
+    materialize_environment_project(plan)
+    project_file = plan.target / "pyproject.toml"
+    original_project = project_file.read_bytes() + b"\n# previous lock generation\n"
+    project_file.write_bytes(original_project)
+    lock_file = plan.target / "uv.lock"
+    lock_file.write_bytes(b"version = 1\n# previous lock\n")
+    old_venv = plan.target / ".venv"
+    old_venv.mkdir()
+    (old_venv / "old.txt").write_text("old", encoding="utf-8")
+
+    def runner(argv, **kwargs):
+        replacement = Path(kwargs["cwd"]) / ".venv"
+        replacement.mkdir()
+        (replacement / "partial.txt").write_text("partial", encoding="utf-8")
+        project_file.write_text("replacement project", encoding="utf-8")
+        lock_file.write_text("replacement lock", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout="",
+            stderr="HF_TOKEN=do-not-leak dependency conflict",
+        )
+
+    with pytest.raises(RuntimeError, match=r"HF_TOKEN=<redacted>") as error:
+        synchronize_environment(plan, recreate=True, runner=runner)
+
+    assert "do-not-leak" not in str(error.value)
+    assert (plan.target / ".venv" / "old.txt").read_text(encoding="utf-8") == "old"
+    assert list(plan.target.glob(".venv.mtq-failed-*"))
+    assert project_file.read_bytes() == original_project
+    assert lock_file.read_bytes() == b"version = 1\n# previous lock\n"
+
+
+def test_recreate_refuses_unmarked_existing_venv(tmp_path: Path):
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=linux_cuda_context("uv", "git"),
+    )
+    unowned = plan.target / ".venv"
+    unowned.mkdir(parents=True)
+    (unowned / "user.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unmanaged environment"):
+        synchronize_environment(plan, recreate=True)
+
+    assert (unowned / "user.txt").read_text(encoding="utf-8") == "keep"
+    assert not (plan.target / "pyproject.toml").exists()
+
+
+def test_recreate_rolls_back_when_the_sync_process_cannot_start(tmp_path: Path):
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=linux_cuda_context("uv", "git"),
+    )
+    materialize_environment_project(plan)
+    old_venv = plan.target / ".venv"
+    old_venv.mkdir()
+    (old_venv / "old.txt").write_text("old", encoding="utf-8")
+
+    def runner(argv, **kwargs):
+        raise OSError("cannot execute TOKEN=private")
+
+    with pytest.raises(RuntimeError, match=r"TOKEN=<redacted>"):
+        synchronize_environment(plan, recreate=True, runner=runner)
+
+    assert (plan.target / ".venv" / "old.txt").is_file()
+
+
+def test_diagnostics_keep_lexical_interpreter_and_parse_fail_soft_report(tmp_path: Path):
+    plan = plan_environment(
+        "triattention",
+        root=tmp_path,
+        context=linux_cuda_context("uv", "git"),
+    )
+    interpreter = environment_python(plan.target)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("placeholder", encoding="utf-8")
+
+    def runner(argv, **kwargs):
+        if argv[0] == str(interpreter):
+            payload = {
+                "interpreter": {
+                    "executable": str(interpreter),
+                    "prefix": str(interpreter.parent.parent),
+                    "base_prefix": "/uv/python/cpython-3.11",
+                },
+                "modules": {"accelerate": {"status": "error", "error": "ImportError"}},
+            }
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="MTQ_DIAGNOSTICS=" + json.dumps(payload),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="tool version", stderr="")
+
+    report = diagnose_environment(plan, runner=runner)
+
+    assert report["files"]["interpreter_lexical"] == str(interpreter)
+    managed = report["commands"]["managed_python"]
+    assert managed["parsed"]["modules"]["accelerate"]["status"] == "error"
 
 
 def test_sync_sets_flashattention_force_build_only_when_requested(tmp_path: Path):

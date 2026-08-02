@@ -18,6 +18,8 @@ class OptimizationKind(str, Enum):
     ATTENTION_BACKEND = "attention_backend"
     DECODE = "decode"
     POSITION_ENCODING = "position_encoding"
+    TOKENIZER = "tokenizer"
+    RESOURCE_SHARING = "resource_sharing"
 
 
 class OptimizationMaturity(str, Enum):
@@ -32,6 +34,7 @@ class IntegrationMode(str, Enum):
     OPTIONAL_PYTHON = "optional_python"
     NATIVE_BACKEND_REQUIRED = "native_backend_required"
     RESEARCH_ONLY = "research_only"
+    PRELOAD_LIBRARY = "preload_library"
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,7 @@ class OptimizationDescriptor:
     supported_engines: tuple[str, ...]
     supported_compute: tuple[str, ...] = ()
     supported_os: tuple[str, ...] = ()
+    supported_architectures: tuple[str, ...] = ()
     supported_kv_formats: tuple[str, ...] = ()
     required_modules: tuple[str, ...] = ()
     required_executables: tuple[str, ...] = ()
@@ -72,6 +76,7 @@ class OptimizationDescriptor:
             "supported_engines": list(self.supported_engines),
             "supported_compute": list(self.supported_compute),
             "supported_os": list(self.supported_os),
+            "supported_architectures": list(self.supported_architectures),
             "supported_kv_formats": list(self.supported_kv_formats),
             "required_modules": list(self.required_modules),
             "required_executables": list(self.required_executables),
@@ -218,6 +223,16 @@ class ManifestPlugin:
                 "error",
                 "unsupported_compute",
                 f"Compute backend {context.compute!r} is unsupported; use one of {descriptor.supported_compute}.",
+            )
+        if (
+            descriptor.supported_architectures
+            and context.architecture not in descriptor.supported_architectures
+        ):
+            add(
+                "error",
+                "unsupported_architecture",
+                f"Architecture {context.architecture!r} is unsupported; use one of "
+                f"{descriptor.supported_architectures}.",
             )
         if (
             descriptor.supported_kv_formats

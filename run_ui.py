@@ -507,6 +507,7 @@ def api_create_environment(params):
         local_source=local_source,
         build_from_source=_truthy(params.get("build_from_source")),
         max_jobs=_optional_int(params.get("max_jobs"), 2),
+        recreate=_truthy(params.get("recreate")),
     )
 
 
@@ -712,6 +713,7 @@ def api_repair_triattention_environment(params):
         "triattention",
         root=settings["environment_root"],
         max_jobs=2,
+        recreate=True,
     )
 
 
@@ -1194,6 +1196,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div class="setup-note">Source inspection is read-only. A recognized source is recorded as informational until its dependencies, runtime integration, and licensing are separately reviewed.</div>
         <div class="form-row">
           <div><label>Source profile</label><select id="addon-source-profile">
+            <option value="cuda_weight_share">CUDA LLM Weight Share</option>
             <option value="maru">Maru</option>
             <option value="speculative_prefill">Speculative Prefill</option>
             <option value="rocketkv">RocketKV</option>
@@ -1252,7 +1255,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div><label>Tokenizer backend</label><select id="godzilla-tokenizer"><option value="transformers" selected>Hugging Face (default)</option><option value="gigatoken">Gigatoken (parity required)</option></select></div>
           <div><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
         </div>
-        <div class="setup-note">Gigatoken is opt-in for the recommended official calibration mode. Before model loading, Multi-TurboQuant compares every token ID it produces with Hugging Face and stops on any mismatch. For inference, <code>mtq-godzilla-gigatoken</code> can prepare and qualify a separate pinned Godzilla v0.3.7 + Gigatoken runtime tree; this view never patches an arbitrary checkout.</div>
+        <div class="setup-note">Gigatoken is opt-in for the reviewed official and domvox Python calibration modes. Before model loading, Multi-TurboQuant compares every token ID it produces with Hugging Face and stops on any mismatch. For inference, <code>mtq-godzilla-gigatoken</code> can prepare and qualify a separate exact Godzilla v0.3.7 or <code>09214b160</code> + Gigatoken runtime tree; this view never patches an arbitrary checkout.</div>
         <div class="button-row"><button class="secondary" onclick="scanGigatoken()">Scan Python and pyenv environments for Gigatoken</button></div>
         <div id="gigatoken-scan" class="item-list"><div class="muted">Not scanned.</div></div>
         <div class="form-row">
@@ -1821,7 +1824,7 @@ async function scanEnvironments() {
       const canCreate = profile.ready && !['installed', 'manual', 'blocked'].includes(profile.status);
       const action = profile.status === 'blocked'
         ? '<span class="muted">Informational only; automatic installation is intentionally unavailable.</span>'
-        : `<button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}')">${profile.status === 'broken' ? 'Repair' : 'Create'}</button>`;
+        : `<button ${canCreate ? '' : 'disabled'} onclick="createEnvironment('${escapeHtml(profile.id)}', ${profile.status === 'broken'})">${profile.status === 'broken' ? 'Repair cleanly' : 'Create'}</button>`;
       return `<div class="item"><div class="item-title"><span>${escapeHtml(profile.name)}</span>` +
         `<span class="status-pill status-${escapeHtml(profile.status)}">${escapeHtml(profile.status)}</span></div>` +
         `<div class="muted">${escapeHtml(profile.target)}</div>` +
@@ -1835,7 +1838,7 @@ async function scanEnvironments() {
   }
 }
 
-async function createEnvironment(profile) {
+async function createEnvironment(profile, recreate = false) {
   if (!document.getElementById('env-confirm').checked) {
     alert('Confirm downloads/builds before creating an environment.');
     return;
@@ -1851,6 +1854,7 @@ async function createEnvironment(profile) {
       local_source: sourceProfile === profile ? document.getElementById('env-local-source').value : '',
       build_from_source: document.getElementById('env-build-source').checked,
       max_jobs: document.getElementById('env-max-jobs').value,
+      recreate,
       confirm: true,
     });
     document.getElementById('env-confirm').checked = false;
@@ -2024,8 +2028,10 @@ async function refreshJobs() {
     `<div class="item"><div class="item-title"><span>${escapeHtml(job.profile)}</span>` +
     `<span class="status-pill status-${escapeHtml(job.status)}">${escapeHtml(job.status)}</span></div>` +
     `<div class="muted">${escapeHtml(job.target)}</div>` +
+    `${job.backup ? `<div class="cap-warn">Previous managed environment preserved at ${escapeHtml(job.backup)}</div>` : ''}` +
     `${job.error ? `<div class="cap-bad">${escapeHtml(job.error)}</div>` : ''}` +
     `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
+    `${job.diagnostics ? `<details><summary>Redacted diagnostic bundle</summary><pre class="result-box">${escapeHtml(JSON.stringify(job.diagnostics, null, 2))}</pre></details>` : ''}` +
     `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\\n'))}</div>` : ''}</div>`
   ).join('');
   if (pendingTriattentionRepairJob) {

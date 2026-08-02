@@ -195,6 +195,58 @@ def test_domvox_calibration_runs_then_converts(tmp_path: Path, monkeypatch):
     assert report["source_format"] == "domvox-tria-v2"
 
 
+def test_domvox_calibration_wraps_gigatoken_with_exact_parity_guard(
+    tmp_path: Path, monkeypatch
+):
+    script = tmp_path / "triattention_calibrate.py"
+    script.write_text(
+        " ".join(("--model", "--input", "--output", "--max-length", "--device", "TRIA")),
+        encoding="utf-8",
+    )
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+    calibration_input = tmp_path / "calibration.txt"
+    calibration_input.write_text("text", encoding="utf-8")
+    stats = tmp_path / "domvox.bin"
+    output = tmp_path / "model.triattention"
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        _write_domvox_stats(stats)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        calibration,
+        "load_huggingface_model_metadata",
+        lambda model: {
+            "head_dim": 4,
+            "num_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rope_theta": 10_000.0,
+        },
+    )
+    report = calibration.calibrate_domvox_triattention_for_godzilla(
+        calibrator=script,
+        python=python,
+        model="org/model",
+        input_path=calibration_input,
+        output_path=output,
+        stats_output_path=stats,
+        max_length=512,
+        device="cpu",
+        accept_lossy=True,
+        tokenizer_backend="gigatoken",
+        runner=runner,
+    )
+
+    assert Path(calls[0][1]).name == "gigatoken_runner.py"
+    assert calls[0][2:6] == ["--kind", "domvox", "--calibrator", str(script.resolve())]
+    assert "--attn-implementation" not in calls[0]
+    assert report["tokenizer_backend"] == "gigatoken"
+
+
 def test_convert_rejects_metadata_stats_mismatch(tmp_path: Path):
     source = tmp_path / "official.pt"
     payload = _official_payload()

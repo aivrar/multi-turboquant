@@ -17,7 +17,6 @@ Usage as library:
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,8 +62,13 @@ def generate_triattention_stats(
             print(f"Loading model from {model_path}...")
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
+            import transformers
+
+            version = tuple(int(part) for part in transformers.__version__.split(".")[:2])
+            dtype_keyword = "dtype" if version >= (4, 56) else "torch_dtype"
             model = AutoModelForCausalLM.from_pretrained(
-                model_path, torch_dtype=torch.float16, device_map="auto",
+                model_path,
+                **{dtype_keyword: torch.float16, "device_map": "auto"},
             )
             tokenizer = AutoTokenizer.from_pretrained(model_path)
         except ImportError:

@@ -22,8 +22,15 @@ from .llamacpp_scan import (
     scan_llamacpp_binary,
 )
 from .weight_share import (
+    CUDA_WEIGHT_SHARE_COMMIT,
+    CUDA_WEIGHT_SHARE_URL,
+    CudaWeightShareBuildPlan,
     CudaWeightShareConfig,
+    build_cuda_weight_share,
     get_cuda_weight_share_env,
+    inspect_cuda_weight_share_source,
+    plan_cuda_weight_share_build,
+    validate_cuda_weight_share_library,
     wrap_cuda_weight_share_command,
 )
 from .lmcache import (
@@ -41,13 +48,17 @@ from .godzilla_workspace import (
     run_godzilla_triattention,
 )
 from .godzilla_gigatoken import (
+    DEFAULT_GODZILLA_PROFILE,
+    GODZILLA_SOURCE_PROFILES,
     GodzillaGigatokenPlan,
+    GodzillaSourceProfile,
     RuntimeIssue,
     build_godzilla_gigatoken,
     inspect_godzilla_gigatoken,
     plan_godzilla_gigatoken,
     prepare_godzilla_gigatoken,
     verify_godzilla_gigatoken,
+    get_godzilla_source_profile,
 )
 
 __all__ = [
@@ -63,6 +74,13 @@ __all__ = [
     "parse_llamacpp_help",
     "scan_llamacpp_binary",
     "CudaWeightShareConfig",
+    "CudaWeightShareBuildPlan",
+    "CUDA_WEIGHT_SHARE_URL",
+    "CUDA_WEIGHT_SHARE_COMMIT",
+    "inspect_cuda_weight_share_source",
+    "plan_cuda_weight_share_build",
+    "build_cuda_weight_share",
+    "validate_cuda_weight_share_library",
     "get_cuda_weight_share_env",
     "wrap_cuda_weight_share_command",
     "LMCacheIntegrationConfig",
@@ -76,10 +94,14 @@ __all__ = [
     "plan_godzilla_triattention",
     "run_godzilla_triattention",
     "GodzillaGigatokenPlan",
+    "GodzillaSourceProfile",
+    "GODZILLA_SOURCE_PROFILES",
+    "DEFAULT_GODZILLA_PROFILE",
     "RuntimeIssue",
     "build_godzilla_gigatoken",
     "inspect_godzilla_gigatoken",
     "plan_godzilla_gigatoken",
     "prepare_godzilla_gigatoken",
     "verify_godzilla_gigatoken",
+    "get_godzilla_source_profile",
 ]

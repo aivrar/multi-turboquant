@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from multi_turboquant.calibration.gigatoken_runner import validate_tokenizer_parity
+from multi_turboquant.calibration.gigatoken_runner import build_parser, validate_tokenizer_parity
 from multi_turboquant.tokenizer_backends import (
     discover_python_interpreters,
     inspect_gigatoken_python,
@@ -48,6 +48,30 @@ def test_gigatoken_parity_reports_first_difference():
         assert "Gigatoken=9" in str(exc)
     else:
         raise AssertionError("parity mismatch was accepted")
+
+
+def test_gigatoken_runner_accepts_domvox_without_attention_implementation():
+    args = build_parser().parse_args(
+        [
+            "--kind",
+            "domvox",
+            "--calibrator",
+            "calibrate.py",
+            "--model",
+            "org/model",
+            "--input",
+            "input.txt",
+            "--output",
+            "stats.bin",
+            "--max-length",
+            "512",
+            "--device",
+            "cpu",
+        ]
+    )
+
+    assert args.kind == "domvox"
+    assert args.attn_implementation is None
 
 
 def test_discovery_includes_managed_and_pyenv_without_resolving_symlinks(tmp_path: Path):

@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 from .godzilla_gigatoken import (
+    DEFAULT_GODZILLA_PROFILE,
+    GODZILLA_SOURCE_PROFILES,
     build_godzilla_gigatoken,
     plan_godzilla_gigatoken,
     prepare_godzilla_gigatoken,
@@ -18,6 +20,12 @@ from .godzilla_gigatoken import (
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("target", type=Path, help="New or prepared combined source directory")
+    parser.add_argument(
+        "--godzilla-profile",
+        choices=tuple(profile.id for profile in GODZILLA_SOURCE_PROFILES),
+        default=DEFAULT_GODZILLA_PROFILE,
+        help="Exact reviewed Godzilla source baseline",
+    )
     parser.add_argument("--backend", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--max-jobs", type=int, default=2)
     parser.add_argument("--with-curl", action="store_true", help="Build server URL-download support")
@@ -32,7 +40,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare and qualify a pinned Godzilla v0.3.7 + Gigatoken runtime"
+        description="Prepare and qualify a reviewed Godzilla + Gigatoken runtime"
     )
     subparsers = parser.add_subparsers(dest="action", required=True)
     for action, help_text in (
@@ -69,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     planned_action = args.for_action if args.action == "plan" else args.action
     plan = plan_godzilla_gigatoken(
         args.target,
+        godzilla_profile=args.godzilla_profile,
         action=planned_action,
         backend=args.backend,
         max_jobs=args.max_jobs,
@@ -95,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             prepare_godzilla_gigatoken(plan, confirmed=args.yes)
             build_plan = plan_godzilla_gigatoken(
                 args.target,
+                godzilla_profile=args.godzilla_profile,
                 action="build",
                 backend=args.backend,
                 max_jobs=args.max_jobs,

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Pinned, opt-in Gigatoken runtime preparation for Godzilla llama.cpp.
 
-The workflow creates a new source tree from the reviewed Godzilla v0.3.7
-release.  It never patches an arbitrary checkout.  The tokenizer port is
+The workflow creates a new source tree from one of the reviewed Godzilla
+source profiles.  It never patches an arbitrary checkout.  The tokenizer port is
 selected from a hash-verified comparison of pinned upstream commits and then
 adapted to the older Godzilla CMake layout with exact, fail-closed edits.
 """
@@ -27,6 +27,8 @@ from typing import Callable, Mapping, Sequence
 GODZILLA_URL = "https://github.com/atomicmilkshake/godzilla-llama.cpp.git"
 GODZILLA_TAG = "v0.3.7"
 GODZILLA_COMMIT = "ea1e79925b588bc4492b7a9e492e8fa97dce548f"
+GODZILLA_COMPAT_COMMIT = "09214b160b402011359f0ef9d5fa8f8be1112e85"
+DEFAULT_GODZILLA_PROFILE = "v0.3.7"
 
 GIGATOKEN_URL = "https://github.com/marcelroed/gigatoken.git"
 GIGATOKEN_REF = "main"
@@ -89,6 +91,54 @@ _GIGATOKEN_TEST_REGEX = (
 
 
 @dataclass(frozen=True)
+class GodzillaSourceProfile:
+    id: str
+    label: str
+    ref: str
+    commit: str
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "label": self.label,
+            "ref": self.ref,
+            "commit": self.commit,
+            "notes": list(self.notes),
+        }
+
+
+GODZILLA_SOURCE_PROFILES = (
+    GodzillaSourceProfile(
+        id="v0.3.7",
+        label="Godzilla v0.3.7",
+        ref=GODZILLA_TAG,
+        commit=GODZILLA_COMMIT,
+        notes=("Current reviewed release baseline; includes post-09214b160 fixes and features.",),
+    ),
+    GodzillaSourceProfile(
+        id="09214b160",
+        label="Godzilla 09214b160 compatibility baseline",
+        ref=GODZILLA_COMPAT_COMMIT,
+        commit=GODZILLA_COMPAT_COMMIT,
+        notes=(
+            "Reporter-requested pre-v0.3.7 tree with KVarN and Godzilla TriAttention.",
+            "KVarN and TriAttention remain mutually exclusive in this upstream revision.",
+        ),
+    ),
+)
+
+
+def get_godzilla_source_profile(profile_id: str) -> GodzillaSourceProfile:
+    normalized = profile_id.strip().lower()
+    for profile in GODZILLA_SOURCE_PROFILES:
+        if profile.id.lower() == normalized:
+            return profile
+    choices = ", ".join(profile.id for profile in GODZILLA_SOURCE_PROFILES)
+    raise ValueError(f"Unknown Godzilla source profile {profile_id!r}; choose one of: {choices}")
+
+
+@dataclass(frozen=True)
 class RuntimeIssue:
     severity: str
     code: str
@@ -109,6 +159,7 @@ class GodzillaGigatokenPlan:
     generator: str | None
     cuda_compiler: Path | None
     fixture_dir: Path | None
+    source_profile: GodzillaSourceProfile
     commands: tuple[tuple[str, ...], ...]
     issues: tuple[RuntimeIssue, ...]
 
@@ -127,11 +178,12 @@ class GodzillaGigatokenPlan:
             "generator": self.generator,
             "cuda_compiler": str(self.cuda_compiler) if self.cuda_compiler else None,
             "fixture_dir": str(self.fixture_dir) if self.fixture_dir else None,
+            "godzilla_profile": self.source_profile.to_dict(),
             "commands": [list(command) for command in self.commands],
             "issues": [issue.to_dict() for issue in self.issues],
             "ready": self.ready,
             "pins": {
-                "godzilla": GODZILLA_COMMIT,
+                "godzilla": self.source_profile.commit,
                 "gigatoken_llama": GIGATOKEN_LLAMA_COMMIT,
                 "gigatoken": GIGATOKEN_COMMIT,
                 "rust": GIGATOKEN_TOOLCHAIN,
@@ -191,6 +243,7 @@ def _configure_command(
 def plan_godzilla_gigatoken(
     target: str | Path,
     *,
+    godzilla_profile: str = DEFAULT_GODZILLA_PROFILE,
     action: str = "prepare",
     backend: str = "cpu",
     max_jobs: int = 2,
@@ -206,6 +259,7 @@ def plan_godzilla_gigatoken(
     build_dir = target_path / f"build-gigatoken-{normalized_backend}"
     resolved_fixtures = Path(fixture_dir).expanduser().resolve() if fixture_dir else None
     issues: list[RuntimeIssue] = []
+    source_profile = get_godzilla_source_profile(godzilla_profile)
 
     if normalized_action not in {"prepare", "build", "all", "verify"}:
         issues.append(RuntimeIssue("error", "invalid_action", "Action is not supported."))
@@ -234,7 +288,10 @@ def plan_godzilla_gigatoken(
             )
         )
     if verifying and normalized_action != "all":
-        inspection = inspect_godzilla_gigatoken(target_path)
+        inspection = inspect_godzilla_gigatoken(
+            target_path,
+            expected_profile=source_profile.id,
+        )
         issues.extend(
             RuntimeIssue("error", "invalid_prepared_tree", str(message))
             for message in inspection["issues"]
@@ -271,18 +328,21 @@ def plan_godzilla_gigatoken(
             )
         )
 
-    clone = (
-        "git",
-        "clone",
-        "--config",
-        "core.autocrlf=false",
-        "--depth",
-        "1",
-        "--branch",
-        GODZILLA_TAG,
-        "--single-branch",
-        GODZILLA_URL,
-        str(target_path),
+    checkout_commands = (
+        ("git", "init", str(target_path)),
+        ("git", "-C", str(target_path), "config", "core.autocrlf", "false"),
+        ("git", "-C", str(target_path), "remote", "add", "origin", GODZILLA_URL),
+        (
+            "git",
+            "-C",
+            str(target_path),
+            "fetch",
+            "--depth",
+            "1",
+            "origin",
+            source_profile.commit,
+        ),
+        ("git", "-C", str(target_path), "checkout", "--detach", "FETCH_HEAD"),
     )
     configure = _configure_command(
         target_path,
@@ -308,7 +368,7 @@ def plan_godzilla_gigatoken(
     )
     commands: list[tuple[str, ...]] = []
     if preparing:
-        commands.append(clone)
+        commands.extend(checkout_commands)
     if compiling:
         commands.extend(
             (
@@ -321,7 +381,8 @@ def plan_godzilla_gigatoken(
         RuntimeIssue(
             "info",
             "pinned_source",
-            "Preparation uses Godzilla v0.3.7 and exact Gigatoken/Gigatoken-llama revisions; arbitrary checkouts are not patched.",
+            f"Preparation uses {source_profile.label} at {source_profile.commit} and exact "
+            "Gigatoken/Gigatoken-llama revisions; arbitrary checkouts are not patched.",
         )
     )
     if normalized_backend == "cuda":
@@ -342,6 +403,7 @@ def plan_godzilla_gigatoken(
         generator=generator,
         cuda_compiler=cuda_compiler,
         fixture_dir=resolved_fixtures,
+        source_profile=source_profile,
         commands=tuple(commands),
         issues=tuple(issues),
     )
@@ -440,6 +502,15 @@ def _git_revision(root: Path) -> str | None:
     except (OSError, RuntimeError):
         return None
     return result.stdout.decode("utf-8", errors="replace").strip()
+
+
+def _checkout_godzilla_source(root: Path, profile: GodzillaSourceProfile) -> None:
+    """Fetch only the reviewed commit into a new workflow-owned directory."""
+    _run_checked(("git", "init", str(root)))
+    _run_checked(("git", "config", "core.autocrlf", "false"), cwd=root)
+    _run_checked(("git", "remote", "add", "origin", GODZILLA_URL), cwd=root)
+    _run_checked(("git", "fetch", "--depth", "1", "origin", profile.commit), cwd=root)
+    _run_checked(("git", "checkout", "--detach", "FETCH_HEAD"), cwd=root)
 
 
 def _replace_once(path: Path, old: str, new: str) -> None:
@@ -579,24 +650,13 @@ def prepare_godzilla_gigatoken(
     target.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix=f".{target.name}.mtq-", dir=target.parent)).resolve()
     try:
-        _run_checked(
-            (
-                "git",
-                "clone",
-                "--config",
-                "core.autocrlf=false",
-                "--depth",
-                "1",
-                "--branch",
-                GODZILLA_TAG,
-                "--single-branch",
-                GODZILLA_URL,
-                str(work),
-            )
-        )
+        _checkout_godzilla_source(work, plan.source_profile)
         revision = _git_revision(work)
-        if revision != GODZILLA_COMMIT:
-            raise RuntimeError(f"Godzilla revision mismatch: expected {GODZILLA_COMMIT}, found {revision}")
+        if revision != plan.source_profile.commit:
+            raise RuntimeError(
+                "Godzilla revision mismatch: "
+                f"expected {plan.source_profile.commit}, found {revision}"
+            )
         _run_checked(("git", "apply", "--check", "--whitespace=nowarn", "-"), cwd=work, input_data=reviewed_diff)
         _run_checked(("git", "apply", "--whitespace=nowarn", "-"), cwd=work, input_data=reviewed_diff)
         _adapt_reviewed_port(work)
@@ -633,7 +693,12 @@ def prepare_godzilla_gigatoken(
 
         manifest = {
             "schema": 1,
-            "godzilla": {"url": GODZILLA_URL, "tag": GODZILLA_TAG, "commit": GODZILLA_COMMIT},
+            "godzilla": {
+                "url": GODZILLA_URL,
+                "profile": plan.source_profile.id,
+                "ref": plan.source_profile.ref,
+                "commit": plan.source_profile.commit,
+            },
             "gigatoken_llama": {
                 "url": GIGATOKEN_LLAMA_URL,
                 "base": GIGATOKEN_LLAMA_BASE,
@@ -668,7 +733,10 @@ def prepare_godzilla_gigatoken(
         if work.exists():
             _remove_created_tree(work)
         raise
-    return inspect_godzilla_gigatoken(target)
+    return inspect_godzilla_gigatoken(
+        target,
+        expected_profile=plan.source_profile.id,
+    )
 
 
 def _load_manifest(root: Path) -> dict[str, object] | None:
@@ -690,11 +758,35 @@ def _find_binary(build_dir: Path, name: str) -> Path | None:
     return None
 
 
-def inspect_godzilla_gigatoken(path: str | Path) -> dict[str, object]:
+def _profile_from_manifest(manifest: dict[str, object] | None) -> GodzillaSourceProfile | None:
+    if manifest is None or not isinstance(manifest.get("godzilla"), dict):
+        return None
+    godzilla = manifest["godzilla"]
+    assert isinstance(godzilla, dict)
+    profile_id = godzilla.get("profile")
+    if isinstance(profile_id, str):
+        try:
+            profile = get_godzilla_source_profile(profile_id)
+        except ValueError:
+            return None
+        return profile if godzilla.get("commit") == profile.commit else None
+    commit = godzilla.get("commit")
+    return next((item for item in GODZILLA_SOURCE_PROFILES if item.commit == commit), None)
+
+
+def inspect_godzilla_gigatoken(
+    path: str | Path,
+    *,
+    expected_profile: str | None = None,
+) -> dict[str, object]:
     """Validate provenance and markers in a prepared source tree."""
     root = Path(path).expanduser().resolve()
     issues: list[str] = []
     manifest = _load_manifest(root) if root.is_dir() else None
+    source_profile = _profile_from_manifest(manifest)
+    requested_profile = (
+        get_godzilla_source_profile(expected_profile) if expected_profile is not None else None
+    )
     if not root.is_dir():
         issues.append(f"Prepared source directory not found: {root}")
     if manifest is None:
@@ -702,8 +794,7 @@ def inspect_godzilla_gigatoken(path: str | Path) -> dict[str, object]:
     elif manifest.get("schema") != 1:
         issues.append("Unsupported Gigatoken runtime manifest schema.")
     elif not (
-        isinstance(manifest.get("godzilla"), dict)
-        and manifest["godzilla"].get("commit") == GODZILLA_COMMIT
+        source_profile is not None
         and isinstance(manifest.get("gigatoken"), dict)
         and manifest["gigatoken"].get("commit") == GIGATOKEN_COMMIT
         and isinstance(manifest.get("gigatoken_llama"), dict)
@@ -712,12 +803,18 @@ def inspect_godzilla_gigatoken(path: str | Path) -> dict[str, object]:
         and manifest.get("rust_toolchain") == GIGATOKEN_TOOLCHAIN
     ):
         issues.append("Prepared runtime manifest does not match the reviewed source pins.")
+    if requested_profile is not None and source_profile != requested_profile:
+        found = source_profile.id if source_profile is not None else "unknown"
+        issues.append(
+            f"Prepared runtime uses Godzilla profile {found}; expected {requested_profile.id}."
+        )
     revision = _git_revision(root) if root.is_dir() else None
     vendor = root / "vendor" / "gigatoken"
     vendor_revision = _git_revision(vendor) if vendor.is_dir() else None
-    if revision != GODZILLA_COMMIT:
-        issues.append(f"Godzilla revision must be {GODZILLA_COMMIT}; found {revision}.")
-    if revision == GODZILLA_COMMIT:
+    expected_commit = source_profile.commit if source_profile is not None else None
+    if revision != expected_commit:
+        issues.append(f"Godzilla revision must be {expected_commit}; found {revision}.")
+    if expected_commit is not None and revision == expected_commit:
         try:
             changed_output = _run_checked(
                 ("git", "diff", "--name-only", "HEAD"),
@@ -775,15 +872,22 @@ def inspect_godzilla_gigatoken(path: str | Path) -> dict[str, object]:
         "valid": not issues,
         "issues": issues,
         "manifest": manifest,
+        "godzilla_profile": source_profile.to_dict() if source_profile is not None else None,
         "godzilla_revision": revision,
         "gigatoken_revision": vendor_revision,
-        "features": {"godzilla": revision == GODZILLA_COMMIT, "gigatoken": all(item.is_file() for item in markers)},
+        "features": {
+            "godzilla": expected_commit is not None and revision == expected_commit,
+            "gigatoken": all(item.is_file() for item in markers),
+        },
     }
 
 
 def verify_godzilla_gigatoken(plan: GodzillaGigatokenPlan) -> dict[str, object]:
     """Run the differential tokenizer suites and verify the server binary."""
-    inspection = inspect_godzilla_gigatoken(plan.target)
+    inspection = inspect_godzilla_gigatoken(
+        plan.target,
+        expected_profile=plan.source_profile.id,
+    )
     if not inspection["valid"]:
         raise RuntimeError("Prepared source validation failed: " + "; ".join(inspection["issues"]))
     gigatoken_test = _find_binary(plan.build_dir, "test-gigatoken")
@@ -829,7 +933,10 @@ def build_godzilla_gigatoken(
     if not confirmed:
         raise RuntimeError("Build was not confirmed")
     if plan.action == "all":
-        inspection = inspect_godzilla_gigatoken(plan.target)
+        inspection = inspect_godzilla_gigatoken(
+            plan.target,
+            expected_profile=plan.source_profile.id,
+        )
         if not inspection["valid"]:
             raise RuntimeError("Prepare the combined source tree before building it")
     env = os.environ.copy()

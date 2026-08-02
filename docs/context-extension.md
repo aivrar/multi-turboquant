@@ -118,12 +118,12 @@ older checkout-owned PowerShell workflow remains an explicit fallback for
 compatible checkouts. Multi-TurboQuant never synthesizes unverified model
 statistics and reuses existing artifacts only after strict validation.
 
-Gigatoken may be selected only as an opt-in CPU tokenizer accelerator for the
-official calibration step. Exact full-input token-ID parity with Hugging Face is
-required before model loading. The independent `chynggi/gigatoken-llama.cpp`
-Windows x64 fork is not part of the Godzilla runtime and does not change the
-KVarN/TriAttention compatibility guardrail; a runtime port would require its own
-revision-specific integration and differential testing.
+Gigatoken may be selected as an opt-in CPU tokenizer accelerator for the
+reviewed official or domvox Python calibration step. Exact full-input token-ID
+parity with Hugging Face is required before model loading. The separate native
+runtime workflow ports the reviewed tokenizer changes onto either exact
+Godzilla v0.3.7 or `09214b160` source profile and runs differential plus legacy
+tokenizer tests. Neither path changes the KVarN/TriAttention guardrail.
 
 ## Sources
 

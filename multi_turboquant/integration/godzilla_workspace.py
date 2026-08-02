@@ -318,12 +318,15 @@ def plan_godzilla_triattention(
                 "Tokenizer backend must be transformers or gigatoken.",
             )
         )
-    elif normalized_tokenizer == "gigatoken" and normalized_mode != "official_python":
+    elif normalized_tokenizer == "gigatoken" and normalized_mode not in {
+        "official_python",
+        "domvox",
+    }:
         issues.append(
             GodzillaIssue(
                 "error",
                 "gigatoken_mode_unsupported",
-                "Gigatoken is supported only by the recommended official generate-and-convert mode; existing-stat conversion does not tokenize, and the other calibrators are not API-qualified.",
+                "Gigatoken is supported only by the reviewed official and domvox Python calibrators; existing-stat conversion does not tokenize, and the checkout-owned calibrator is not API-qualified.",
             )
         )
     ensure_script = checkout_path / "scripts" / "ensure-triattention.ps1"
@@ -570,6 +573,18 @@ def plan_godzilla_triattention(
                 "domvox TRIA v2 is adapted to Godzilla v1; validate model metadata and retrieval quality before serving.",
             )
         )
+    if (
+        not output_exists
+        and normalized_tokenizer == "gigatoken"
+        and normalized_mode in {"official_python", "domvox"}
+    ):
+        issues.append(
+            GodzillaIssue(
+                "info",
+                "gigatoken_parity_required",
+                "Gigatoken will be enabled only after exact token-ID parity passes for the selected calibration text; any mismatch stops calibration.",
+            )
+        )
 
     if (
         not output_exists
@@ -718,9 +733,19 @@ def plan_godzilla_triattention(
         and calibration_input_path is not None
         and normalized_hf is not None
     ):
+        executable = [str(python_path), str(domvox_calibrator_path)]
+        if normalized_tokenizer == "gigatoken":
+            wrapper = Path(__file__).resolve().parents[1] / "calibration" / "gigatoken_runner.py"
+            executable = [
+                str(python_path),
+                str(wrapper),
+                "--kind",
+                "domvox",
+                "--calibrator",
+                str(domvox_calibrator_path),
+            ]
         command = [
-            str(python_path),
-            str(domvox_calibrator_path),
+            *executable,
             "--model",
             normalized_hf,
             "--input",

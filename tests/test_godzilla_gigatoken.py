@@ -26,9 +26,25 @@ def test_prepare_plan_is_read_only_and_pinned(tmp_path, monkeypatch):
     assert plan.ready
     assert plan.action == "prepare"
     assert not target.exists()
-    assert plan.commands[0][0:4] == ("git", "clone", "--config", "core.autocrlf=false")
-    assert runtime.GODZILLA_TAG in plan.commands[0]
+    assert plan.commands[0] == ("git", "init", str(target.resolve()))
+    assert plan.source_profile.id == runtime.DEFAULT_GODZILLA_PROFILE
     assert plan.to_dict()["pins"]["godzilla"] == runtime.GODZILLA_COMMIT
+
+
+def test_requested_09214b160_profile_is_exact_and_read_only(tmp_path, monkeypatch):
+    _available_tools(monkeypatch)
+    target = tmp_path / "combined"
+
+    plan = runtime.plan_godzilla_gigatoken(
+        target,
+        godzilla_profile="09214b160",
+    )
+
+    assert plan.ready
+    assert plan.source_profile.commit == runtime.GODZILLA_COMPAT_COMMIT
+    assert plan.to_dict()["godzilla_profile"]["id"] == "09214b160"
+    assert any(runtime.GODZILLA_COMPAT_COMMIT in command for command in plan.commands)
+    assert not target.exists()
 
 
 def test_prepare_plan_refuses_an_existing_target(tmp_path, monkeypatch):
@@ -47,7 +63,7 @@ def test_verify_plan_does_not_require_compilers_or_nvcc(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runtime,
         "inspect_godzilla_gigatoken",
-        lambda _path: {"valid": True, "issues": []},
+        lambda _path, **_kwargs: {"valid": True, "issues": []},
     )
 
     plan = runtime.plan_godzilla_gigatoken(tmp_path, action="verify", backend="cuda")
@@ -62,7 +78,7 @@ def test_build_plan_validates_optional_fixture_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runtime,
         "inspect_godzilla_gigatoken",
-        lambda _path: {"valid": True, "issues": []},
+        lambda _path, **_kwargs: {"valid": True, "issues": []},
     )
 
     plan = runtime.plan_godzilla_gigatoken(
@@ -192,6 +208,16 @@ def test_prepare_requires_confirmation_before_network_or_files(tmp_path, monkeyp
 
 
 def test_cli_plan_can_target_build_or_verify():
-    args = build_parser().parse_args(["plan", "combined", "--for-action", "build"])
+    args = build_parser().parse_args(
+        [
+            "plan",
+            "combined",
+            "--for-action",
+            "build",
+            "--godzilla-profile",
+            "09214b160",
+        ]
+    )
     assert args.action == "plan"
     assert args.for_action == "build"
+    assert args.godzilla_profile == "09214b160"

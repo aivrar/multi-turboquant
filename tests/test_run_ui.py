@@ -533,6 +533,7 @@ def test_environment_creation_forwards_cuda_toolkit_selection(monkeypatch):
                 "local_source": None,
                 "build_from_source": False,
                 "max_jobs": 2,
+                "recreate": False,
             },
         )
     ]
@@ -838,7 +839,7 @@ def test_managed_triattention_repair_ignores_unreviewed_overrides(tmp_path, monk
     assert calls == [
         (
             "triattention",
-            {"root": str(environment_root), "max_jobs": 2},
+            {"root": str(environment_root), "max_jobs": 2, "recreate": True},
         )
     ]
 
