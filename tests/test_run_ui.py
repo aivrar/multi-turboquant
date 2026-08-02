@@ -684,7 +684,7 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
     triattention = addon_root / "triattention"
     calibrator = triattention / "scripts" / "calibrate.py"
     environment_root = tmp_path / "envs"
-    calibration_python = environment_root / "triattention" / ".venv" / "Scripts" / "python.exe"
+    calibration_python = run_ui.environment_python(environment_root / "triattention")
     model_root = tmp_path / "models"
     model = model_root / "model.gguf"
     calibration_input = model_root / "calibration.txt"
