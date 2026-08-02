@@ -313,6 +313,7 @@ BUILTIN_ENVIRONMENT_PROFILES = (
             "transformers>=4.48.1,<5",
             "accelerate",
             "sentencepiece",
+            "gigatoken==0.10.0",
             "triattention @ git+https://github.com/WeianMao/triattention.git@81552bb91eedcdda239a3ff02ca985f49f866031",
         ),
         supported_os=("linux",),
@@ -322,11 +323,18 @@ BUILTIN_ENVIRONMENT_PROFILES = (
         package_sources=(("torch", "pytorch-cu126"),),
         package_indexes=(("pytorch-cu126", "https://download.pytorch.org/whl/cu126"),),
         torch_cuda_major=12,
-        validation_modules=("torch", "transformers", "accelerate", "triattention"),
+        validation_modules=(
+            "torch",
+            "transformers",
+            "accelerate",
+            "gigatoken",
+            "triattention",
+        ),
         notes=(
             "Provides the official Python calibrator dependencies used by the Godzilla converter.",
             "The default SDPA path does not require FlashAttention.",
             "Model calibration still downloads or opens the matching Hugging Face checkpoint.",
+            "Gigatoken is opt-in and must match Hugging Face token IDs for the selected text.",
         ),
         local_source_package="triattention",
         local_source_markers=(

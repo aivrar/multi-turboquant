@@ -346,6 +346,37 @@ def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Pat
     assert "torch.cuda.mem_get_info" in commands[0][-1]
 
 
+def test_calibration_python_preflight_preserves_venv_symlink(tmp_path: Path):
+    base = tmp_path / "base-python"
+    interpreter = tmp_path / ".venv" / "bin" / "python"
+    base.write_bytes(b"python")
+    interpreter.parent.mkdir(parents=True)
+    try:
+        interpreter.symlink_to(base)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                '{"accelerate": "1.0", "cuda_available": true, "torch": "2.7.1", '
+                '"torch_cuda": "12.6", "transformers": "4.53"}\n'
+            ),
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(interpreter, runner=runner)
+
+    assert report["valid"] is True
+    assert Path(commands[0][0]) == interpreter.absolute()
+    assert Path(report["python"]) == interpreter.absolute()
+    assert Path(commands[0][0]) != base.resolve()
+
+
 def test_calibration_python_preflight_rejects_missing_cuda(tmp_path: Path):
     python = tmp_path / "python"
     python.write_bytes(b"python")
@@ -365,3 +396,71 @@ def test_calibration_python_preflight_rejects_missing_cuda(tmp_path: Path):
 
     assert report["valid"] is False
     assert "CPU-only" in report["issues"][0]
+
+
+def test_calibration_python_preflight_requires_reviewed_gigatoken(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                '{"accelerate": "1.0", "cuda_available": false, "gigatoken": "0.11.0", '
+                '"torch": "2.7.1", "torch_cuda": null, "transformers": "4.53"}\n'
+            ),
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(
+        python,
+        device="cpu",
+        tokenizer_backend="gigatoken",
+        runner=runner,
+    )
+
+    assert report["valid"] is False
+    assert "reviewed 0.10.x" in report["issues"][0]
+
+
+def test_official_calibration_uses_fail_closed_gigatoken_wrapper(tmp_path: Path, monkeypatch):
+    script = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    output = tmp_path / "model.triattention"
+    _write_official_script(script)
+    calibration_input.write_text("coherent calibration text", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        stats_output = Path(command[command.index("--output") + 1])
+        torch.save(_official_payload(), stats_output)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(
+        calibration,
+        "load_huggingface_model_metadata",
+        lambda model: {
+            "head_dim": 4,
+            "num_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rope_theta": 10_000.0,
+        },
+    )
+
+    report = calibration.calibrate_official_triattention_for_godzilla(
+        calibrator=script,
+        model="org/model",
+        input_path=calibration_input,
+        output_path=output,
+        max_length=512,
+        device="cpu",
+        tokenizer_backend="gigatoken",
+        runner=runner,
+    )
+
+    assert Path(calls[0][1]).name == "gigatoken_runner.py"
+    assert calls[0][2:4] == ["--calibrator", str(script.resolve())]
+    assert report["tokenizer_backend"] == "gigatoken"

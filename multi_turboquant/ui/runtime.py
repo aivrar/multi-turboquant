@@ -292,6 +292,7 @@ class GodzillaCalibrationJobManager:
         device: str = "cuda",
         mode: str = "official_python",
         attention_implementation: str = "sdpa",
+        tokenizer_backend: str = "transformers",
         dependency_override: bool = False,
     ) -> dict[str, object]:
         from ..integration.godzilla_workspace import plan_godzilla_triattention
@@ -312,6 +313,7 @@ class GodzillaCalibrationJobManager:
             device=device,
             mode=mode,
             attention_implementation=attention_implementation,
+            tokenizer_backend=tokenizer_backend,
             verify_dependencies=True,
             dependency_override=dependency_override,
         )
@@ -330,6 +332,7 @@ class GodzillaCalibrationJobManager:
             "model": str(plan.gguf),
             "output": str(plan.output),
             "mode": plan.mode,
+            "tokenizer_backend": getattr(plan, "tokenizer_backend", "transformers"),
             "process_limit": MAX_CONCURRENT_GODZILLA_CALIBRATIONS,
             "created_at": time.time(),
             "finished_at": None,

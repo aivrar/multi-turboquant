@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import torch
+import pytest
 
 from multi_turboquant.calibration.godzilla_triattention import (
     convert_official_triattention_stats,
@@ -89,6 +90,7 @@ def test_godzilla_checkout_inspection_reports_features_and_binary(tmp_path: Path
         "triattention_prepare": True,
         "triattention_auto_resolver": True,
         "bundled_calibrator": False,
+        "gigatoken": False,
     }
     assert inspection["preferred_binary"].endswith("llama-server.exe")
     assert any("KVarN" in note for note in inspection["notes"])
@@ -251,7 +253,7 @@ def test_godzilla_official_python_plan_does_not_require_powershell(tmp_path: Pat
     python.write_bytes(b"python")
     calibrator.parent.mkdir(parents=True)
     calibrator.write_text(
-        "AutoModelForCausalLM --max-length --attn-implementation "
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
         "q_mean_real q_mean_imag q_abs_mean",
         encoding="utf-8",
     )
@@ -277,6 +279,45 @@ def test_godzilla_official_python_plan_does_not_require_powershell(tmp_path: Pat
     assert "calibrate" in plan.command
     assert "--stats-output" in plan.command
     assert not any("PowerShell" in issue.message for issue in plan.issues)
+
+
+def test_godzilla_plan_preserves_linux_venv_python_symlink(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    base = tmp_path / "uv" / "python3.11"
+    python = tmp_path / "triattention" / ".venv" / "bin" / "python"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    base.parent.mkdir()
+    base.write_bytes(b"python")
+    python.parent.mkdir(parents=True)
+    try:
+        python.symlink_to(base)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+    calibrator.parent.mkdir(parents=True, exist_ok=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("coherent calibration text", encoding="utf-8")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+    )
+
+    assert plan.ready
+    assert plan.python == python.absolute()
+    assert Path(plan.command[0]) == python.absolute()
+    assert Path(plan.command[0]) != base.resolve()
 
 
 def test_godzilla_official_convert_plan_skips_model_forward_pass(tmp_path: Path):
@@ -421,3 +462,92 @@ def test_long_calibration_requires_acknowledgement_and_has_hard_cap(tmp_path: Pa
         allow_long_calibration=True,
     )
     assert any(issue.code == "invalid_token_count" for issue in capped.issues)
+
+
+def test_gigatoken_plan_is_official_only_and_forwards_backend(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+        tokenizer_backend="gigatoken",
+    )
+
+    assert plan.ready
+    assert plan.tokenizer_backend == "gigatoken"
+    assert plan.command[-2:] == ("--tokenizer-backend", "gigatoken")
+
+    blocked = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        mode="official_convert",
+        tokenizer_backend="gigatoken",
+    )
+    assert any(issue.code == "gigatoken_mode_unsupported" for issue in blocked.issues)
+
+
+def test_planner_identifies_calibrator_selected_in_the_wrong_mode(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibration_input = tmp_path / "calibration.txt"
+    domvox = tmp_path / "triattention_calibrate.py"
+    official = tmp_path / "scripts" / "calibrate.py"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibration_input.write_text("text", encoding="utf-8")
+    domvox.write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+    official.parent.mkdir()
+    official.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+
+    official_plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=domvox,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+    )
+    domvox_plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=official,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+        domvox_accept_lossy=True,
+    )
+
+    official_error = next(
+        issue for issue in official_plan.issues if issue.code == "invalid_official_calibrator"
+    )
+    domvox_error = next(
+        issue for issue in domvox_plan.issues if issue.code == "invalid_domvox_calibrator"
+    )
+    assert "matches domvox" in official_error.message
+    assert "recommended Generate stats + convert" in domvox_error.message

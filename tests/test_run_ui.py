@@ -356,6 +356,20 @@ def test_evaluated_ui_javascript_has_valid_syntax():
     assert result.returncode == 0, result.stderr
 
 
+def test_tokenizer_source_actions_keep_supported_calibration_modes():
+    assert (
+        "function useGigatokenPython(encodedPath) {\n"
+        "  document.getElementById('godzilla-mode').value = 'official_python';"
+        in run_ui.UI_HTML
+    )
+    assert (
+        "function useDomvoxSource(encodedCalibrator, encodedPath) {\n"
+        "  document.getElementById('godzilla-mode').value = 'domvox';\n"
+        "  document.getElementById('godzilla-tokenizer').value = 'transformers';"
+        in run_ui.UI_HTML
+    )
+
+
 def test_json_response_treats_client_disconnect_as_cancelled_request():
     class DisconnectedWriter:
         def write(self, payload):
@@ -610,7 +624,7 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
     (checkout / "common" / "arg.cpp").write_text("kvarn", encoding="utf-8")
     calibrator.parent.mkdir(parents=True)
     calibrator.write_text(
-        "AutoModelForCausalLM --max-length --attn-implementation "
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
         "q_mean_real q_mean_imag q_abs_mean",
         encoding="utf-8",
     )
@@ -685,7 +699,7 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
     (triattention / "docs" / "calibration.md").write_text("docs", encoding="utf-8")
     calibrator.parent.mkdir()
     calibrator.write_text(
-        "AutoModelForCausalLM --max-length --attn-implementation "
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
         "q_mean_real q_mean_imag q_abs_mean",
         encoding="utf-8",
     )
@@ -727,6 +741,32 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
     assert result["dependency_repair"]["available"] is True
     assert result["dependency_repair"]["profile"] == "triattention"
     assert result["resource_policy"]["max_concurrent_calibrations"] == 1
+
+
+def test_managed_triattention_python_preserves_linux_venv_symlink(tmp_path, monkeypatch):
+    environment_root = tmp_path / "envs"
+    base = tmp_path / "uv" / "python3.11"
+    interpreter = environment_root / "triattention" / ".venv" / "bin" / "python"
+    base.parent.mkdir()
+    base.write_bytes(b"python")
+    interpreter.parent.mkdir(parents=True)
+    try:
+        interpreter.symlink_to(base)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are unavailable: {exc}")
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save({**DEFAULT_UI_SETTINGS, "environment_root": str(environment_root)})
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(
+        run_ui,
+        "environment_python",
+        lambda target: target / ".venv" / "bin" / "python",
+    )
+
+    selected = run_ui._default_triattention_python(store.load())
+
+    assert selected == interpreter.absolute()
+    assert selected != base.resolve()
 
 
 def test_godzilla_plan_does_not_offer_managed_repair_for_manual_python(
@@ -881,7 +921,26 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
                 "device": "cuda",
                 "mode": "official_python",
                 "attention_implementation": "sdpa",
+                "tokenizer_backend": "transformers",
                 "dependency_override": False,
             },
         )
     ]
+
+
+def test_gigatoken_scan_uses_saved_environment_root(tmp_path, monkeypatch):
+    store = UISettingsStore(tmp_path / "ui.json")
+    environment_root = tmp_path / "envs"
+    store.save({**DEFAULT_UI_SETTINGS, "environment_root": str(environment_root)})
+    calls = []
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(
+        run_ui,
+        "scan_gigatoken_interpreters",
+        lambda **kwargs: calls.append(kwargs) or {"interpreters": []},
+    )
+
+    result = run_ui.api_scan_gigatoken({})
+
+    assert result == {"interpreters": []}
+    assert calls == [{"environment_root": str(environment_root)}]

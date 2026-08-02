@@ -68,6 +68,12 @@ automatically. Select a non-empty calibration text and the exact Hugging Face
 model. The official script may download model data and uses
 `trust_remote_code=True`; only continue with a model source you trust.
 
+Hugging Face is the default tokenizer. **Gigatoken (parity required)** is an
+opt-in choice for this official mode only. The wrapper accepts the reviewed
+0.10.x API and, before model loading, compares every token ID for the complete
+selected calibration text against Hugging Face with the same truncation and
+maximum length. It stops on any mismatch.
+
 **Convert existing official .pt** accepts stats that were already produced by
 the official script and skips the expensive model forward pass. It still loads
 the matching Hugging Face configuration to verify layer/head/RoPE metadata and
@@ -105,6 +111,15 @@ conservative two-job limit, validates Torch, Transformers, Accelerate, and
 TriAttention, and checks the preparation plan again when the background job
 finishes. A manually selected Python is not modified; repair it outside
 Multi-TurboQuant or select the managed environment.
+
+**Scan Python and pyenv environments for Gigatoken** checks at most 64
+interpreters from the current process, `PATH`, active virtual/Conda environments,
+the managed environment root, and conventional pyenv/pyenv-win roots. The scan
+does not recurse through drives and uses bounded concurrent probes. Selecting a
+compatible result fills both the Python and tokenizer controls. On Linux and
+macOS the application deliberately retains `.venv/bin/python` as a lexical path;
+following its final symlink to `uv`'s or the system's base executable would lose
+the virtual-environment prefix and cause false missing-package reports.
 
 **Generate generic starter text** creates deterministic offline text under
 `<model-root>/.mtq/calibration/` and selects it as the calibration input. It
@@ -154,8 +169,11 @@ FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
 Godzilla, and llama.cpp checkouts. The source picker can also inspect local
 folders for the six reviewed-but-blocked add-ons (`maru`,
 `speculative_prefill`, `rocketkv`, `lexico`, `adadecode`, and
-`resonance_yarn`) and for domvox TriAttention. Renamed Godzilla trees are
-recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
+`resonance_yarn`) and for domvox TriAttention. It also recognizes the separate
+`chynggi/gigatoken-llama.cpp` checkout as an informational-only experimental
+Windows x64 runtime fork. This does not make it a Godzilla build or add automatic
+compilation; porting and differential validation remain necessary. Renamed
+Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
 the expected source markers and reports version and Git remote metadata when
 available.
 
@@ -188,6 +206,8 @@ official TriAttention checkout has a separate action that fills its validated
 The domvox action fills `triattention_calibrate.py` and the experimental
 calibration mode when its `triattention_common.py` and `TRIA_FORMAT.md` markers
 are present.
+If the chosen script belongs to the other calibration mode, the planner now
+identifies the official/domvox mismatch and names the appropriate mode.
 Multi-TurboQuant does not configure or compile the CMake project automatically;
 use Godzilla's documented build process. TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1

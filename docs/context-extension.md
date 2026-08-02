@@ -118,6 +118,13 @@ older checkout-owned PowerShell workflow remains an explicit fallback for
 compatible checkouts. Multi-TurboQuant never synthesizes unverified model
 statistics and reuses existing artifacts only after strict validation.
 
+Gigatoken may be selected only as an opt-in CPU tokenizer accelerator for the
+official calibration step. Exact full-input token-ID parity with Hugging Face is
+required before model loading. The independent `chynggi/gigatoken-llama.cpp`
+Windows x64 fork is not part of the Godzilla runtime and does not change the
+KVarN/TriAttention compatibility guardrail; a runtime port would require its own
+revision-specific integration and differential testing.
+
 ## Sources
 
 - llama.cpp server documentation:
@@ -140,3 +147,7 @@ statistics and reuses existing artifacts only after strict validation.
   <https://github.com/huawei-csl/KVarN>
 - TriAttention:
   <https://arxiv.org/abs/2604.04921>
+- Gigatoken:
+  <https://github.com/marcelroed/gigatoken>
+- Gigatoken llama.cpp fork:
+  <https://github.com/chynggi/gigatoken-llama.cpp>

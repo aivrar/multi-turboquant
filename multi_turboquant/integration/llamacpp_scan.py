@@ -40,6 +40,7 @@ class LlamaCppCapabilities:
     cache_types: frozenset[str] = field(default_factory=frozenset)
     speculative_types: frozenset[str] = field(default_factory=frozenset)
     build_info: str | None = None
+    gigatoken_identified: bool = False
 
     def supports_flag(self, flag: str) -> bool:
         normalized = flag if flag.startswith("--") else f"--{flag}"
@@ -91,6 +92,12 @@ class LlamaCppCapabilities:
     def supports_props_endpoint(self) -> bool:
         return self.supports_flag("--props")
 
+    @property
+    def supports_gigatoken(self) -> bool:
+        return self.gigatoken_identified or any(
+            "gigatoken" in flag.lower() for flag in self.flags
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "binary": self.binary,
@@ -108,6 +115,7 @@ class LlamaCppCapabilities:
             "supports_speculative": self.supports_speculative,
             "supports_dflash": self.supports_dflash,
             "supports_props_endpoint": self.supports_props_endpoint,
+            "supports_gigatoken": self.supports_gigatoken,
         }
 
 
@@ -151,6 +159,7 @@ def parse_llamacpp_help(
         cache_types=cache_types,
         speculative_types=speculative_types,
         build_info=build_info,
+        gigatoken_identified="gigatoken" in lowered,
     )
 
 

@@ -187,6 +187,12 @@ Use `--root PATH` to choose another environment root and `--python VERSION` or
 `--python /path/to/python` to select an interpreter. A Python installed by
 `pyenv` works through the latter form; pyenv itself is not required.
 
+POSIX virtual-environment Python entries are preserved as lexical paths rather
+than canonicalized through their final symlink. For example,
+`.venv/bin/python` may point at a `uv` or system base executable, but invoking
+the symlink is what activates the virtual environment's prefix and packages.
+Resolving it first would silently inspect or run the wrong environment.
+
 For profiles that compile CUDA extensions, `nvcc` must use the same CUDA major
 as the profile's PyTorch build. NVIDIA driver backward compatibility does not
 make a CUDA 13 compiler interchangeable with a CUDA 12.6 PyTorch extension
@@ -214,7 +220,7 @@ eligible for the reviewed profile.
 | `lmcache` | Installable | LMCache 0.5.2, PyTorch 2.11.0 CUDA 13.0, and OpenAI 2.46.0 | Linux CUDA; imports `lmcache.c_ops`, checks Torch CUDA 13, and exposes the standalone CLI |
 | `minference` | Installable | Official v0.1.6 source commit `d76b76e`, Transformers 4.x, and PyTorch 2.7.1 CUDA 12.6 | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports Torch, Triton, and MInference |
 | `sageattention` | Installable | Audited upstream commit `d1a57a5`, PyTorch 2.7.1 CUDA 12.6, and build helpers | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports SageAttention |
-| `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers, Accelerate, and SentencePiece | Linux CUDA + Git; imports the official calibration stack and supplies the UI's automatic calibration Python |
+| `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers, Accelerate, SentencePiece, and Gigatoken 0.10.0 | Linux CUDA + Git; imports the official calibration stack and supplies the UI's automatic calibration Python |
 | `maru` | Blocked | Upstream installer builds a host C++ resource manager and expects CXL `/dev/dax` | Use upstream installation on a dedicated CXL host |
 | `speculative_prefill` | Blocked | Unpackaged monkeypatch pinned to Torch 2.4.0 and vLLM 0.6.3.post1 | Requires a separately qualified legacy source checkout |
 | `rocketkv` | Blocked | Unpackaged research snapshot under a non-commercial research license | Not exposed as a supported serving add-on |
@@ -239,6 +245,21 @@ the upstream workflow configures CXL DAX access and host services. The same read
 recognizes `domvox/triattention-ggml` for the separate experimental TriAttention
 adapter. That adapter belongs to the Godzilla calibration workflow, not to the
 installable Python add-on profiles.
+
+Gigatoken is an opt-in tokenizer backend for the official TriAttention
+calibrator, not a separate installable profile. The `triattention` profile pins
+the reviewed 0.10.0 release. Before loading model weights, the wrapper requires
+exact Hugging Face/Gigatoken token-ID parity for the complete selected text with
+matching truncation and maximum length; a mismatch aborts the run. The UI can
+inspect up to 64 interpreters across current, `PATH`, active virtual/Conda,
+managed `.mtq`, and conventional pyenv locations. Inspection is isolated,
+bounded, and does not recursively scan a drive.
+
+The source inspector also recognizes `chynggi/gigatoken-llama.cpp`. That project
+is a separate experimental Windows x64 runtime fork and is informational only:
+Multi-TurboQuant does not build it or claim that it is compatible with Godzilla.
+A Godzilla runtime integration would require a deliberate port to the target
+revision followed by the fork's differential tokenization tests.
 
 Build isolation is disabled only for the packages whose setup scripts import
 the selected Torch or require the active CUDA build context. If no compatible
@@ -324,3 +345,5 @@ native operator, not a model-specific sparse-attention configuration.
 - AdaDecode: <https://github.com/weizhepei/AdaDecode>
 - Resonance RoPE: <https://github.com/sheryc/resonance_rope>
 - domvox TriAttention: <https://github.com/domvox/triattention-ggml>
+- Gigatoken: <https://github.com/marcelroed/gigatoken>
+- Gigatoken llama.cpp fork: <https://github.com/chynggi/gigatoken-llama.cpp>

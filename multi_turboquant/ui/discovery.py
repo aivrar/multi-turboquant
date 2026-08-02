@@ -17,6 +17,32 @@ MAX_SCAN_DIRECTORIES = 5_000
 # the UI recognize a checkout without treating it as an installable Python
 # environment or executing anything from the checkout.
 _BLOCKED_ADDON_SPECS: dict[str, dict[str, object]] = {
+    "gigatoken_llamacpp": {
+        "profile": "gigatoken_llamacpp",
+        "name": "Gigatoken llama.cpp",
+        "source_url": "https://github.com/chynggi/gigatoken-llama.cpp",
+        "marker_groups": (
+            ("docs/gigatoken.md",),
+            ("cmake/gigatoken.cmake",),
+            ("src/llama-gigatoken.cpp", "src/llama-gigatoken.h"),
+            ("patches/gigatoken-llama-cpp.patch",),
+        ),
+        "summary": "Experimental Windows x64 llama.cpp fork; its C++ integration is separate from Godzilla and must be ported and differential-tested there before use.",
+        "setup": {
+            "mode": "separate_runtime_fork",
+            "automatic": False,
+            "requirements": (
+                "Windows x64, clang-cl, Ninja, CMake, and the pinned nightly Rust toolchain",
+                "The pinned Gigatoken submodule and reviewed upstream patch",
+                "A separate build tree with LLAMA_GIGATOKEN=ON",
+            ),
+            "next_steps": (
+                "Run the fork's differential tokenizer tests against its preserved C++ path.",
+                "Do not treat this checkout as a Godzilla build; port and retest its patch against the exact Godzilla revision first.",
+                "Keep the normal tokenizer fallback for unsupported vocabularies.",
+            ),
+        },
+    },
     "maru": {
         "profile": "maru",
         "name": "Maru",
@@ -400,6 +426,13 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         return "minference"
     if "sageattention" in directories and "setup.py" in files and "csrc" in directories:
         return "sageattention"
+    if (
+        (path / "docs" / "gigatoken.md").is_file()
+        and (path / "cmake" / "gigatoken.cmake").is_file()
+        and (path / "src" / "llama-gigatoken.cpp").is_file()
+        and (path / "patches" / "gigatoken-llama-cpp.patch").is_file()
+    ):
+        return "gigatoken_llamacpp"
     llama_markers = "CMakeLists.txt" in files and "ggml" in directories
     if (
         "GODZILLA_KING.md" in files
@@ -428,6 +461,8 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         "adadecode": "adadecode",
         "resonance_rope": "resonance_yarn",
         "resonance_yarn": "resonance_yarn",
+        "gigatoken_llama.cpp": "gigatoken_llamacpp",
+        "gigatoken_llamacpp": "gigatoken_llamacpp",
     }
     blocked_kind = blocked_aliases.get(blocked_name)
     if blocked_kind is not None and all(

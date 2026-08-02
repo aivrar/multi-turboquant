@@ -33,8 +33,10 @@ from multi_turboquant.calibration import (
     CALIBRATION_CORPUS_SCHEMA_VERSION,
     generate_calibration_text,
 )
+from multi_turboquant._paths import lexical_absolute_path, same_lexical_path
 from multi_turboquant.hardware import detect_platform, detect_gpus
 from multi_turboquant.optimizations.environments import environment_python, plan_environment
+from multi_turboquant.tokenizer_backends import scan_gigatoken_interpreters
 from multi_turboquant.compatibility import check_config
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
 from multi_turboquant.integration import (
@@ -512,6 +514,11 @@ def api_environment_jobs():
     return {"jobs": ENVIRONMENT_JOBS.list()}
 
 
+def api_scan_gigatoken(params):
+    settings = _saved_settings()
+    return scan_gigatoken_interpreters(environment_root=settings["environment_root"])
+
+
 def _validated_godzilla_checkout(value: str) -> Path:
     settings = _saved_settings()
     roots = [Path(item).expanduser().resolve() for item in settings["addon_roots"]]
@@ -572,12 +579,12 @@ def _validated_hf_model(value) -> str | None:
 
 def _managed_triattention_python(settings) -> Path:
     target = Path(settings["environment_root"]).expanduser().resolve() / "triattention"
-    return environment_python(target).resolve()
+    return lexical_absolute_path(environment_python(target))
 
 
 def _default_triattention_python(settings) -> Path | None:
     interpreter = _managed_triattention_python(settings)
-    return interpreter.resolve() if interpreter.is_file() else None
+    return interpreter if interpreter.is_file() else None
 
 
 def _default_triattention_calibrator(settings) -> Path | None:
@@ -633,6 +640,7 @@ def _godzilla_plan_from_params(params):
         attention_implementation=(
             _optional_text(params.get("attention_implementation")) or "sdpa"
         ),
+        tokenizer_backend=_optional_text(params.get("tokenizer_backend")) or "transformers",
         verify_dependencies=True,
         dependency_override=_truthy(params.get("dependency_override")),
     )
@@ -647,7 +655,7 @@ def api_plan_godzilla(params):
     managed_python = _managed_triattention_python(settings)
     requested_managed_python = (
         requested_python is not None
-        and Path(requested_python).expanduser().resolve() == managed_python
+        and same_lexical_path(requested_python, managed_python)
     )
     managed_python_requested = (
         (requested_python is None or requested_managed_python)
@@ -677,7 +685,7 @@ def api_plan_godzilla(params):
         "managed_python": str(managed_python),
         "message": (
             "Synchronize the pinned managed TriAttention environment and validate torch, "
-            "transformers, accelerate, and triattention before automatically rechecking "
+            "transformers, accelerate, Gigatoken, and triattention before automatically rechecking "
             "the plan."
             if not repair_errors
             else "Managed repair is unavailable: " + "; ".join(repair_errors)
@@ -748,6 +756,7 @@ def api_create_godzilla(params):
         "device": plan.device,
         "mode": plan.mode,
         "attention_implementation": plan.attention_implementation,
+        "tokenizer_backend": getattr(plan, "tokenizer_backend", "transformers"),
         "dependency_override": plan.dependency_override,
     }
     if plan.mode == "domvox":
@@ -1192,6 +1201,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="adadecode">AdaDecode</option>
             <option value="resonance_yarn">Resonance YaRN</option>
             <option value="domvox_triattention">domvox TriAttention</option>
+            <option value="gigatoken_llamacpp">Gigatoken llama.cpp</option>
           </select></div>
           <div style="grid-column:span 3"><label>Local source folder</label><input type="text" id="addon-source-path" placeholder="/path/to/checkout"></div>
         </div>
@@ -1239,8 +1249,12 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div class="form-row">
           <div><label>Calibration mode</label><select id="godzilla-mode"><option value="official_python" selected>Generate stats + convert</option><option value="official_convert">Convert existing official .pt</option><option value="godzilla_script">Godzilla checkout script</option><option value="domvox">domvox TRIA v2 (experimental)</option></select></div>
           <div><label>Attention implementation</label><select id="godzilla-attention"><option value="sdpa" selected>SDPA</option><option value="eager">Eager</option><option value="flash_attention_2">FlashAttention 2</option></select></div>
-          <div style="grid-column:span 2"><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
+          <div><label>Tokenizer backend</label><select id="godzilla-tokenizer"><option value="transformers" selected>Hugging Face (default)</option><option value="gigatoken">Gigatoken (parity required)</option></select></div>
+          <div><label>Calibration Python (optional)</label><input type="text" id="godzilla-python" placeholder="Auto: .mtq/environments/triattention"></div>
         </div>
+        <div class="setup-note">Gigatoken is opt-in for the recommended official mode. Before model loading, Multi-TurboQuant compares every token ID it produces for the selected calibration text with Hugging Face and stops on any mismatch. The separate gigatoken-llama.cpp fork is an experimental Windows x64 runtime integration, not automatically part of Godzilla.</div>
+        <div class="button-row"><button class="secondary" onclick="scanGigatoken()">Scan Python and pyenv environments for Gigatoken</button></div>
+        <div id="gigatoken-scan" class="item-list"><div class="muted">Not scanned.</div></div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>TriAttention calibrator</label><input type="text" id="godzilla-calibrator" placeholder="Official scripts/calibrate.py or domvox/triattention_calibrate.py"></div>
           <div style="grid-column:span 2"><label>Calibration text</label><input type="text" id="godzilla-input" placeholder="Non-empty plain-text file inside a saved root"><div class="button-row"><button class="secondary" onclick="generateCalibrationInput()">Generate generic starter text</button></div><div class="muted">Offline and deterministic. Use representative domain text for final quality qualification.</div></div>
@@ -1450,6 +1464,7 @@ function renderCapabilities(cap) {
     capabilityTag('KVarN', cap.supports_kvarn, 'Godzilla KVarN cache aliases'),
     capabilityTag('DFlash', cap.supports_dflash, 'Godzilla DFlash speculative flags'),
     capabilityTag('/props', cap.supports_props_endpoint, 'llama.cpp server props endpoint'),
+    capabilityTag('Gigatoken', cap.supports_gigatoken, 'Binary self-identification; source inspection is more reliable'),
   ].join('');
 }
 
@@ -1751,6 +1766,7 @@ function useTriAttentionSource(encodedCalibrator, encodedPath) {
 
 function useDomvoxSource(encodedCalibrator, encodedPath) {
   document.getElementById('godzilla-mode').value = 'domvox';
+  document.getElementById('godzilla-tokenizer').value = 'transformers';
   document.getElementById('godzilla-calibrator').value = decodeURIComponent(encodedCalibrator);
   document.getElementById('addon-source-profile').value = 'domvox_triattention';
   document.getElementById('addon-source-path').value = decodeURIComponent(encodedPath);
@@ -1850,6 +1866,7 @@ function godzillaPayload() {
     gguf: document.getElementById('godzilla-gguf').value,
     mode: document.getElementById('godzilla-mode').value,
     attention_implementation: document.getElementById('godzilla-attention').value,
+    tokenizer_backend: document.getElementById('godzilla-tokenizer').value,
     python: document.getElementById('godzilla-python').value,
     calibrator: document.getElementById('godzilla-calibrator').value,
     calibration_input: document.getElementById('godzilla-input').value,
@@ -1876,6 +1893,7 @@ function renderGodzillaPlan(plan) {
   target.innerHTML = `<div class="item"><div class="item-title"><span>TriAttention preparation</span>` +
     `<span class="status-pill status-${status}">${status}</span></div>` +
     `<div class="muted">Mode: ${escapeHtml(plan.mode)}</div>` +
+    `<div class="muted">Tokenizer: ${escapeHtml(plan.tokenizer_backend || 'transformers')}</div>` +
     `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
     `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
     (plan.resource_policy ? `<div class="muted">${escapeHtml(plan.resource_policy.message)}</div>` : '') +
@@ -1885,6 +1903,40 @@ function renderGodzillaPlan(plan) {
     ).join('') +
     repairAction +
     `${plan.command?.length ? `<div class="result-box">${escapeHtml(plan.command.join(' '))}</div>` : ''}</div>`;
+}
+
+function useGigatokenPython(encodedPath) {
+  document.getElementById('godzilla-mode').value = 'official_python';
+  document.getElementById('godzilla-python').value = decodeURIComponent(encodedPath);
+  document.getElementById('godzilla-tokenizer').value = 'gigatoken';
+  scheduleSave();
+  planGodzilla();
+}
+
+async function scanGigatoken() {
+  const target = document.getElementById('gigatoken-scan');
+  target.innerHTML = '<div class="muted">Inspecting bounded Python, managed, and pyenv locations...</div>';
+  try {
+    const result = await api('/api/tokenizers/gigatoken/scan', {});
+    if (!result.interpreters.length) {
+      target.innerHTML = '<div class="muted">No Python interpreters found in the bounded locations.</div>';
+      return;
+    }
+    target.innerHTML = result.interpreters.map(item => {
+      const status = item.compatible ? 'ready' : (item.available ? 'configured' : 'blocked');
+      const encoded = encodeURIComponent(item.python).replace(/'/g, '%27');
+      const action = item.compatible
+        ? `<button onclick="useGigatokenPython('${encoded}')">Use for calibration</button>`
+        : '';
+      return `<div class="item"><div class="item-title"><span>${escapeHtml(item.python)}</span>` +
+        `<span class="status-pill status-${status}">${item.compatible ? 'compatible' : (item.available ? 'unreviewed' : 'not installed')}</span></div>` +
+        `<div class="muted">Sources: ${escapeHtml((item.sources || []).join(', '))}; version: ${escapeHtml(item.version || 'none')}</div>` +
+        `${item.error ? `<div class="${item.available ? 'cap-warn' : 'muted'}">${escapeHtml(item.error)}</div>` : ''}` +
+        `<div class="button-row">${action}</div></div>`;
+    }).join('');
+  } catch (error) {
+    renderFailure('gigatoken-scan', error);
+  }
 }
 
 async function repairTriAttentionEnvironment() {
@@ -2269,6 +2321,7 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/discovery/addon-source": lambda: api_inspect_addon_source(body),
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
+                "/api/tokenizers/gigatoken/scan": lambda: api_scan_gigatoken(body),
                 "/api/environments/repair-triattention": lambda: api_repair_triattention_environment(body),
                 "/api/godzilla/plan": lambda: api_plan_godzilla(body),
                 "/api/godzilla/calibration-text": lambda: api_generate_calibration_text(body),

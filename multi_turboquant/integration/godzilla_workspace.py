@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .._paths import lexical_absolute_path
+
 from ..calibration.godzilla_triattention import (
     LONG_CALIBRATION_THRESHOLD,
     MAX_CALIBRATION_TOKENS,
@@ -93,6 +95,10 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
             "triattention_prepare": ensure_script.is_file(),
             "triattention_auto_resolver": resolver_script.is_file(),
             "bundled_calibrator": bundled_calibrator.is_file(),
+            "gigatoken": (
+                (root / "src" / "llama-gigatoken.cpp").is_file()
+                and (root / "cmake" / "gigatoken.cmake").is_file()
+            ),
         },
         "paths": {
             "ensure_triattention": str(ensure_script) if ensure_script.is_file() else None,
@@ -111,6 +117,11 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
             "KVarN is a runtime cache-type selection and does not use a calibration file.",
             "TriAttention is experimental, opt-in, and not recommended by the current Godzilla lab policy.",
             "TriAttention calibration is a separate manual, model-specific operation that may download the matching source model.",
+            (
+                "This checkout contains a Gigatoken C++ integration; qualify token-ID parity for the selected model."
+                if (root / "src" / "llama-gigatoken.cpp").is_file()
+                else "The Python Gigatoken calibration option does not add Gigatoken to this Godzilla runtime checkout."
+            ),
             (
                 "This checkout bundles a calibration script."
                 if bundled_calibrator.is_file()
@@ -154,6 +165,7 @@ class GodzillaCalibrationPlan:
     command: tuple[str, ...]
     environment: tuple[tuple[str, str], ...]
     issues: tuple[GodzillaIssue, ...]
+    tokenizer_backend: str = "transformers"
 
     @property
     def ready(self) -> bool:
@@ -183,6 +195,7 @@ class GodzillaCalibrationPlan:
             "domvox_accept_lossy": self.domvox_accept_lossy,
             "allow_long_calibration": self.allow_long_calibration,
             "attention_implementation": self.attention_implementation,
+            "tokenizer_backend": self.tokenizer_backend,
             "dependency_validation": self.dependency_validation,
             "dependency_override": self.dependency_override,
             "command": list(self.command),
@@ -210,6 +223,7 @@ def plan_godzilla_triattention(
     device: str = "cuda",
     mode: str = "official_python",
     attention_implementation: str = "sdpa",
+    tokenizer_backend: str = "transformers",
     verify_dependencies: bool = False,
     dependency_override: bool = False,
     dependency_runner=subprocess.run,
@@ -227,6 +241,7 @@ def plan_godzilla_triattention(
     normalized_device = device.strip().lower()
     normalized_mode = mode.strip().lower()
     normalized_attention = attention_implementation.strip().lower()
+    normalized_tokenizer = tokenizer_backend.strip().lower()
     inspection = inspect_godzilla_checkout(checkout_path)
     python_value = python or os.environ.get("TRIATTENTION_PYTHON")
     inspection_paths = inspection.get("paths")
@@ -249,7 +264,7 @@ def plan_godzilla_triattention(
     official_stats_input_value = official_stats_input or os.environ.get(
         "TRIATTENTION_OFFICIAL_STATS"
     )
-    python_path = Path(python_value).expanduser().resolve() if python_value else None
+    python_path = lexical_absolute_path(python_value) if python_value else None
     calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
     domvox_calibrator_path = (
         Path(domvox_calibrator_value).expanduser().resolve()
@@ -289,6 +304,22 @@ def plan_godzilla_triattention(
                 "error",
                 "invalid_calibration_mode",
                 "Calibration mode must be official_python, official_convert, godzilla_script, or domvox.",
+            )
+        )
+    if normalized_tokenizer not in {"transformers", "gigatoken"}:
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "invalid_tokenizer_backend",
+                "Tokenizer backend must be transformers or gigatoken.",
+            )
+        )
+    elif normalized_tokenizer == "gigatoken" and normalized_mode != "official_python":
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "gigatoken_mode_unsupported",
+                "Gigatoken is supported only by the recommended official generate-and-convert mode; existing-stat conversion does not tokenize, and the other calibrators are not API-qualified.",
             )
         )
     ensure_script = checkout_path / "scripts" / "ensure-triattention.ps1"
@@ -331,11 +362,19 @@ def plan_godzilla_triattention(
         elif normalized_mode == "official_python":
             calibrator_inspection = inspect_official_triattention_calibrator(calibrator_path)
             if not calibrator_inspection["valid"]:
+                domvox_inspection = inspect_domvox_triattention_calibrator(calibrator_path)
+                message = (
+                    "The selected script matches domvox, not the official WeianMao calibrator. "
+                    "Choose domvox mode and acknowledge its lossy Godzilla v1 conversion, or "
+                    "select WeianMao/triattention/scripts/calibrate.py."
+                    if domvox_inspection["valid"]
+                    else "; ".join(str(item) for item in calibrator_inspection["issues"])
+                )
                 issues.append(
                     GodzillaIssue(
                         "error",
                         "invalid_official_calibrator",
-                        "; ".join(str(item) for item in calibrator_inspection["issues"]),
+                        message,
                     )
                 )
     if not output_exists and normalized_mode == "domvox":
@@ -350,11 +389,20 @@ def plan_godzilla_triattention(
         else:
             domvox_inspection = inspect_domvox_triattention_calibrator(domvox_calibrator_path)
             if not domvox_inspection["valid"]:
+                official_inspection = inspect_official_triattention_calibrator(
+                    domvox_calibrator_path
+                )
+                message = (
+                    "The selected script matches the official WeianMao calibrator, not domvox. "
+                    "Choose the recommended Generate stats + convert mode."
+                    if official_inspection["valid"]
+                    else "; ".join(str(item) for item in domvox_inspection["issues"])
+                )
                 issues.append(
                     GodzillaIssue(
                         "error",
                         "invalid_domvox_calibrator",
-                        "; ".join(str(item) for item in domvox_inspection["issues"]),
+                        message,
                     )
                 )
         if not domvox_accept_lossy:
@@ -529,16 +577,20 @@ def plan_godzilla_triattention(
         python_check = inspect_calibration_python(
             python_path,
             device=normalized_device,
+            tokenizer_backend=normalized_tokenizer,
             runner=dependency_runner,
         )
         report = python_check.get("report")
         dependency_validation = report if isinstance(report, Mapping) else None
         if python_check["valid"]:
+            ready_dependencies = "torch, transformers, and accelerate"
+            if normalized_tokenizer == "gigatoken":
+                ready_dependencies += ", plus the reviewed Gigatoken backend"
             issues.append(
                 GodzillaIssue(
                     "info",
                     "calibration_dependencies_ready",
-                    "Calibration Python successfully imported torch, transformers, and accelerate.",
+                    f"Calibration Python successfully imported {ready_dependencies}.",
                 )
             )
             if dependency_validation and dependency_validation.get("cuda_total_memory_bytes"):
@@ -651,6 +703,8 @@ def plan_godzilla_triattention(
             normalized_device,
             "--attn-implementation",
             normalized_attention,
+            "--tokenizer-backend",
+            normalized_tokenizer,
         ]
     elif (
         not output_exists
@@ -741,6 +795,7 @@ def plan_godzilla_triattention(
         command=tuple(command),
         environment=tuple(environment),
         issues=tuple(issues),
+        tokenizer_backend=normalized_tokenizer,
     )
 
 

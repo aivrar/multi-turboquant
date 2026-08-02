@@ -21,6 +21,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .._paths import lexical_absolute_path
+from ..tokenizer_backends import gigatoken_version_is_reviewed
+
 
 GODZILLA_TRIATTENTION_MAGIC = 0x54524941
 GODZILLA_TRIATTENTION_VERSION = 1
@@ -36,6 +39,7 @@ LONG_CALIBRATION_THRESHOLD = 32_768
 _STAT_KEY = re.compile(r"layer(\d+)_head(\d+)")
 _OFFICIAL_CALIBRATOR_MARKERS = (
     "AutoModelForCausalLM",
+    "AutoTokenizer",
     "--max-length",
     "--attn-implementation",
     "q_mean_real",
@@ -56,24 +60,37 @@ def inspect_calibration_python(
     python: str | Path,
     *,
     device: str = "cuda",
+    tokenizer_backend: str = "transformers",
     runner=subprocess.run,
 ) -> dict[str, object]:
     """Verify the interpreter used for official calibration before model loading."""
-    interpreter = Path(python).expanduser().resolve()
+    interpreter = lexical_absolute_path(python)
     normalized_device = device.strip().lower()
+    normalized_tokenizer = tokenizer_backend.strip().lower()
     issues: list[str] = []
+    if normalized_tokenizer not in {"transformers", "gigatoken"}:
+        issues.append("Tokenizer backend must be 'transformers' or 'gigatoken'")
+        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
     if not interpreter.is_file():
         issues.append(f"Calibration Python was not found: {interpreter}")
         return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+    tokenizer_import = (
+        "import gigatoken, importlib.metadata\n"
+        "gigatoken_version = importlib.metadata.version('gigatoken')\n"
+        if normalized_tokenizer == "gigatoken"
+        else "gigatoken_version = None\n"
+    )
     script = (
         "import json\n"
         "import accelerate, torch, transformers\n"
+        f"{tokenizer_import}"
         "report = {"
         "'torch': torch.__version__, "
         "'torch_cuda': torch.version.cuda, "
         "'cuda_available': torch.cuda.is_available(), "
         "'transformers': transformers.__version__, "
-        "'accelerate': accelerate.__version__"
+        "'accelerate': accelerate.__version__, "
+        "'gigatoken': gigatoken_version"
         "}\n"
         "if report['cuda_available']:\n"
         "    try:\n"
@@ -99,8 +116,11 @@ def inspect_calibration_python(
         return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
     if result.returncode != 0:
         details = (result.stderr or result.stdout or "").strip()
+        dependencies = "torch, transformers, and accelerate"
+        if normalized_tokenizer == "gigatoken":
+            dependencies += ", plus the reviewed Gigatoken backend"
         issues.append(
-            "Calibration Python is missing or cannot import torch, transformers, or accelerate"
+            f"Calibration Python is missing or cannot import {dependencies}"
             + (f": {details}" if details else "")
         )
         return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
@@ -112,6 +132,13 @@ def inspect_calibration_python(
         return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
     if not isinstance(report, dict):
         issues.append("Calibration dependency check returned an unexpected result")
+    elif normalized_tokenizer == "gigatoken" and not gigatoken_version_is_reviewed(
+        report.get("gigatoken")
+    ):
+        issues.append(
+            "Gigatoken must use the reviewed 0.10.x compatibility API; found "
+            f"{report.get('gigatoken') or 'no importable version'}"
+        )
     elif normalized_device == "cuda":
         if not report.get("torch_cuda"):
             issues.append("Calibration Python has a CPU-only PyTorch build")
@@ -816,6 +843,7 @@ def calibrate_official_triattention_for_godzilla(
     allow_long_calibration: bool = False,
     device: str = "cuda",
     attention_implementation: str = "sdpa",
+    tokenizer_backend: str = "transformers",
     runner=subprocess.run,
 ) -> dict[str, object]:
     """Run the official calibrator, then convert and verify its output."""
@@ -836,9 +864,15 @@ def calibrate_official_triattention_for_godzilla(
     if stats_output == output:
         raise ValueError("Intermediate .pt stats and final .triattention output must differ")
     stats_output.parent.mkdir(parents=True, exist_ok=True)
+    normalized_tokenizer = tokenizer_backend.strip().lower()
+    if normalized_tokenizer not in {"transformers", "gigatoken"}:
+        raise ValueError("Tokenizer backend must be 'transformers' or 'gigatoken'")
+    executable = [sys.executable, str(script)]
+    if normalized_tokenizer == "gigatoken":
+        wrapper = Path(__file__).with_name("gigatoken_runner.py")
+        executable = [sys.executable, str(wrapper), "--calibrator", str(script)]
     command = [
-        sys.executable,
-        str(script),
+        *executable,
         "--model",
         model,
         "--input",
@@ -875,7 +909,12 @@ def calibrate_official_triattention_for_godzilla(
         rope_theta=float(model_metadata["rope_theta"]),
         expected_head_dim=int(model_metadata["head_dim"]),
     )
-    return {"command": command, "official_stats": str(stats_output), **report}
+    return {
+        "command": command,
+        "official_stats": str(stats_output),
+        "tokenizer_backend": normalized_tokenizer,
+        **report,
+    }
 
 
 def calibrate_domvox_triattention_for_godzilla(
@@ -899,7 +938,7 @@ def calibrate_domvox_triattention_for_godzilla(
     script_report = inspect_domvox_triattention_calibrator(script)
     if not script_report["valid"]:
         raise ValueError("; ".join(str(item) for item in script_report["issues"]))
-    python_path = Path(python).expanduser().resolve()
+    python_path = lexical_absolute_path(python)
     if not python_path.is_file():
         raise ValueError(f"domvox calibration Python was not found: {python_path}")
     calibration_input = Path(input_path).expanduser().resolve()
@@ -1006,6 +1045,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("eager", "sdpa", "flash_attention_2"),
         default="sdpa",
     )
+    calibrate.add_argument(
+        "--tokenizer-backend",
+        choices=("transformers", "gigatoken"),
+        default="transformers",
+        help="Tokenizer used by official calibration; Gigatoken requires exact ID parity",
+    )
 
     domvox = subparsers.add_parser(
         "domvox", help="Run domvox TRIA v2 calibration and adapt it to Godzilla v1"
@@ -1045,6 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_long_calibration=args.allow_long_calibration,
             device=args.device,
             attention_implementation=args.attn_implementation,
+            tokenizer_backend=args.tokenizer_backend,
         )
     elif args.command == "domvox":
         _validate_calibration_length(args.max_length, allow_long=args.allow_long_calibration)

@@ -58,6 +58,16 @@ build: 1234
     assert capabilities.supports_cache_type("kvarn4") is False
 
 
+def test_parse_llamacpp_help_detects_gigatoken_self_identification():
+    capabilities = parse_llamacpp_help(
+        "build: llama.cpp base\nGigatoken tokenizer enabled\n  --port N"
+    )
+
+    assert capabilities.supports_gigatoken is True
+    assert capabilities.build_info == "build: llama.cpp base"
+    assert capabilities.to_dict()["supports_gigatoken"] is True
+
+
 def test_scan_llamacpp_binary_reports_missing_binary():
     capabilities = scan_llamacpp_binary(
         "__definitely_missing_llama_server__",

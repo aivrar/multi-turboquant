@@ -249,7 +249,7 @@ def test_addon_scan_recognizes_official_triattention_checkout(tmp_path: Path):
     (checkout / "setup.py").write_text("", encoding="utf-8")
     (checkout / "docs" / "calibration.md").write_text("calibration", encoding="utf-8")
     (checkout / "scripts" / "calibrate.py").write_text(
-        "AutoModelForCausalLM --max-length --attn-implementation "
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
         "q_mean_real q_mean_imag q_abs_mean",
         encoding="utf-8",
     )
@@ -324,6 +324,28 @@ def test_addon_scan_explains_empty_configuration():
     assert result["addons"] == []
     assert result["scanned_directories"] == 0
     assert "No add-on roots" in result["warnings"][0]
+
+
+def test_addon_scan_recognizes_gigatoken_llamacpp_as_separate_runtime(tmp_path: Path):
+    source = tmp_path / "gigatoken-llama.cpp"
+    (source / "docs").mkdir(parents=True)
+    (source / "cmake").mkdir()
+    (source / "src").mkdir()
+    (source / "patches").mkdir()
+    (source / "ggml").mkdir()
+    (source / "CMakeLists.txt").write_text("project(llama)", encoding="utf-8")
+    (source / "docs" / "gigatoken.md").write_text("docs", encoding="utf-8")
+    (source / "cmake" / "gigatoken.cmake").write_text("cmake", encoding="utf-8")
+    (source / "src" / "llama-gigatoken.cpp").write_text("cpp", encoding="utf-8")
+    (source / "patches" / "gigatoken-llama-cpp.patch").write_text("patch", encoding="utf-8")
+
+    result = scan_addon_roots([tmp_path])
+
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+    assert addon["kind"] == "gigatoken_llamacpp"
+    assert addon["source"]["valid"] is True
+    assert addon["source"]["setup"]["automatic"] is False
+    assert "Godzilla" in addon["source"]["summary"]
 
 
 def test_addon_scan_does_not_classify_the_parent_as_a_python_addon(tmp_path: Path):

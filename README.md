@@ -89,8 +89,9 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 
 ## Tests
 
-270 automated test cases: 259 pass in the current Windows CPU environment and
-11 hardware-specific GPU/Metal cases skip when their devices are unavailable.
+286 automated test cases: 272 pass in the current Windows CPU environment and
+14 POSIX-symlink or hardware-specific GPU/Metal cases skip when their required
+platform or device is unavailable.
 
 | Suite | Tests | What It Proves |
 |-------|:-----:|----------------|
@@ -99,9 +100,10 @@ Every method tested on RTX 3090, real CUDA tensors, our code:
 | `test_lmcache.py` | 15 | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | 11 | Catalog isolation, dependency checks, conflicts, platform/KV validation |
 | `test_environments.py` + `test_env_cli.py` | 30 | Locked profile rendering, bounded local checkout builds, side-by-side CUDA selection, read-only plans, overwrite safety, opt-in creation, and isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 23 | Official and domvox calibration/conversion, strict format checks, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
-| `test_run_ui.py` + `test_ui_workspace.py` | 64 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
-| `test_llamacpp_scan.py` | 3 | Capability discovery and failure reporting without executing inference |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | 29 | Official and domvox calibration/conversion, strict format checks, exact-parity tokenizer selection, POSIX interpreter paths, token-length guardrails, dependency preflight, planner modes, reuse, and verified preparation output |
+| `test_run_ui.py` + `test_ui_workspace.py` | 68 | Command generation, disconnect handling, rendered JavaScript, settings, preflighted dependency repair, Gigatoken/source discovery, source-specific setup, automatic calibrator/interpreter selection, bounded discovery, managed processes, progressive disclosure, and confirmed background jobs |
+| `test_llamacpp_scan.py` | 4 | Capability discovery, Gigatoken self-identification, and failure reporting without executing inference |
+| `test_tokenizer_backends.py` | 5 | Exact token-ID parity, mismatch refusal, reviewed-version checks, and bounded managed/pyenv interpreter discovery |
 | `test_calibration_text.py` | 10 | Deterministic offline corpus generation, size/token bounds, concurrent no-clobber publication, incomplete-file refusal, and concurrent non-hardlink filesystem fallback |
 | `test_hardware.py` | 5 | Host RAM detection, discrete RAM/VRAM accounting, Apple unified-memory handling, and mixed unified/discrete capacity |
 | `test_gpu.py` | 9 | Real GPU inference, calibration generation, hardware detection |
@@ -211,6 +213,14 @@ mtq-godzilla-triattention calibrate \
   --attn-implementation sdpa
 ```
 
+Hugging Face tokenization remains the default. For an opt-in CPU tokenization
+accelerator, add `--tokenizer-backend gigatoken`. Multi-TurboQuant supports the
+reviewed Gigatoken 0.10.x API only and compares every token ID for the complete
+selected calibration text against the Hugging Face tokenizer before the model
+is loaded. Any mismatch stops calibration; it never silently substitutes a
+different token sequence. Gigatoken is available only in the recommended
+official-calibrator mode.
+
 The command retains the official stats as `model.official.pt`, loads the matching
 Hugging Face config for layer/head/RoPE metadata, writes the Godzilla artifact
 atomically, and reads it back with strict shape, index, finite-value, and file-size
@@ -229,6 +239,13 @@ re-synchronizes the pinned owned profile with a conservative two-job limit,
 validates every declared module, and automatically checks the preparation plan
 again. The managed repair ignores unrelated Python and local-source overrides;
 a manually selected Python is never modified.
+
+On Linux and macOS, the managed `.venv/bin/python` entry is intentionally kept
+as a lexical path. It is commonly a symlink; resolving it to the base `uv` or
+system interpreter would discard the virtual environment and its installed
+packages. The UI's Gigatoken scan checks a bounded set of current, `PATH`, active
+virtual/Conda, managed `.mtq`, and conventional pyenv interpreter locations and
+lets you select a compatible 0.10.x environment without scanning entire drives.
 
 This route does not use `llama-cli`. A native `llama-cli` calibration choice is
 not offered because the current Godzilla binary does not expose a real calibration
@@ -274,8 +291,15 @@ offline starter text inside the saved model root without overwriting unrelated
 files. Corpus files carry a schema and completion marker, and simultaneous
 requests cannot clobber one another or reuse a partial file. Use representative
 domain text for final quality qualification, the matching Hugging Face checkpoint
-for shape and RoPE metadata, and validate
-retrieval quality on the target model before relying on the result.
+for shape and RoPE metadata, and validate retrieval quality on the target model
+before relying on the result.
+
+The separate [`chynggi/gigatoken-llama.cpp`](https://github.com/chynggi/gigatoken-llama.cpp)
+project is recognized by the local source inspector, but it is an experimental
+Windows x64 llama.cpp fork rather than a Godzilla extension. Multi-TurboQuant
+does not build, patch, or run it automatically. Its C++ changes would need to be
+ported onto the intended Godzilla revision and differential-tested before any
+runtime compatibility claim could be made.
 
 ### Godzilla KVarN and DFlash
 
@@ -580,9 +604,10 @@ The browser UI now has two focused views:
   managed dependency checks can be repaired from the plan, and optional generic
   starter text can be generated locally. Advanced
   Quick Run controls and infrequent Setup sections are collapsed by default.
-  The source picker can inspect local folders for the six blocked add-ons and
-  the domvox checkout without importing or executing them; blocked profiles
-  remain informational and are not made installable by discovery.
+  The source picker can inspect local folders for the six blocked add-ons,
+  domvox, and the separate Gigatoken llama.cpp fork without importing or
+  executing source code; blocked and informational profiles are not made
+  installable by discovery.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -600,10 +625,11 @@ multi_turboquant/
   planner.py             Multi-agent capacity planning, any GPU count
   hardware.py            GPU and host-memory detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks
+  tokenizer_backends.py  Bounded Gigatoken interpreter discovery
   optimizations/         Optional manifests, conflict planner, isolated env manager
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
-  calibration/           Weight-norm analysis, TriAttention adapters, auto-calibrate
+  calibration/           Weight-norm analysis, TriAttention adapters, parity wrapper
   integration/           llama.cpp flags, CUDA weight-share wrapper, vLLM patch
   benchmark/             Head-to-head comparison, perplexity, VRAM profiling
 ```
@@ -638,13 +664,15 @@ This project reimplements algorithms from published research. All original repos
 | BeeLlama / DFlash lineage | [Anbeeld/beellama.cpp](https://github.com/Anbeeld/beellama.cpp) |
 | KVarN research and reference implementation | [huawei-csl/KVarN](https://github.com/huawei-csl/KVarN) |
 | Context-extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | [llama.cpp](https://github.com/ggml-org/llama.cpp), [sheryc/resonance_rope](https://github.com/sheryc/resonance_rope), published papers |
+| Gigatoken Python tokenizer accelerator | [marcelroed/gigatoken](https://github.com/marcelroed/gigatoken) |
+| Experimental Gigatoken llama.cpp integration | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
 is a command-generation, source-inspection, and preparation-workflow
 integration; context-extension
 support is a llama.cpp command-generation and capability-scanning integration
 only. Multi-TurboQuant does not vendor Godzilla, BeeLlama, KVarN, Resonance
-RoPE, LongRoPE, or llama.cpp code.
+RoPE, LongRoPE, domvox, Gigatoken, or llama.cpp code.
 
 ## Community Contributors
 
@@ -662,13 +690,16 @@ RoPE, LongRoPE, or llama.cpp code.
 | Reported remaining dependency-state and calibration workflow friction, prompting bounded local builds, installed-environment validation, and a streamlined official-stats conversion path | [@jawadala](https://github.com/jawadala) | Issue [#31](https://github.com/aivrar/multi-turboquant/issues/31) |
 | Requested domvox TRIA v2 calibration support, a 200k-token ceiling, local source selection for blocked add-ons, and a less-cluttered UI; these requests informed the experimental adapter, source inspector, progressive disclosure, and guardrails | [@jawadala](https://github.com/jawadala) | Issue [#32](https://github.com/aivrar/multi-turboquant/issues/32) |
 | Reported the incomplete TriAttention environment and current Maru layout, and suggested clearer memory accounting, calibration starter text, repair, and source-specific setup guidance | [@jawadala](https://github.com/jawadala) | Issue [#35](https://github.com/aivrar/multi-turboquant/issues/35) |
+| Reported the Linux managed-interpreter symlink regression that caused `uv`'s base Python to be selected instead of the TriAttention virtual environment | [@jawadala](https://github.com/jawadala) | Issue [#37](https://github.com/aivrar/multi-turboquant/issues/37) |
+| Suggested evaluating Gigatoken for TriAttention calibration, discovering compatible Python/pyenv environments, and reviewing the separate llama.cpp integration | [@jawadala](https://github.com/jawadala) | Issue [#38](https://github.com/aivrar/multi-turboquant/issues/38) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
 reports and concrete feature suggestions. They have materially shaped the
 Godzilla/KVarN support, context-extension tooling, optimization catalog,
 isolated dependency system, practical UI workflow, and the official and
-domvox TriAttention calibration paths.
+domvox TriAttention calibration paths, including the recent interpreter-path
+correction and parity-checked Gigatoken option.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 
