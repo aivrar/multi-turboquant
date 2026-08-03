@@ -19,6 +19,7 @@ from .godzilla_triattention import (
     inspect_domvox_triattention_file,
     inspect_official_triattention_calibrator,
     inspect_official_triattention_checkout,
+    select_compatible_calibration_python,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "inspect_domvox_triattention_file",
     "inspect_official_triattention_calibrator",
     "inspect_official_triattention_checkout",
+    "select_compatible_calibration_python",
 ]

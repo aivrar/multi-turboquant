@@ -118,6 +118,13 @@ older checkout-owned PowerShell workflow remains an explicit fallback for
 compatible checkouts. Multi-TurboQuant never synthesizes unverified model
 statistics and reuses existing artifacts only after strict validation.
 
+The UI selects calibration Python only after a bounded isolated import probe,
+does not combine packages from different environments, and rechecks the exact
+interpreter immediately before launch. domvox calibration and conversion stay
+inside that same interpreter. Missing imports stop the job and offer managed
+repair; failures produce a detailed redacted JSON report beside the requested
+artifact.
+
 Gigatoken may be selected as an opt-in CPU tokenizer accelerator for the
 reviewed official or domvox Python calibration step. Exact full-input token-ID
 parity with Hugging Face is required before model loading. The separate native

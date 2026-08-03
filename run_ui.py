@@ -25,15 +25,21 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
 from multi_turboquant import (
-    __version__, CacheConfig, CacheMethod,
-    get_method, get_preset, list_presets, registered_methods,
+    __version__,
+    CacheConfig,
+    CacheMethod,
+    get_method,
+    get_preset,
+    list_presets,
+    registered_methods,
     plan_agents,
 )
 from multi_turboquant.calibration import (
     CALIBRATION_CORPUS_SCHEMA_VERSION,
     generate_calibration_text,
+    select_compatible_calibration_python,
 )
-from multi_turboquant._paths import lexical_absolute_path, same_lexical_path
+from multi_turboquant._paths import lexical_absolute_path
 from multi_turboquant.hardware import detect_platform, detect_gpus
 from multi_turboquant.optimizations.environments import environment_python, plan_environment
 from multi_turboquant.tokenizer_backends import scan_gigatoken_interpreters
@@ -77,10 +83,19 @@ UI_MUTATIONS_ENABLED = True
 
 # ─── API Handlers ───────────────────────────────────────────────────────────────
 
+
 def api_status():
     plat = detect_platform()
-    gpus = [{"name": g.name, "vram_mb": g.vram_total_mb, "vram_used_mb": g.vram_used_mb,
-             "vendor": g.vendor, "compute": g.compute} for g in plat.gpus]
+    gpus = [
+        {
+            "name": g.name,
+            "vram_mb": g.vram_total_mb,
+            "vram_used_mb": g.vram_used_mb,
+            "vendor": g.vendor,
+            "compute": g.compute,
+        }
+        for g in plat.gpus
+    ]
     return {
         "version": __version__,
         "platform": plat.os,
@@ -106,35 +121,39 @@ def api_methods():
     for m in registered_methods():
         inst = get_method(m)
         info = inst.info()
-        methods.append({
-            "value": m.value,
-            "family": info.family.value,
-            "bits": info.bits,
-            "compression": round(16.0 / info.bits, 1),
-            "requires_calibration": info.requires_calibration,
-            "supports_asymmetric": info.supports_asymmetric,
-            "transform": info.transform_name,
-            "description": info.description,
-            "fma_count": info.fma_count,
-            "backend_only": False,
-        })
+        methods.append(
+            {
+                "value": m.value,
+                "family": info.family.value,
+                "bits": info.bits,
+                "compression": round(16.0 / info.bits, 1),
+                "requires_calibration": info.requires_calibration,
+                "supports_asymmetric": info.supports_asymmetric,
+                "transform": info.transform_name,
+                "description": info.description,
+                "fma_count": info.fma_count,
+                "backend_only": False,
+            }
+        )
     for m in BACKEND_ONLY_METHODS:
         bits = METHOD_BITS[m]
-        methods.append({
-            "value": m.value,
-            "family": METHOD_FAMILIES[m].value,
-            "bits": bits,
-            "compression": round(16.0 / bits, 1),
-            "requires_calibration": m in CALIBRATION_REQUIRED,
-            "supports_asymmetric": True,
-            "transform": "KVarN",
-            "description": (
-                "Godzilla llama.cpp target-cache alias; requires "
-                "fork_profile=godzilla and 128-slice-compatible heads."
-            ),
-            "fma_count": 0,
-            "backend_only": True,
-        })
+        methods.append(
+            {
+                "value": m.value,
+                "family": METHOD_FAMILIES[m].value,
+                "bits": bits,
+                "compression": round(16.0 / bits, 1),
+                "requires_calibration": m in CALIBRATION_REQUIRED,
+                "supports_asymmetric": True,
+                "transform": "KVarN",
+                "description": (
+                    "Godzilla llama.cpp target-cache alias; requires "
+                    "fork_profile=godzilla and 128-slice-compatible heads."
+                ),
+                "fma_count": 0,
+                "backend_only": True,
+            }
+        )
     return methods
 
 
@@ -143,15 +162,17 @@ def api_presets():
     results = []
     for name, desc in descs.items():
         preset = get_preset(name)
-        results.append({
-            "name": name,
-            "description": desc,
-            "k_method": preset.k_method.value,
-            "v_method": preset.v_method.value,
-            "triattention": preset.triattention_enabled,
-            "k_compression": round(16.0 / METHOD_BITS[preset.k_method], 1),
-            "v_compression": round(16.0 / METHOD_BITS[preset.v_method], 1),
-        })
+        results.append(
+            {
+                "name": name,
+                "description": desc,
+                "k_method": preset.k_method.value,
+                "v_method": preset.v_method.value,
+                "triattention": preset.triattention_enabled,
+                "k_compression": round(16.0 / METHOD_BITS[preset.k_method], 1),
+                "v_compression": round(16.0 / METHOD_BITS[preset.v_method], 1),
+            }
+        )
     return results
 
 
@@ -178,8 +199,7 @@ def api_benchmark(params):
     seq_len = int(params.get("seq_len", 64))
     num_heads = int(params.get("num_heads", 8))
 
-    x = torch.randn(seq_len, num_heads, head_dim, dtype=torch.float32,
-                     device=torch.device(device))
+    x = torch.randn(seq_len, num_heads, head_dim, dtype=torch.float32, device=torch.device(device))
     results = []
     for m in registered_methods():
         try:
@@ -192,31 +212,35 @@ def api_benchmark(params):
             t_dec = (time.perf_counter() - t0) * 1000
             if device == "cuda":
                 torch.cuda.synchronize()
-            cos = torch.nn.functional.cosine_similarity(
-                x.reshape(-1, head_dim), decoded.reshape(-1, head_dim), dim=-1
-            ).mean().item()
+            cos = (
+                torch.nn.functional.cosine_similarity(
+                    x.reshape(-1, head_dim), decoded.reshape(-1, head_dim), dim=-1
+                )
+                .mean()
+                .item()
+            )
             mse = (x - decoded).square().mean().item()
             packed_bytes = compressed.data.numel() * compressed.data.element_size()
             orig_bytes = seq_len * num_heads * head_dim * 2
-            results.append({
-                "method": m.value,
-                "bits": METHOD_BITS[m],
-                "encode_ms": round(t_enc, 2),
-                "decode_ms": round(t_dec, 2),
-                "cosine": round(cos, 4),
-                "mse": round(mse, 6),
-                "compression": round(orig_bytes / max(packed_bytes, 1), 1),
-                "status": "ok",
-            })
+            results.append(
+                {
+                    "method": m.value,
+                    "bits": METHOD_BITS[m],
+                    "encode_ms": round(t_enc, 2),
+                    "decode_ms": round(t_dec, 2),
+                    "cosine": round(cos, 4),
+                    "mse": round(mse, 6),
+                    "compression": round(orig_bytes / max(packed_bytes, 1), 1),
+                    "status": "ok",
+                }
+            )
         except Exception as e:
             results.append({"method": m.value, "status": f"error: {e}"})
     return {"device": device, "head_dim": head_dim, "seq_len": seq_len, "results": results}
 
 
 def _truthy(value):
-    return value is True or (
-        isinstance(value, str) and value.lower() in {"1", "true", "yes", "on"}
-    )
+    return value is True or (isinstance(value, str) and value.lower() in {"1", "true", "yes", "on"})
 
 
 def _optional_int(value, default=None):
@@ -248,8 +272,7 @@ def _command_config(params):
     v = params.get("v_method", k)
     triattention_enabled = _truthy(params.get("triattention"))
     use_custom_triattention_llamacpp = _truthy(
-        params.get("use_custom_triattention_llamacpp")
-        or params.get("custom_triattention_llamacpp")
+        params.get("use_custom_triattention_llamacpp") or params.get("custom_triattention_llamacpp")
     )
     triattention_stats_path = params.get("triattention_stats_path") or None
 
@@ -267,10 +290,12 @@ def _command_config(params):
         v_method=CacheMethod(v),
         triattention_enabled=triattention_enabled,
         triattention_budget=_optional_int(
-            params.get("triattention_budget"), 4096,
+            params.get("triattention_budget"),
+            4096,
         ),
         triattention_window=_optional_int(
-            params.get("triattention_window"), 512,
+            params.get("triattention_window"),
+            512,
         ),
         triattention_stats_path=triattention_stats_path,
         use_custom_triattention_llamacpp=use_custom_triattention_llamacpp,
@@ -283,14 +308,13 @@ def _cuda_weight_share_config(params):
         return None
     return CudaWeightShareConfig(
         enabled=True,
-        library_path=params.get("cuda_weight_share_library")
-        or "./cuda-llm-weight-share.so",
+        library_path=params.get("cuda_weight_share_library") or "./cuda-llm-weight-share.so",
         model_size_bytes=_optional_int(params.get("cuda_weight_share_model_size")),
         model_size_tolerance=_optional_int(
-            params.get("cuda_weight_share_tolerance"), 0,
+            params.get("cuda_weight_share_tolerance"),
+            0,
         ),
-        ipc_name=params.get("cuda_weight_share_ipc_name")
-        or "/cuda_vram_ipc_auto",
+        ipc_name=params.get("cuda_weight_share_ipc_name") or "/cuda_vram_ipc_auto",
         shm_wait_sec=_optional_int(params.get("cuda_weight_share_shm_wait_sec")),
         suppress_master_free=_truthy(params.get("cuda_weight_share_suppress_master_free")),
         trace_callers=_truthy(params.get("cuda_weight_share_trace")),
@@ -363,6 +387,7 @@ def api_scan_llamacpp(params):
 def api_generate_command(params):
     """Generate a llama.cpp or vLLM launch command."""
     from multi_turboquant.integration import get_llamacpp_command
+
     config = _command_config(params)
     cuda_weight_share = _cuda_weight_share_config(params)
     fork_profile = params.get("fork_profile") or params.get("llamacpp_profile") or "upstream"
@@ -396,17 +421,35 @@ def api_generate_command(params):
             command_argv = cmd
             command = shlex.join(cmd)
         except ValueError as e:
-            issues.append({"severity": "error", "method": "command",
-                           "message": str(e), "suggestion": "Fix the command inputs."})
+            issues.append(
+                {
+                    "severity": "error",
+                    "method": "command",
+                    "message": str(e),
+                    "suggestion": "Fix the command inputs.",
+                }
+            )
 
     plat = detect_platform()
     for issue in check_config(config, plat, fork_profile=fork_profile):
-        issues.append({"severity": issue.severity, "method": issue.method,
-                        "message": issue.message, "suggestion": issue.suggestion})
+        issues.append(
+            {
+                "severity": issue.severity,
+                "method": issue.method,
+                "message": issue.message,
+                "suggestion": issue.suggestion,
+            }
+        )
     if cuda_weight_share is not None:
         for warning in cuda_weight_share.validate():
-            issues.append({"severity": "error", "method": "cuda_weight_share",
-                           "message": warning, "suggestion": "Fix weight-share inputs."})
+            issues.append(
+                {
+                    "severity": "error",
+                    "method": "cuda_weight_share",
+                    "message": warning,
+                    "suggestion": "Fix weight-share inputs.",
+                }
+            )
     return {"command": command, "argv": command_argv, "issues": issues}
 
 
@@ -607,10 +650,26 @@ def _godzilla_plan_from_params(params):
     model = _validated_launch_model(str(params.get("gguf", "")))
     output = _validated_godzilla_output(params.get("output"), checkout=checkout, model=model)
     mode = _optional_text(params.get("mode")) or "official_python"
+    device = _optional_text(params.get("device")) or "cuda"
+    tokenizer_backend = _optional_text(params.get("tokenizer_backend")) or "transformers"
+    attention_implementation = _optional_text(params.get("attention_implementation")) or "sdpa"
     python = _optional_text(params.get("python"))
+    python_discovery = None
     if python is None and mode in {"official_python", "official_convert", "domvox"}:
-        discovered_python = _default_triattention_python(settings)
-        python = str(discovered_python) if discovered_python is not None else None
+        python_discovery = select_compatible_calibration_python(
+            environment_root=settings["environment_root"],
+            device=device,
+            tokenizer_backend=tokenizer_backend,
+            attention_implementation=(
+                attention_implementation if mode == "official_python" else "sdpa"
+            ),
+        )
+        selected_python = python_discovery.get("selected")
+        if isinstance(selected_python, str) and selected_python:
+            python = selected_python
+        else:
+            managed_python = _default_triattention_python(settings)
+            python = str(managed_python) if managed_python is not None else None
     calibrator = _validated_calibration_file(params.get("calibrator"), label="Calibrator")
     if calibrator is None and mode == "official_python":
         calibrator = _default_triattention_calibrator(settings)
@@ -636,14 +695,13 @@ def _godzilla_plan_from_params(params):
         allow_long_calibration=_truthy(params.get("allow_long_calibration")),
         hf_model=_validated_hf_model(params.get("hf_model")),
         n_tokens=_optional_int(params.get("n_tokens"), 2048),
-        device=_optional_text(params.get("device")) or "cuda",
+        device=device,
         mode=mode,
-        attention_implementation=(
-            _optional_text(params.get("attention_implementation")) or "sdpa"
-        ),
-        tokenizer_backend=_optional_text(params.get("tokenizer_backend")) or "transformers",
+        attention_implementation=attention_implementation,
+        tokenizer_backend=tokenizer_backend,
         verify_dependencies=True,
         dependency_override=_truthy(params.get("dependency_override")),
+        python_discovery=python_discovery,
     )
 
 
@@ -654,20 +712,13 @@ def api_plan_godzilla(params):
     settings = _saved_settings()
     requested_python = _optional_text(params.get("python"))
     managed_python = _managed_triattention_python(settings)
-    requested_managed_python = (
-        requested_python is not None
-        and same_lexical_path(requested_python, managed_python)
-    )
-    managed_python_requested = (
-        (requested_python is None or requested_managed_python)
-        and plan.mode in {"official_python", "official_convert", "domvox"}
-    )
     repairable_codes = {
         "missing_calibration_python",
         "calibration_dependencies_missing",
-        "calibration_dependency_override",
     }
-    repair_requested = managed_python_requested and bool(issue_codes & repairable_codes)
+    repair_requested = plan.mode in {"official_python", "official_convert", "domvox"} and bool(
+        issue_codes & repairable_codes
+    )
     repair_plan = None
     repair_errors: list[str] = []
     if repair_requested:
@@ -676,18 +727,17 @@ def api_plan_godzilla(params):
             root=settings["environment_root"],
             max_jobs=2,
         )
-        repair_errors = [
-            issue.message for issue in repair_plan.issues if issue.severity == "error"
-        ]
+        repair_errors = [issue.message for issue in repair_plan.issues if issue.severity == "error"]
     result["dependency_repair"] = {
         "needed": repair_requested,
         "available": repair_requested and repair_plan is not None and repair_plan.ready,
         "profile": "triattention",
         "managed_python": str(managed_python),
+        "selection_reset_required": requested_python is not None,
         "message": (
-            "Synchronize the pinned managed TriAttention environment and validate torch, "
-            "transformers, accelerate, Gigatoken, and triattention before automatically rechecking "
-            "the plan."
+            "Create or repair the pinned managed TriAttention environment, validate torch, "
+            "transformers, accelerate, Gigatoken, and triattention, clear any incompatible "
+            "custom Python selection, and then automatically recheck the plan."
             if not repair_errors
             else "Managed repair is unavailable: " + "; ".join(repair_errors)
         ),
@@ -760,6 +810,7 @@ def api_create_godzilla(params):
         "attention_implementation": plan.attention_implementation,
         "tokenizer_backend": getattr(plan, "tokenizer_backend", "transformers"),
         "dependency_override": plan.dependency_override,
+        "python_discovery": plan.python_discovery,
     }
     if plan.mode == "domvox":
         job_kwargs["domvox_calibrator"] = plan.domvox_calibrator
@@ -1264,7 +1315,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Existing official .pt statistics</label><input type="text" id="godzilla-official-stats" placeholder="Used only by Convert existing official .pt"></div>
-          <div style="grid-column:span 2"><label><input type="checkbox" id="godzilla-dependency-override"> Dependencies are installed (override failed automatic check)</label><div class="muted">Use only when the dependency scanner is wrong; this does not bypass artifact validation.</div></div>
+          <div style="grid-column:span 2"><div class="setup-note">Calibration dependencies are fail-closed. The planner checks the managed environment, active virtual environment, current/PATH Python, and bounded pyenv locations; a job cannot bypass missing imports.</div></div>
         </div>
         <div class="form-row">
           <div style="grid-column:span 2"><label>Matching Hugging Face model</label><input type="text" id="godzilla-hf-model" placeholder="org/model or local Transformers directory"></div>
@@ -1879,7 +1930,6 @@ function godzillaPayload() {
     output: document.getElementById('godzilla-output').value,
     n_tokens: document.getElementById('godzilla-tokens').value,
     device: document.getElementById('godzilla-device').value,
-    dependency_override: document.getElementById('godzilla-dependency-override').checked,
     allow_long_calibration: document.getElementById('godzilla-long-calibration').checked,
     domvox_accept_lossy: document.getElementById('godzilla-domvox-lossy').checked,
   };
@@ -1894,11 +1944,20 @@ function renderGodzillaPlan(plan) {
     : (plan.dependency_repair?.needed
       ? `<div class="cap-warn">${escapeHtml(plan.dependency_repair.message)}</div>`
       : '');
+  const discovery = plan.python_discovery;
+  const discoveryHtml = discovery
+    ? `<div class="muted">Interpreter discovery: checked ${escapeHtml(discovery.checked_count)} of ${escapeHtml(discovery.candidate_count)} bounded candidates${discovery.selected ? '; selected a validated environment' : '; none passed'}.</div>` +
+      (discovery.attempts || []).map(item =>
+        `<details><summary>${escapeHtml(item.valid ? 'compatible' : 'rejected')}: ${escapeHtml(item.python)}</summary>` +
+        `<pre class="result-box">${escapeHtml(JSON.stringify({sources: item.sources, issues: item.issues, report: item.report}, null, 2))}</pre></details>`
+      ).join('')
+    : '';
   target.innerHTML = `<div class="item"><div class="item-title"><span>TriAttention preparation</span>` +
     `<span class="status-pill status-${status}">${status}</span></div>` +
     `<div class="muted">Mode: ${escapeHtml(plan.mode)}</div>` +
     `<div class="muted">Tokenizer: ${escapeHtml(plan.tokenizer_backend || 'transformers')}</div>` +
-    `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
+      `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
+      discoveryHtml +
     `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
     (plan.resource_policy ? `<div class="muted">${escapeHtml(plan.resource_policy.message)}</div>` : '') +
     (plan.official_stats ? `<div class="muted">Official .pt stats: ${escapeHtml(plan.official_stats)}</div>` : '') +
@@ -1946,7 +2005,9 @@ async function scanGigatoken() {
 async function repairTriAttentionEnvironment() {
   if (!confirm('Repair the managed TriAttention environment? This may download packages and run reviewed package builds with the configured job limit.')) return;
   try {
-    const job = await api('/api/environments/repair-triattention', {
+      document.getElementById('godzilla-python').value = '';
+      scheduleSave();
+      const job = await api('/api/environments/repair-triattention', {
       confirm: true,
     });
     pendingTriattentionRepairJob = job.id;
@@ -2013,6 +2074,9 @@ async function refreshGodzillaJobs() {
     `<div class="muted">${escapeHtml(job.output)}</div>` +
     `${job.error ? `<div class="cap-bad">${escapeHtml(job.error)}</div>` : ''}` +
     `${job.report ? `<pre class="muted">${escapeHtml(JSON.stringify(job.report, null, 2))}</pre>` : ''}` +
+    `${job.diagnostics_path ? `<div class="muted">Redacted diagnostics: ${escapeHtml(job.diagnostics_path)}</div>` : ''}` +
+    `${job.diagnostics_write_error ? `<div class="cap-warn">Diagnostic file could not be written: ${escapeHtml(job.diagnostics_write_error)}</div>` : ''}` +
+    `${job.diagnostics ? `<details><summary>Redacted calibration diagnostic bundle</summary><pre class="result-box">${escapeHtml(JSON.stringify(job.diagnostics, null, 2))}</pre></details>` : ''}` +
     `${job.log?.length ? `<div class="result-box">${escapeHtml(job.log.slice(-40).join('\\n'))}</div>` : ''}</div>`
   ).join('');
 }
@@ -2237,6 +2301,7 @@ init().catch(error => setSaveState(`UI initialization failed: ${error.message}`,
 
 # ─── HTTP Server ────────────────────────────────────────────────────────────────
 
+
 class UIHandler(http.server.BaseHTTPRequestHandler):
     MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
@@ -2328,7 +2393,9 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
                 "/api/tokenizers/gigatoken/scan": lambda: api_scan_gigatoken(body),
-                "/api/environments/repair-triattention": lambda: api_repair_triattention_environment(body),
+                "/api/environments/repair-triattention": lambda: (
+                    api_repair_triattention_environment(body)
+                ),
                 "/api/godzilla/plan": lambda: api_plan_godzilla(body),
                 "/api/godzilla/calibration-text": lambda: api_generate_calibration_text(body),
                 "/api/godzilla/create": lambda: api_create_godzilla(body),
@@ -2362,10 +2429,7 @@ def main():
     parser.add_argument(
         "--read-only",
         action="store_true",
-        help=(
-            "Disable settings writes, environment/calibration jobs, "
-            "and model process controls"
-        ),
+        help=("Disable settings writes, environment/calibration jobs, and model process controls"),
     )
     args = parser.parse_args()
     SETTINGS_STORE = UISettingsStore(args.settings_file)

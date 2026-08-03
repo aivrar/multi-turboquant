@@ -22,7 +22,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .._paths import lexical_absolute_path
-from ..tokenizer_backends import gigatoken_version_is_reviewed
+from ..tokenizer_backends import (
+    discover_python_interpreters,
+    gigatoken_version_is_reviewed,
+)
 
 
 GODZILLA_TRIATTENTION_MAGIC = 0x54524941
@@ -36,6 +39,17 @@ _DOMVOX_VERSION = 2
 _DOMVOX_MAX_BYTES = 512 * 1024 * 1024
 MAX_CALIBRATION_TOKENS = 200_000
 LONG_CALIBRATION_THRESHOLD = 32_768
+MAX_CALIBRATION_DISCOVERY_PROBES = 8
+_CALIBRATION_REQUIRED_MODULES = (
+    "torch",
+    "transformers",
+    "accelerate",
+    "numpy",
+    "safetensors",
+    "huggingface_hub",
+    "tokenizers",
+    "sentencepiece",
+)
 _STAT_KEY = re.compile(r"layer(\d+)_head(\d+)")
 _OFFICIAL_CALIBRATOR_MARKERS = (
     "AutoModelForCausalLM",
@@ -53,6 +67,7 @@ _DOMVOX_CALIBRATOR_MARKERS = (
     "--max-length",
     "--device",
     "TRIA",
+    "triattention_common",
 )
 
 
@@ -61,46 +76,84 @@ def inspect_calibration_python(
     *,
     device: str = "cuda",
     tokenizer_backend: str = "transformers",
+    attention_implementation: str = "sdpa",
     runner=subprocess.run,
+    timeout: int = 60,
 ) -> dict[str, object]:
-    """Verify the interpreter used for official calibration before model loading."""
+    """Verify one calibration interpreter without importing it into this process."""
     interpreter = lexical_absolute_path(python)
     normalized_device = device.strip().lower()
     normalized_tokenizer = tokenizer_backend.strip().lower()
+    normalized_attention = attention_implementation.strip().lower()
     issues: list[str] = []
+    required_modules = list(_CALIBRATION_REQUIRED_MODULES)
+    if normalized_attention == "flash_attention_2":
+        required_modules.append("flash_attn")
+    if normalized_tokenizer == "gigatoken":
+        required_modules.append("gigatoken")
+
+    def unavailable() -> dict[str, object]:
+        return {
+            "python": str(interpreter),
+            "python_resolved": str(interpreter.resolve()),
+            "valid": False,
+            "compatible": False,
+            "required_modules": required_modules,
+            "report": None,
+            "issues": issues,
+        }
+
+    if normalized_device not in {"cuda", "cpu"}:
+        issues.append("Calibration device must be 'cuda' or 'cpu'")
+        return unavailable()
     if normalized_tokenizer not in {"transformers", "gigatoken"}:
         issues.append("Tokenizer backend must be 'transformers' or 'gigatoken'")
-        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+        return unavailable()
+    if normalized_attention not in {"eager", "sdpa", "flash_attention_2"}:
+        issues.append("Attention implementation must be 'eager', 'sdpa', or 'flash_attention_2'")
+        return unavailable()
+    if normalized_attention == "flash_attention_2" and normalized_device != "cuda":
+        issues.append("flash_attention_2 calibration requires the CUDA device")
+        return unavailable()
     if not interpreter.is_file():
         issues.append(f"Calibration Python was not found: {interpreter}")
-        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
-    tokenizer_import = (
-        "import gigatoken, importlib.metadata\n"
-        "gigatoken_version = importlib.metadata.version('gigatoken')\n"
-        if normalized_tokenizer == "gigatoken"
-        else "gigatoken_version = None\n"
-    )
+        return unavailable()
     script = (
-        "import json\n"
-        "import accelerate, torch, transformers\n"
-        f"{tokenizer_import}"
-        "report = {"
-        "'torch': torch.__version__, "
-        "'torch_cuda': torch.version.cuda, "
-        "'cuda_available': torch.cuda.is_available(), "
-        "'transformers': transformers.__version__, "
-        "'accelerate': accelerate.__version__, "
-        "'gigatoken': gigatoken_version"
-        "}\n"
-        "if report['cuda_available']:\n"
+        "import importlib, importlib.metadata, json, platform, sys, traceback\n"
+        f"required_modules = {required_modules!r}\n"
+        "report = {'runtime_executable': sys.executable, 'prefix': sys.prefix, "
+        "'base_prefix': sys.base_prefix, 'python_version': sys.version, "
+        "'platform': platform.platform(), 'modules': {}}\n"
+        "loaded = {}\n"
+        "for name in required_modules:\n"
         "    try:\n"
-        "        device = torch.cuda.current_device()\n"
-        "        free_bytes, total_bytes = torch.cuda.mem_get_info(device)\n"
-        "        report.update({'cuda_device': torch.cuda.get_device_name(device), "
-        "'cuda_device_index': device, 'cuda_free_memory_bytes': free_bytes, "
-        "'cuda_total_memory_bytes': total_bytes})\n"
+        "        module = importlib.import_module(name)\n"
+        "        loaded[name] = module\n"
+        "        version = getattr(module, '__version__', None)\n"
+        "        if version is None:\n"
+        "            try:\n"
+        "                version = importlib.metadata.version(name.replace('_', '-'))\n"
+        "            except importlib.metadata.PackageNotFoundError:\n"
+        "                version = 'unknown'\n"
+        "        report['modules'][name] = {'status': 'ok', 'version': str(version)}\n"
+        "        report[name] = str(version)\n"
         "    except Exception as exc:\n"
-        "        report['cuda_memory_error'] = f'{type(exc).__name__}: {exc}'\n"
+        "        report['modules'][name] = {'status': 'error', "
+        "'error': f'{type(exc).__name__}: {exc}', "
+        "'traceback': traceback.format_exc(limit=8)}\n"
+        "torch = loaded.get('torch')\n"
+        "if torch is not None:\n"
+        "    report['torch_cuda'] = torch.version.cuda\n"
+        "    report['cuda_available'] = torch.cuda.is_available()\n"
+        "    if report['cuda_available']:\n"
+        "        try:\n"
+        "            device_index = torch.cuda.current_device()\n"
+        "            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)\n"
+        "            report.update({'cuda_device': torch.cuda.get_device_name(device_index), "
+        "'cuda_device_index': device_index, 'cuda_free_memory_bytes': free_bytes, "
+        "'cuda_total_memory_bytes': total_bytes})\n"
+        "        except Exception as exc:\n"
+        "            report['cuda_memory_error'] = f'{type(exc).__name__}: {exc}'\n"
         "print(json.dumps(report, sort_keys=True))\n"
     )
     try:
@@ -109,46 +162,147 @@ def inspect_calibration_python(
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         issues.append(f"Calibration dependency check could not run: {exc}")
-        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+        return unavailable()
     if result.returncode != 0:
         details = (result.stderr or result.stdout or "").strip()
-        dependencies = "torch, transformers, and accelerate"
-        if normalized_tokenizer == "gigatoken":
-            dependencies += ", plus the reviewed Gigatoken backend"
         issues.append(
-            f"Calibration Python is missing or cannot import {dependencies}"
+            "Calibration Python dependency probe exited before returning a report"
             + (f": {details}" if details else "")
         )
-        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+        return unavailable()
     output_lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
     try:
         report = json.loads(output_lines[-1])
     except (IndexError, json.JSONDecodeError) as exc:
         issues.append(f"Calibration dependency check returned invalid output: {exc}")
-        return {"python": str(interpreter), "valid": False, "report": None, "issues": issues}
+        return unavailable()
     if not isinstance(report, dict):
         issues.append("Calibration dependency check returned an unexpected result")
-    elif normalized_tokenizer == "gigatoken" and not gigatoken_version_is_reviewed(
-        report.get("gigatoken")
+    else:
+        modules = report.get("modules")
+        if not isinstance(modules, dict):
+            issues.append("Calibration dependency check did not report module results")
+        else:
+            for module_name in required_modules:
+                module_report = modules.get(module_name)
+                if not isinstance(module_report, dict) or module_report.get("status") != "ok":
+                    detail = (
+                        module_report.get("error")
+                        if isinstance(module_report, dict)
+                        else "no module result"
+                    )
+                    issues.append(f"{module_name} import failed: {detail}")
+    if (
+        isinstance(report, dict)
+        and normalized_tokenizer == "gigatoken"
+        and not gigatoken_version_is_reviewed(report.get("gigatoken"))
     ):
         issues.append(
             "Gigatoken must use the reviewed 0.10.x compatibility API; found "
             f"{report.get('gigatoken') or 'no importable version'}"
         )
-    elif normalized_device == "cuda":
+    if (
+        isinstance(report, dict)
+        and normalized_device == "cuda"
+        and not any(issue.startswith("torch import failed:") for issue in issues)
+    ):
         if not report.get("torch_cuda"):
             issues.append("Calibration Python has a CPU-only PyTorch build")
         elif report.get("cuda_available") is not True:
             issues.append("Calibration Python cannot access CUDA")
     return {
         "python": str(interpreter),
+        "python_resolved": str(interpreter.resolve()),
         "valid": not issues,
+        "compatible": not issues,
+        "required_modules": required_modules,
         "report": report if isinstance(report, dict) else None,
         "issues": issues,
+    }
+
+
+def _calibration_candidate_priority(
+    candidate: Mapping[str, object],
+    *,
+    environment_root: str | Path | None,
+) -> tuple[int, str]:
+    path = lexical_absolute_path(str(candidate.get("python", "")))
+    sources = {str(item) for item in candidate.get("sources", [])}
+    managed_triattention = None
+    if environment_root is not None:
+        root = lexical_absolute_path(environment_root)
+        managed_triattention = root / "triattention" / ".venv"
+    if managed_triattention is not None and path.is_relative_to(managed_triattention):
+        priority = 0
+    elif sources & {"virtual_env", "conda_prefix"}:
+        priority = 1
+    elif "current" in sources:
+        priority = 2
+    elif "managed" in sources:
+        priority = 3
+    elif "PATH" in sources:
+        priority = 4
+    else:
+        priority = 5
+    return priority, os.path.normcase(str(path))
+
+
+def select_compatible_calibration_python(
+    *,
+    environment_root: str | Path | None = None,
+    home: str | Path | None = None,
+    environ: dict[str, str] | None = None,
+    device: str = "cuda",
+    tokenizer_backend: str = "transformers",
+    attention_implementation: str = "sdpa",
+    runner=subprocess.run,
+    max_probes: int = MAX_CALIBRATION_DISCOVERY_PROBES,
+) -> dict[str, object]:
+    """Select the first validated interpreter from bounded conventional locations."""
+    if max_probes < 1:
+        raise ValueError("max_probes must be at least 1")
+    candidates = discover_python_interpreters(
+        environment_root=environment_root,
+        home=home,
+        environ=environ,
+    )
+    ordered = sorted(
+        candidates,
+        key=lambda item: _calibration_candidate_priority(
+            item,
+            environment_root=environment_root,
+        ),
+    )
+    attempts: list[dict[str, object]] = []
+    selected: str | None = None
+    for candidate in ordered[:max_probes]:
+        inspection = inspect_calibration_python(
+            str(candidate["python"]),
+            device=device,
+            tokenizer_backend=tokenizer_backend,
+            attention_implementation=attention_implementation,
+            runner=runner,
+            timeout=20,
+        )
+        inspection["sources"] = list(candidate.get("sources", []))
+        attempts.append(inspection)
+        if inspection["valid"]:
+            selected = str(inspection["python"])
+            break
+    return {
+        "schema": 1,
+        "selected": selected,
+        "candidate_count": len(ordered),
+        "checked_count": len(attempts),
+        "probe_limit": max_probes,
+        "truncated": len(ordered) > max_probes and selected is None,
+        "bounded": True,
+        "locations": ["managed", "active venv/conda", "current", "PATH", "pyenv"],
+        "attempts": attempts,
     }
 
 
@@ -161,7 +315,9 @@ def inspect_official_triattention_checkout(path: str | Path) -> dict[str, object
         "triattention": (root / "triattention").is_dir(),
         "calibration_docs": (root / "docs" / "calibration.md").is_file(),
     }
-    issues = [f"Missing TriAttention marker: {name}" for name, found in markers.items() if not found]
+    issues = [
+        f"Missing TriAttention marker: {name}" for name, found in markers.items() if not found
+    ]
     if calibrator.is_file():
         script_inspection = inspect_official_triattention_calibrator(calibrator)
         issues.extend(str(item) for item in script_inspection["issues"])
@@ -228,8 +384,12 @@ def inspect_domvox_triattention_calibrator(path: str | Path) -> dict[str, object
             "Script does not match the reviewed domvox calibration interface; missing "
             + ", ".join(missing)
         )
+    common = calibrator.parent / "triattention_common.py"
+    if calibrator.is_file() and not common.is_file():
+        issues.append(f"domvox calibration helper not found: {common}")
     return {
         "path": str(calibrator),
+        "common": str(common),
         "valid": not issues,
         "issues": issues,
     }
@@ -308,9 +468,7 @@ def _float_vector(value: Any, *, key: str, field: str, expected: int):
     except (TypeError, ValueError, RuntimeError) as exc:
         raise ValueError(f"{key}.{field} is not a numeric vector") from exc
     if tensor.numel() != expected:
-        raise ValueError(
-            f"{key}.{field} has {tensor.numel()} values; expected {expected}"
-        )
+        raise ValueError(f"{key}.{field} has {tensor.numel()} values; expected {expected}")
     if not bool(torch.isfinite(tensor).all()):
         raise ValueError(f"{key}.{field} contains NaN or infinite values")
     return tensor
@@ -638,9 +796,12 @@ def convert_domvox_triattention_stats(
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary_name: str | None = None
     try:
-        with source.open("rb") as source_handle, tempfile.NamedTemporaryFile(
-            mode="wb", dir=output.parent, prefix=f".{output.name}.", suffix=".tmp", delete=False
-        ) as handle:
+        with (
+            source.open("rb") as source_handle,
+            tempfile.NamedTemporaryFile(
+                mode="wb", dir=output.parent, prefix=f".{output.name}.", suffix=".tmp", delete=False
+            ) as handle,
+        ):
             temporary_name = handle.name
             handle.write(
                 _HEADER.pack(
@@ -854,7 +1015,9 @@ def calibrate_official_triattention_for_godzilla(
         raise ValueError("; ".join(str(item) for item in script_report["issues"]))
     calibration_input = Path(input_path).expanduser().resolve()
     if not calibration_input.is_file() or calibration_input.stat().st_size == 0:
-        raise ValueError(f"Calibration input must be a non-empty plain-text file: {calibration_input}")
+        raise ValueError(
+            f"Calibration input must be a non-empty plain-text file: {calibration_input}"
+        )
     output = Path(output_path).expanduser().resolve()
     stats_output = (
         Path(stats_output_path).expanduser().resolve()
@@ -888,7 +1051,9 @@ def calibrate_official_triattention_for_godzilla(
     ]
     result = runner(command, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f"Official TriAttention calibration failed with exit code {result.returncode}")
+        raise RuntimeError(
+            f"Official TriAttention calibration failed with exit code {result.returncode}"
+        )
     if not stats_output.is_file():
         raise RuntimeError(f"Official calibrator did not create {stats_output}")
     model_metadata = load_huggingface_model_metadata(model)
@@ -896,7 +1061,10 @@ def calibrate_official_triattention_for_godzilla(
     metadata = payload.get("metadata")
     if not isinstance(metadata, Mapping):
         raise ValueError("Official calibrator output is missing metadata")
-    if _require_positive_int(metadata.get("head_dim"), "metadata.head_dim") != model_metadata["head_dim"]:
+    if (
+        _require_positive_int(metadata.get("head_dim"), "metadata.head_dim")
+        != model_metadata["head_dim"]
+    ):
         raise ValueError("Official stats head_dim does not match the Hugging Face model config")
     display_name = model.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
     report = convert_official_triattention_stats(
@@ -944,7 +1112,9 @@ def calibrate_domvox_triattention_for_godzilla(
         raise ValueError(f"domvox calibration Python was not found: {python_path}")
     calibration_input = Path(input_path).expanduser().resolve()
     if not calibration_input.is_file() or calibration_input.stat().st_size == 0:
-        raise ValueError(f"Calibration input must be a non-empty plain-text file: {calibration_input}")
+        raise ValueError(
+            f"Calibration input must be a non-empty plain-text file: {calibration_input}"
+        )
     output = Path(output_path).expanduser().resolve()
     stats_output = (
         Path(stats_output_path).expanduser().resolve()
@@ -983,7 +1153,9 @@ def calibrate_domvox_triattention_for_godzilla(
     ]
     result = runner(command, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f"domvox TriAttention calibration failed with exit code {result.returncode}")
+        raise RuntimeError(
+            f"domvox TriAttention calibration failed with exit code {result.returncode}"
+        )
     if not stats_output.is_file():
         raise RuntimeError(f"domvox calibrator did not create {stats_output}")
     model_metadata = load_huggingface_model_metadata(model)

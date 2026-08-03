@@ -103,7 +103,7 @@ Metal cases skip when their required device is unavailable.
 | `test_lmcache.py` | LMCache connector payloads, commands, version and input validation |
 | `test_optimizations.py` | Catalog isolation, add-on dependencies, conflicts, and platform/KV/architecture validation |
 | `test_environments.py` + `test_env_cli.py` | Locked profiles, Debian detection, clean repair/rollback, redacted diagnostics, local builds, CUDA selection, overwrite safety, and isolated validation |
-| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | Official and domvox calibration/conversion, fail-closed tokenizer parity, interpreter paths, length guardrails, preflight, reuse, and artifact validation |
+| `test_godzilla_workspace.py` + `test_godzilla_triattention.py` | Official and domvox calibration/conversion, fail-closed tokenizer parity, bounded compatible-interpreter discovery, final preflight, redacted failure diagnostics, length guardrails, reuse, and artifact validation |
 | `test_godzilla_gigatoken.py` | Exact Godzilla source profiles, source pins, confirmation, reviewed-diff filtering, optional fixtures, build/verify boundaries, and tree integrity |
 | `test_weight_share.py` | Exact source provenance, Linux build planning, ELF/symbol/dependency validation, reconnaissance rules, and safe launch configuration |
 | `test_run_ui.py` + `test_ui_workspace.py` | Command generation, settings, dependency repair, discovery, source-specific setup, bounded background work, managed process cleanup, and confirmed jobs |
@@ -232,7 +232,17 @@ validation. An existing official payload can be converted separately with
 
 The Setup & Add-ons view recognizes the official checkout, can build its
 isolated calibration environment from that directory with `MAX_JOBS=2`, and
-automatically uses the validated interpreter. Its second official mode converts
+automatically uses a validated interpreter. When no Python is selected, it
+probes at most eight candidates in a deterministic order: the owned
+TriAttention environment, an active virtual/Conda environment, the current
+interpreter, other managed environments, `PATH`, and conventional pyenv roots.
+Each candidate is launched in isolation and must import Torch, Transformers,
+Accelerate, NumPy, Safetensors, Hugging Face Hub, Tokenizers, and SentencePiece;
+Gigatoken or FlashAttention is additionally required only when that option is
+actually selected. Packages are never borrowed through cross-environment
+`sys.path` or `site-packages` injection.
+
+Its second official mode converts
 an existing `.pt` payload without repeating the model forward pass. If the
 managed interpreter is incomplete—for example, it cannot import `accelerate`—
 the preparation plan offers a confirmed **Repair TriAttention dependencies**
@@ -240,7 +250,19 @@ action. It first checks that the host can create the reviewed environment, then
 re-synchronizes the pinned owned profile with a conservative two-job limit,
 validates every declared module, and automatically checks the preparation plan
 again. The managed repair ignores unrelated Python and local-source overrides;
-a manually selected Python is never modified.
+a manually selected Python is never modified. A known missing import cannot be
+bypassed by a dependency override, and the exact selected interpreter is
+checked again immediately before execution so a changed or removed environment
+cannot start calibration.
+
+If a background calibration still fails, the job view shows the full redacted
+diagnostic bundle and writes an atomic JSON copy next to the requested output as
+`<output>.<job-id>.diagnostics.json`. It includes the exact command and working
+directory, selected and host Python paths/prefixes, per-module import results and
+tracebacks, source revisions, relevant input/output path state, bounded
+interpreter discovery, CUDA/VRAM and toolchain state, disk space, OS details,
+log tails, and recovery guidance. Credential assignments, bearer tokens,
+Hugging Face tokens, and credentials embedded in URLs are redacted.
 
 On Linux and macOS, the managed `.venv/bin/python` entry is intentionally kept
 as a lexical path. It is commonly a symlink; resolving it to the base `uv` or
@@ -264,8 +286,10 @@ passed directly to Godzilla.
 The Setup view and CLI also recognize a reviewed `domvox/triattention-ggml`
 checkout. Its `triattention_calibrate.py` output is a distinct TRIA v2 binary,
 not a Godzilla artifact. The experimental adapter validates the TRIA header,
-model dimensions, RoPE metadata, finite values, and exact file size before
-writing a Godzilla v1 `.triattention` file:
+the required sibling `triattention_common.py`, model dimensions, RoPE metadata,
+finite values, and exact file size before writing a Godzilla v1
+`.triattention` file. Both calibration and conversion run under the exact
+preflighted Python rather than returning to the UI's host interpreter:
 
 ```bash
 mtq-godzilla-triattention domvox \
@@ -784,6 +808,7 @@ runtime workflow clones exact upstream revisions into a separate target.
 | Suggested evaluating Gigatoken for TriAttention calibration, discovering compatible Python/pyenv environments, and reviewing the separate llama.cpp integration | [@jawadala](https://github.com/jawadala) | Issue [#38](https://github.com/aivrar/multi-turboquant/issues/38) |
 | Requested a direct Gigatoken tokenizer path for Godzilla runtime/inference, prompting the pinned combined-source workflow and differential qualification suite | [@jawadala](https://github.com/jawadala) | Issue [#39](https://github.com/aivrar/multi-turboquant/issues/39) |
 | Requested Debian 12/13 hardening, deeper diagnostics, the exact Godzilla `09214b160` compatibility profile, domvox/Gigatoken support, and reviewed CUDA weight-share source handling | [@jawadala](https://github.com/jawadala) | Issue [#40](https://github.com/aivrar/multi-turboquant/issues/40) |
+| Reported a domvox calibration launch under an interpreter without Torch, prompting compatible-environment discovery, fail-closed final preflight, exact-environment conversion, and detailed redacted failure bundles | [@jawadala](https://github.com/jawadala) | Issue [#42](https://github.com/aivrar/multi-turboquant/issues/42) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue

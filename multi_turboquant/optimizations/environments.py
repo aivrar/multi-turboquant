@@ -474,17 +474,16 @@ def inspect_profile_source(profile_id: str, path: str | Path) -> dict[str, objec
         }
 
     resolved = Path(raw_path).expanduser().resolve()
-    markers = {
-        marker: (resolved / marker).exists()
-        for marker in profile.local_source_markers
-    }
+    markers = {marker: (resolved / marker).exists() for marker in profile.local_source_markers}
     issues: list[str] = []
     if not supported:
         issues.append(f"{profile.name} does not support installation from a local checkout.")
     if not resolved.is_dir():
         issues.append(f"Local source checkout is not a directory: {resolved}")
     else:
-        issues.extend(f"Missing reviewed marker: {marker}" for marker, found in markers.items() if not found)
+        issues.extend(
+            f"Missing reviewed marker: {marker}" for marker, found in markers.items() if not found
+        )
     return {
         "profile": profile.id,
         "package": profile.local_source_package,
@@ -549,7 +548,7 @@ def read_os_release(path: str | Path = "/etc/os-release") -> dict[str, str]:
             continue
         if len(value) >= 2 and value[:1] == value[-1:] and value.startswith(("'", '"')):
             value = value[1:-1]
-        values[key] = value.replace(r"\n", "\n").replace(r'\"', '"').replace(r"\\", "\\")
+        values[key] = value.replace(r"\n", "\n").replace(r"\"", '"').replace(r"\\", "\\")
     return values
 
 
@@ -575,9 +574,7 @@ def _cuda_toolkit_paths(cuda_toolkit: str | Path | None) -> tuple[Path | None, P
     return root, nvcc
 
 
-def detect_environment_context(
-    *, cuda_toolkit: str | Path | None = None
-) -> EnvironmentContext:
+def detect_environment_context(*, cuda_toolkit: str | Path | None = None) -> EnvironmentContext:
     """Detect only the host facts needed by the environment planner."""
     from ..hardware import detect_platform
 
@@ -665,9 +662,7 @@ class EnvironmentPlan:
                 str(self.cuda_toolkit_root) if self.cuda_toolkit_root is not None else None
             ),
             "cuda_toolkit_version": (
-                list(self.cuda_toolkit_version)
-                if self.cuda_toolkit_version is not None
-                else None
+                list(self.cuda_toolkit_version) if self.cuda_toolkit_version is not None else None
             ),
             "local_source": str(self.local_source) if self.local_source is not None else None,
             "local_source_package": (
@@ -703,7 +698,9 @@ def render_profile_project(
     """Render the independent uv project used to lock one profile."""
     if not profile.installable:
         raise ValueError(f"Dependency profile {profile.id!r} is blocked")
-    selected_source = Path(local_source).expanduser().resolve() if local_source is not None else None
+    selected_source = (
+        Path(local_source).expanduser().resolve() if local_source is not None else None
+    )
     if selected_source is not None and profile.local_source_package is None:
         raise ValueError(f"Dependency profile {profile.id!r} has no reviewed local source")
     local_package = _normalized_package_name(profile.local_source_package or "")
@@ -1153,9 +1150,7 @@ def _plan_child_environment(plan: EnvironmentPlan) -> dict[str, str]:
         child_environment["CUDA_HOME"] = toolkit_root
         child_environment["CUDA_PATH"] = toolkit_root
         child_environment["PATH"] = (
-            str(plan.cuda_toolkit_root / "bin")
-            + os.pathsep
-            + child_environment.get("PATH", "")
+            str(plan.cuda_toolkit_root / "bin") + os.pathsep + child_environment.get("PATH", "")
         )
     return child_environment
 
@@ -1205,9 +1200,7 @@ def synchronize_environment(
         if len(detail) > 4000:
             detail = "..." + detail[-3997:]
         rollback = f" ({'; '.join(rollback_notes)})" if rollback_notes else ""
-        raise RuntimeError(
-            f"uv sync failed with exit code {result.returncode}{rollback}: {detail}"
-        )
+        raise RuntimeError(f"uv sync failed with exit code {result.returncode}{rollback}: {detail}")
     return backup
 
 
@@ -1247,11 +1240,17 @@ def validation_script(profile: DependencyProfile) -> str:
 _SENSITIVE_VALUE = re.compile(
     r"(?i)((?:token|password|passwd|secret|api[_-]?key)\s*[=:]\s*)([^\s,;]+)"
 )
+_BEARER_VALUE = re.compile(r"(?i)(\bBearer\s+)([A-Za-z0-9._~+\-/]+=*)")
+_HUGGINGFACE_TOKEN = re.compile(r"\bhf_[A-Za-z0-9]{12,}\b")
+_URL_CREDENTIALS = re.compile(r"(?i)(https?://)([^/@\s:]+):([^/@\s]+)@")
 
 
 def redact_diagnostic_text(value: str) -> str:
     """Redact common credential assignments before diagnostics leave the process."""
-    return _SENSITIVE_VALUE.sub(r"\1<redacted>", value)
+    redacted = _SENSITIVE_VALUE.sub(r"\1<redacted>", value)
+    redacted = _BEARER_VALUE.sub(r"\1<redacted>", redacted)
+    redacted = _HUGGINGFACE_TOKEN.sub("<redacted-huggingface-token>", redacted)
+    return _URL_CREDENTIALS.sub(r"\1<redacted>@", redacted)
 
 
 def diagnostic_script(profile: DependencyProfile) -> str:
@@ -1364,7 +1363,11 @@ def diagnose_environment(
         stdout = str(python_report.get("stdout", ""))
         marker = "MTQ_DIAGNOSTICS="
         payload = next(
-            (line[len(marker) :] for line in reversed(stdout.splitlines()) if line.startswith(marker)),
+            (
+                line[len(marker) :]
+                for line in reversed(stdout.splitlines())
+                if line.startswith(marker)
+            ),
             None,
         )
         if payload is not None:

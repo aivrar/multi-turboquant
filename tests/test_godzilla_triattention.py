@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 import subprocess
 from pathlib import Path
@@ -68,6 +69,51 @@ def _write_domvox_stats(path: Path, *, layers: int = 1, heads: int = 2) -> None:
                 (0.4, 0.5),
             )
         )
+    )
+
+
+def _python_probe_report(
+    *,
+    torch_cuda: str | None = "12.6",
+    cuda_available: bool = True,
+    gigatoken: str | None = None,
+    module_errors: dict[str, str] | None = None,
+) -> str:
+    versions = {
+        "torch": "2.7.1",
+        "transformers": "4.57.6",
+        "accelerate": "1.14.0",
+        "numpy": "2.2.6",
+        "safetensors": "0.6.2",
+        "huggingface_hub": "0.35.0",
+        "tokenizers": "0.22.0",
+        "sentencepiece": "0.2.2",
+    }
+    if gigatoken is not None:
+        versions["gigatoken"] = gigatoken
+    errors = module_errors or {}
+    modules = {
+        name: (
+            {"status": "error", "error": errors[name], "traceback": errors[name]}
+            if name in errors
+            else {"status": "ok", "version": version}
+        )
+        for name, version in versions.items()
+    }
+    for name, error in errors.items():
+        modules.setdefault(name, {"status": "error", "error": error, "traceback": error})
+    return json.dumps(
+        {
+            **versions,
+            "runtime_executable": "/env/bin/python",
+            "prefix": "/env",
+            "base_prefix": "/base",
+            "python_version": "3.11.9",
+            "platform": "Linux",
+            "modules": modules,
+            "torch_cuda": torch_cuda,
+            "cuda_available": cuda_available,
+        }
     )
 
 
@@ -150,9 +196,10 @@ def test_domvox_conversion_rejects_model_shape_mismatch(tmp_path: Path):
 def test_domvox_calibration_runs_then_converts(tmp_path: Path, monkeypatch):
     script = tmp_path / "triattention_calibrate.py"
     script.write_text(
-        " ".join(("--model", "--input", "--output", "--max-length", "--device", "TRIA")),
+        " ".join(calibration._DOMVOX_CALIBRATOR_MARKERS),
         encoding="utf-8",
     )
+    (script.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
     python = tmp_path / "python.exe"
     python.write_bytes(b"python")
     calibration_input = tmp_path / "calibration.txt"
@@ -195,14 +242,14 @@ def test_domvox_calibration_runs_then_converts(tmp_path: Path, monkeypatch):
     assert report["source_format"] == "domvox-tria-v2"
 
 
-def test_domvox_calibration_wraps_gigatoken_with_exact_parity_guard(
-    tmp_path: Path, monkeypatch
-):
+def test_domvox_calibration_wraps_gigatoken_with_exact_parity_guard(tmp_path: Path, monkeypatch):
     script = tmp_path / "triattention_calibrate.py"
     script.write_text(
-        " ".join(("--model", "--input", "--output", "--max-length", "--device", "TRIA")),
+        " ".join(calibration._DOMVOX_CALIBRATOR_MARKERS),
         encoding="utf-8",
     )
+    (script.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
+
     python = tmp_path / "python"
     python.write_bytes(b"python")
     calibration_input = tmp_path / "calibration.txt"
@@ -374,6 +421,19 @@ def test_official_checkout_inspection_requires_expected_markers(tmp_path: Path):
     assert report["calibrator"] == str((checkout / "scripts" / "calibrate.py").resolve())
 
 
+def test_domvox_calibrator_inspection_requires_sibling_helper(tmp_path: Path):
+    calibrator = tmp_path / "triattention_calibrate.py"
+    calibrator.write_text(
+        " ".join(calibration._DOMVOX_CALIBRATOR_MARKERS),
+        encoding="utf-8",
+    )
+
+    report = calibration.inspect_domvox_triattention_calibrator(calibrator)
+
+    assert report["valid"] is False
+    assert any("triattention_common.py" in issue for issue in report["issues"])
+
+
 def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Path):
     python = tmp_path / "python"
     python.write_bytes(b"python")
@@ -384,10 +444,7 @@ def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Pat
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=(
-                '{"accelerate": "1.0", "cuda_available": true, "torch": "2.7.1", '
-                '"torch_cuda": "12.6", "transformers": "4.53"}\n'
-            ),
+            stdout=_python_probe_report() + "\n",
             stderr="",
         )
 
@@ -396,6 +453,34 @@ def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Pat
     assert report["valid"] is True
     assert report["report"]["torch_cuda"] == "12.6"
     assert "torch.cuda.mem_get_info" in commands[0][-1]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"device": "metal"}, "device"),
+        ({"tokenizer_backend": "unknown"}, "Tokenizer backend"),
+        ({"attention_implementation": "unknown"}, "Attention implementation"),
+        (
+            {"device": "cpu", "attention_implementation": "flash_attention_2"},
+            "requires the CUDA device",
+        ),
+    ],
+)
+def test_calibration_python_preflight_rejects_invalid_options(
+    tmp_path: Path,
+    arguments: dict[str, str],
+    message: str,
+):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    report = calibration.inspect_calibration_python(python, **arguments)
+
+    assert report["valid"] is False
+    assert report["compatible"] is False
+    assert report["report"] is None
+    assert message in report["issues"][0]
 
 
 def test_calibration_python_preflight_preserves_venv_symlink(tmp_path: Path):
@@ -414,10 +499,7 @@ def test_calibration_python_preflight_preserves_venv_symlink(tmp_path: Path):
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=(
-                '{"accelerate": "1.0", "cuda_available": true, "torch": "2.7.1", '
-                '"torch_cuda": "12.6", "transformers": "4.53"}\n'
-            ),
+            stdout=_python_probe_report() + "\n",
             stderr="",
         )
 
@@ -437,10 +519,7 @@ def test_calibration_python_preflight_rejects_missing_cuda(tmp_path: Path):
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=(
-                '{"accelerate": "1.0", "cuda_available": false, "torch": "2.7.1", '
-                '"torch_cuda": null, "transformers": "4.53"}\n'
-            ),
+            stdout=_python_probe_report(torch_cuda=None, cuda_available=False) + "\n",
             stderr="",
         )
 
@@ -459,8 +538,12 @@ def test_calibration_python_preflight_requires_reviewed_gigatoken(tmp_path: Path
             command,
             0,
             stdout=(
-                '{"accelerate": "1.0", "cuda_available": false, "gigatoken": "0.11.0", '
-                '"torch": "2.7.1", "torch_cuda": null, "transformers": "4.53"}\n'
+                _python_probe_report(
+                    torch_cuda=None,
+                    cuda_available=False,
+                    gigatoken="0.11.0",
+                )
+                + "\n"
             ),
             stderr="",
         )
@@ -474,6 +557,108 @@ def test_calibration_python_preflight_requires_reviewed_gigatoken(tmp_path: Path
 
     assert report["valid"] is False
     assert "reviewed 0.10.x" in report["issues"][0]
+
+
+def test_calibration_python_preflight_reports_every_missing_module(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                _python_probe_report(
+                    torch_cuda=None,
+                    cuda_available=False,
+                    module_errors={
+                        "torch": "ModuleNotFoundError: No module named 'torch'",
+                        "accelerate": "ModuleNotFoundError: No module named 'accelerate'",
+                    },
+                )
+                + "\n"
+            ),
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(python, runner=runner)
+
+    assert report["valid"] is False
+    assert any(issue.startswith("torch import failed:") for issue in report["issues"])
+    assert any(issue.startswith("accelerate import failed:") for issue in report["issues"])
+    assert report["report"]["runtime_executable"] == "/env/bin/python"
+    assert report["report"]["modules"]["transformers"]["status"] == "ok"
+
+
+def test_calibration_python_preflight_requires_flash_attention_only_when_selected(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+
+    def runner(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                _python_probe_report(
+                    module_errors={
+                        "flash_attn": "ModuleNotFoundError: No module named 'flash_attn'"
+                    }
+                )
+                + "\n"
+            ),
+            stderr="",
+        )
+
+    sdpa = calibration.inspect_calibration_python(python, runner=runner)
+    flash = calibration.inspect_calibration_python(
+        python,
+        attention_implementation="flash_attention_2",
+        runner=runner,
+    )
+
+    assert sdpa["valid"] is True
+    assert flash["valid"] is False
+    assert any(issue.startswith("flash_attn import failed:") for issue in flash["issues"])
+
+
+def test_calibration_python_selection_checks_bounded_candidates_in_priority_order(
+    tmp_path: Path, monkeypatch
+):
+    managed = tmp_path / "envs" / "triattention" / ".venv" / "bin" / "python"
+    current = tmp_path / "current" / "python"
+    managed.parent.mkdir(parents=True)
+    current.parent.mkdir()
+    managed.write_bytes(b"python")
+    current.write_bytes(b"python")
+    candidates = [
+        {"python": str(current), "sources": ["current"]},
+        {"python": str(managed), "sources": ["managed"]},
+    ]
+    monkeypatch.setattr(calibration, "discover_python_interpreters", lambda **kwargs: candidates)
+    calls: list[str] = []
+
+    def runner(command, **kwargs):
+        calls.append(command[0])
+        if Path(command[0]) == managed:
+            output = _python_probe_report(
+                torch_cuda=None,
+                cuda_available=False,
+                module_errors={"torch": "ModuleNotFoundError: No module named 'torch'"},
+            )
+        else:
+            output = _python_probe_report()
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    result = calibration.select_compatible_calibration_python(
+        environment_root=tmp_path / "envs",
+        runner=runner,
+    )
+
+    assert calls == [str(managed.resolve()), str(current.resolve())]
+    assert result["selected"] == str(current.resolve())
+    assert result["checked_count"] == 2
+    assert result["attempts"][0]["valid"] is False
+    assert result["attempts"][1]["valid"] is True
 
 
 def test_official_calibration_uses_fail_closed_gigatoken_wrapper(tmp_path: Path, monkeypatch):

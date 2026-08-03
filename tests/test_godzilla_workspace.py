@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import struct
 import subprocess
 from pathlib import Path
@@ -11,6 +12,7 @@ from multi_turboquant.calibration.godzilla_triattention import (
     convert_official_triattention_stats,
 )
 from multi_turboquant.integration.godzilla_workspace import (
+    collect_godzilla_calibration_diagnostics,
     inspect_godzilla_checkout,
     plan_godzilla_triattention,
     run_godzilla_triattention,
@@ -27,9 +29,7 @@ def _godzilla_checkout(root: Path) -> Path:
     (checkout / "build" / "bin").mkdir(parents=True)
     (checkout / "CMakeLists.txt").write_text("project(godzilla)\n", encoding="utf-8")
     (checkout / "GODZILLA_KING.md").write_text("Godzilla\n", encoding="utf-8")
-    (checkout / "common" / "arg.cpp").write_text(
-        "kvarn4 --triattention-stats\n", encoding="utf-8"
-    )
+    (checkout / "common" / "arg.cpp").write_text("kvarn4 --triattention-stats\n", encoding="utf-8")
     (checkout / "src" / "llama-triattention.cpp").write_text("// tri\n", encoding="utf-8")
     (checkout / "scripts" / "godzilla-paths.ps1").write_text("", encoding="utf-8")
     (checkout / "scripts" / "ensure-triattention.ps1").write_text("", encoding="utf-8")
@@ -377,8 +377,10 @@ def test_domvox_plan_requires_explicit_lossy_acknowledgement(tmp_path: Path):
     model.write_bytes(b"gguf")
     python.write_bytes(b"python")
     calibrator.write_text(
-        "--model --input --output --max-length --device TRIA", encoding="utf-8"
+        "--model --input --output --max-length --device TRIA triattention_common",
+        encoding="utf-8",
     )
+    (calibrator.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
     calibration_input.write_text("text", encoding="utf-8")
 
     blocked = plan_godzilla_triattention(
@@ -406,10 +408,13 @@ def test_domvox_plan_requires_explicit_lossy_acknowledgement(tmp_path: Path):
     assert plan.ready is True
     assert plan.official_stats == (checkout / "calibrations" / "model.domvox.bin").resolve()
     assert plan.command[0] == str(python.resolve())
-    assert "triattention_calibrate.py" in plan.command[1]
+    assert Path(plan.command[1]).name == "godzilla_triattention.py"
+    assert plan.command[2] == "domvox"
+    assert plan.command[plan.command.index("--calibrator") + 1] == str(calibrator.resolve())
+    assert plan.command[plan.command.index("--python") + 1] == str(python.resolve())
 
 
-def test_domvox_run_converts_and_validates_output(tmp_path: Path, monkeypatch):
+def test_domvox_run_converts_and_validates_output(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
     model = tmp_path / "model.gguf"
     python = tmp_path / "python.exe"
@@ -418,8 +423,10 @@ def test_domvox_run_converts_and_validates_output(tmp_path: Path, monkeypatch):
     model.write_bytes(b"gguf")
     python.write_bytes(b"python")
     calibrator.write_text(
-        "--model --input --output --max-length --device TRIA", encoding="utf-8"
+        "--model --input --output --max-length --device TRIA triattention_common",
+        encoding="utf-8",
     )
+    (calibrator.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
     calibration_input.write_text("text", encoding="utf-8")
     plan = plan_godzilla_triattention(
         checkout,
@@ -432,25 +439,15 @@ def test_domvox_run_converts_and_validates_output(tmp_path: Path, monkeypatch):
         domvox_accept_lossy=True,
     )
 
-    monkeypatch.setattr(
-        "multi_turboquant.integration.godzilla_workspace.load_huggingface_model_metadata",
-        lambda model: {
-            "head_dim": 4,
-            "num_layers": 1,
-            "num_attention_heads": 2,
-            "num_key_value_heads": 1,
-            "rope_theta": 10_000.0,
-        },
-    )
-
     def runner(argv, **kwargs):
         _write_domvox_stats(plan.official_stats)
+        _write_valid_calibration(plan.output)
         return subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
 
     report = run_godzilla_triattention(plan, runner=runner)
 
     assert report["reused"] is False
-    assert report["conversion"]["source_format"] == "domvox-tria-v2"
+    assert report["artifact"]["format"] == "godzilla-triattention-v1"
     assert plan.output.is_file()
 
 
@@ -507,7 +504,11 @@ def test_gigatoken_plan_forwards_backend_and_wraps_domvox(tmp_path: Path):
     assert plan.command[-2:] == ("--tokenizer-backend", "gigatoken")
 
     domvox = tmp_path / "triattention_calibrate.py"
-    domvox.write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+    domvox.write_text(
+        "--model --input --output --max-length --device TRIA triattention_common",
+        encoding="utf-8",
+    )
+    (domvox.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
     domvox_plan = plan_godzilla_triattention(
         checkout,
         model,
@@ -520,12 +521,15 @@ def test_gigatoken_plan_forwards_backend_and_wraps_domvox(tmp_path: Path):
         tokenizer_backend="gigatoken",
     )
     assert domvox_plan.ready
-    assert Path(domvox_plan.command[1]).name == "gigatoken_runner.py"
-    assert domvox_plan.command[2:6] == (
-        "--kind",
-        "domvox",
-        "--calibrator",
-        str(domvox.resolve()),
+    assert Path(domvox_plan.command[1]).name == "godzilla_triattention.py"
+    assert domvox_plan.command[2] == "domvox"
+    assert domvox_plan.command[domvox_plan.command.index("--calibrator") + 1] == str(
+        domvox.resolve()
+    )
+    assert domvox_plan.command[-3:] == (
+        "--tokenizer-backend",
+        "gigatoken",
+        "--accept-lossy",
     )
     assert any(issue.code == "gigatoken_parity_required" for issue in domvox_plan.issues)
 
@@ -549,7 +553,11 @@ def test_planner_identifies_calibrator_selected_in_the_wrong_mode(tmp_path: Path
     model.write_bytes(b"gguf")
     python.write_bytes(b"python")
     calibration_input.write_text("text", encoding="utf-8")
-    domvox.write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+    domvox.write_text(
+        "--model --input --output --max-length --device TRIA triattention_common",
+        encoding="utf-8",
+    )
+    (domvox.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
     official.parent.mkdir()
     official.write_text(
         "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
@@ -585,3 +593,215 @@ def test_planner_identifies_calibrator_selected_in_the_wrong_mode(tmp_path: Path
     )
     assert "matches domvox" in official_error.message
     assert "recommended Generate stats + convert" in domvox_error.message
+
+
+def test_dependency_override_cannot_bypass_missing_core_imports(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+
+    def dependency_runner(argv, **kwargs):
+        report = {
+            "runtime_executable": argv[0],
+            "prefix": "/env",
+            "base_prefix": "/base",
+            "modules": {
+                "torch": {
+                    "status": "error",
+                    "error": "ModuleNotFoundError: No module named 'torch'",
+                },
+                "transformers": {"status": "ok", "version": "4.57.6"},
+                "accelerate": {"status": "ok", "version": "1.14.0"},
+            },
+        }
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(report), stderr="")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+        verify_dependencies=True,
+        dependency_override=True,
+        dependency_runner=dependency_runner,
+    )
+
+    codes = {issue.code for issue in plan.issues}
+    assert plan.ready is False
+    assert "calibration_dependencies_missing" in codes
+    assert "calibration_dependency_override_disabled" in codes
+
+
+def test_official_flash_attention_plan_requires_cuda(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+        device="cpu",
+        attention_implementation="flash_attention_2",
+    )
+
+    assert plan.ready is False
+    assert any(issue.code == "flash_attention_requires_cuda" for issue in plan.issues)
+
+
+def test_domvox_dependency_check_ignores_stale_official_attention_choice(
+    tmp_path: Path, monkeypatch
+):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "python"
+    calibrator = tmp_path / "triattention_calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.write_bytes(b"python")
+    calibrator.write_text(
+        "--model --input --output --max-length --device TRIA triattention_common",
+        encoding="utf-8",
+    )
+    (calibrator.parent / "triattention_common.py").write_text("# helper\n", encoding="utf-8")
+    calibration_input.write_text("text", encoding="utf-8")
+    inspected_attention: list[str] = []
+
+    def inspect_python(path, **kwargs):
+        inspected_attention.append(kwargs["attention_implementation"])
+        return {"valid": True, "issues": [], "report": {"modules": {}}}
+
+    monkeypatch.setattr(
+        "multi_turboquant.integration.godzilla_workspace.inspect_calibration_python",
+        inspect_python,
+    )
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        domvox_calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="domvox",
+        domvox_accept_lossy=True,
+        attention_implementation="flash_attention_2",
+        verify_dependencies=True,
+    )
+
+    assert plan.ready is True
+    assert inspected_attention == ["sdpa"]
+
+
+def test_failed_calibration_diagnostics_are_detailed_and_redacted(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    python = tmp_path / "env" / "bin" / "python"
+    calibrator = tmp_path / "triattention" / "scripts" / "calibrate.py"
+    calibration_input = tmp_path / "calibration.txt"
+    model.write_bytes(b"gguf")
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    calibrator.parent.mkdir(parents=True)
+    calibrator.write_text(
+        "AutoModelForCausalLM AutoTokenizer --max-length --attn-implementation "
+        "q_mean_real q_mean_imag q_abs_mean",
+        encoding="utf-8",
+    )
+    calibration_input.write_text("text", encoding="utf-8")
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        python=python,
+        calibrator=calibrator,
+        calibration_input=calibration_input,
+        hf_model="org/model",
+        mode="official_python",
+    )
+
+    def runner(argv, **kwargs):
+        if argv[0] == str(python.resolve()):
+            probe = {
+                "runtime_executable": argv[0],
+                "prefix": str(python.parent.parent),
+                "base_prefix": "/base",
+                "python_version": "3.11.9",
+                "platform": "Linux",
+                "torch": "2.7.1",
+                "transformers": "4.57.6",
+                "accelerate": "1.14.0",
+                "numpy": "2.2.6",
+                "safetensors": "0.6.2",
+                "huggingface_hub": "0.35.0",
+                "tokenizers": "0.22.0",
+                "sentencepiece": "0.2.2",
+                "torch_cuda": "12.6",
+                "cuda_available": True,
+                "modules": {
+                    "torch": {"status": "ok", "version": "2.7.1"},
+                    "transformers": {"status": "ok", "version": "4.57.6"},
+                    "accelerate": {"status": "ok", "version": "1.14.0"},
+                    "numpy": {"status": "ok", "version": "2.2.6"},
+                    "safetensors": {"status": "ok", "version": "0.6.2"},
+                    "huggingface_hub": {"status": "ok", "version": "0.35.0"},
+                    "tokenizers": {"status": "ok", "version": "0.22.0"},
+                    "sentencepiece": {"status": "ok", "version": "0.2.2"},
+                },
+            }
+            return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(probe), stderr="")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="Authorization: Bearer secret-value HF_TOKEN=hf_abcdefghijklmnop",
+            stderr="https://name:password@example.com/repo.git",
+        )
+
+    report = collect_godzilla_calibration_diagnostics(
+        plan,
+        failure="HF_TOKEN=hf_abcdefghijklmnop",
+        returncode=1,
+        stdout="Authorization: Bearer secret-value",
+        stderr="https://name:password@example.com/repo.git",
+        runner=runner,
+    )
+    serialized = json.dumps(report)
+
+    assert report["schema"] == 1
+    assert len(report["paths"]) == 10
+    assert report["process"]["command"] == list(plan.command)
+    assert report["interpreter_probe_at_failure"]["valid"] is True
+    assert report["host"]["machine"]
+    assert len(report["recovery"]) >= 5
+    assert "secret-value" not in serialized
+    assert "hf_abcdefghijklmnop" not in serialized
+    assert "name:password@" not in serialized
+    assert "<redacted>" in serialized

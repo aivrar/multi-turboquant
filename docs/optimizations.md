@@ -223,6 +223,22 @@ the distribution, lexical/resolved interpreter paths, Python prefixes, module
 versions and import tracebacks, Torch/CUDA state, uv/Git/NVIDIA/CUDA tools, and
 Accelerate environment details.
 
+The Godzilla calibration planner adds a stricter runtime boundary. If no Python
+is selected, it probes no more than eight conventional candidates and accepts
+the first interpreter that imports the complete calibration stack. It never
+combines `site-packages` from multiple environments. Core import failures cannot
+be overridden, and the chosen interpreter is probed again immediately before
+launch. FlashAttention is required only for the official
+`flash_attention_2`/CUDA path; Gigatoken is required only when selected.
+domvox's `triattention_common.py`, calibration, and conversion are kept inside
+the same interpreter boundary.
+
+A failed UI calibration writes a redacted atomic diagnostic JSON file next to
+the requested artifact. In addition to import tracebacks, it records the exact
+command and working directory, selected and host interpreter state, relevant
+paths, source revision, bounded discovery attempts, OS/CUDA/VRAM/tool versions,
+disk capacity, log tails, and recovery guidance.
+
 For profiles that compile CUDA extensions, `nvcc` must use the same CUDA major
 as the profile's PyTorch build. NVIDIA driver backward compatibility does not
 make a CUDA 13 compiler interchangeable with a CUDA 12.6 PyTorch extension

@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -15,6 +17,25 @@ from typing import Mapping, Sequence
 
 
 MAX_CONCURRENT_GODZILLA_CALIBRATIONS = 1
+
+
+def _write_json_atomic(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _split_env_wrapper(command: Sequence[str]) -> tuple[list[str], dict[str, str]]:
@@ -91,7 +112,9 @@ class ManagedProcess:
             child_environment = dict(os.environ)
             child_environment.update(wrapper_environment)
             if environment:
-                child_environment.update({str(key): str(value) for key, value in environment.items()})
+                child_environment.update(
+                    {str(key): str(value) for key, value in environment.items()}
+                )
             creationflags = 0
             if os.name == "nt":
                 creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -190,9 +213,7 @@ class EnvironmentJobManager:
             max_jobs=max_jobs,
         )
         if not plan.ready:
-            errors = "; ".join(
-                issue.message for issue in plan.issues if issue.severity == "error"
-            )
+            errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")
             raise ValueError(errors or "Environment plan is not ready")
         job_id = uuid.uuid4().hex
         job: dict[str, object] = {
@@ -205,9 +226,7 @@ class EnvironmentJobManager:
             "cuda_toolkit_root": (
                 str(plan.cuda_toolkit_root) if plan.cuda_toolkit_root is not None else None
             ),
-            "local_source": (
-                str(plan.local_source) if plan.local_source is not None else None
-            ),
+            "local_source": (str(plan.local_source) if plan.local_source is not None else None),
             "target": str(plan.target),
             "created_at": time.time(),
             "finished_at": None,
@@ -338,6 +357,7 @@ class GodzillaCalibrationJobManager:
         attention_implementation: str = "sdpa",
         tokenizer_backend: str = "transformers",
         dependency_override: bool = False,
+        python_discovery: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         from ..integration.godzilla_workspace import plan_godzilla_triattention
 
@@ -360,11 +380,10 @@ class GodzillaCalibrationJobManager:
             tokenizer_backend=tokenizer_backend,
             verify_dependencies=True,
             dependency_override=dependency_override,
+            python_discovery=python_discovery,
         )
         if not plan.ready:
-            errors = "; ".join(
-                issue.message for issue in plan.issues if issue.severity == "error"
-            )
+            errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")
             raise ValueError(errors or "Godzilla calibration plan is not ready")
 
         job_id = uuid.uuid4().hex
@@ -376,19 +395,22 @@ class GodzillaCalibrationJobManager:
             "model": str(plan.gguf),
             "output": str(plan.output),
             "mode": plan.mode,
+            "python": str(plan.python) if plan.python is not None else None,
+            "command": list(plan.command),
+            "dependency_preflight": plan.dependency_validation,
             "tokenizer_backend": getattr(plan, "tokenizer_backend", "transformers"),
             "process_limit": MAX_CONCURRENT_GODZILLA_CALIBRATIONS,
             "created_at": time.time(),
             "finished_at": None,
             "report": None,
+            "runtime_preflight": None,
+            "diagnostics": None,
+            "diagnostics_path": None,
             "error": None,
             "log": deque(maxlen=500),
         }
         with self._lock:
-            if any(
-                item["status"] in {"queued", "running"}
-                for item in self._jobs.values()
-            ):
+            if any(item["status"] in {"queued", "running"} for item in self._jobs.values()):
                 raise RuntimeError(
                     "A Godzilla calibration is already queued or running. The local UI limits "
                     "calibration to one process at a time to avoid overlapping model loads."
@@ -398,12 +420,20 @@ class GodzillaCalibrationJobManager:
         return self.get(job_id)
 
     def _run(self, job_id: str, plan: object) -> None:
-        from ..integration.godzilla_workspace import run_godzilla_triattention
+        from ..calibration.godzilla_triattention import inspect_calibration_python
+        from ..integration.godzilla_workspace import (
+            collect_godzilla_calibration_diagnostics,
+            run_godzilla_triattention,
+        )
+        from ..optimizations.environments import redact_diagnostic_text
 
         with self._lock:
             self._jobs[job_id]["status"] = "running"
 
+        last_result: subprocess.CompletedProcess[str] | None = None
+
         def runner(argv: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal last_result
             result = subprocess.run(
                 list(argv),
                 cwd=kwargs.get("cwd"),
@@ -415,17 +445,87 @@ class GodzillaCalibrationJobManager:
             with self._lock:
                 log = self._jobs[job_id]["log"]
                 assert isinstance(log, deque)
-                log.extend((result.stdout or "").splitlines())
-                log.extend((result.stderr or "").splitlines())
+                log.extend(
+                    redact_diagnostic_text(line) for line in (result.stdout or "").splitlines()
+                )
+                log.extend(
+                    redact_diagnostic_text(line) for line in (result.stderr or "").splitlines()
+                )
+            last_result = result
             return result
 
         try:
+            output = getattr(plan, "output")
+            mode = getattr(plan, "mode")
+            python = getattr(plan, "python")
+            if not output.is_file() and mode in {"official_python", "official_convert", "domvox"}:
+                if python is None or not python.is_file():
+                    raise RuntimeError(
+                        "The selected calibration Python disappeared before the job started. "
+                        "Repair or reselect the TriAttention environment."
+                    )
+                runtime_preflight = inspect_calibration_python(
+                    python,
+                    device=getattr(plan, "device"),
+                    tokenizer_backend=getattr(plan, "tokenizer_backend", "transformers"),
+                    attention_implementation=getattr(
+                        plan,
+                        "attention_implementation",
+                        "sdpa",
+                    )
+                    if mode == "official_python"
+                    else "sdpa",
+                )
+                with self._lock:
+                    self._jobs[job_id]["runtime_preflight"] = runtime_preflight
+                if not runtime_preflight["valid"]:
+                    details = "; ".join(str(item) for item in runtime_preflight["issues"])
+                    raise RuntimeError(
+                        "The selected calibration Python failed the final dependency preflight: "
+                        f"{details}. Dependency overrides cannot start calibration; repair or "
+                        "select a compatible environment."
+                    )
             report = run_godzilla_triattention(plan, runner=runner)  # type: ignore[arg-type]
         except Exception as exc:
+            stdout = last_result.stdout if last_result is not None else ""
+            stderr = last_result.stderr if last_result is not None else ""
+            returncode = last_result.returncode if last_result is not None else None
+            try:
+                diagnostics = collect_godzilla_calibration_diagnostics(
+                    plan,  # type: ignore[arg-type]
+                    failure=exc,
+                    returncode=returncode,
+                    stdout=stdout or "",
+                    stderr=stderr or "",
+                )
+            except Exception as diagnostic_exc:
+                diagnostics = {
+                    "schema": 1,
+                    "collection_error": redact_diagnostic_text(
+                        f"{type(diagnostic_exc).__name__}: {diagnostic_exc}"
+                    ),
+                    "original_error": redact_diagnostic_text(str(exc)),
+                }
+            diagnostics_path = getattr(plan, "output").with_name(
+                getattr(plan, "output").name + f".{job_id[:12]}.diagnostics.json"
+            )
+            diagnostics_write_error = None
+            try:
+                _write_json_atomic(diagnostics_path, diagnostics)
+            except (OSError, TypeError, ValueError) as write_exc:
+                diagnostics_write_error = redact_diagnostic_text(
+                    f"{type(write_exc).__name__}: {write_exc}"
+                )
             with self._lock:
                 job = self._jobs[job_id]
                 job["status"] = "failed"
-                job["error"] = str(exc)
+                job["error"] = redact_diagnostic_text(str(exc))
+                job["diagnostics"] = diagnostics
+                job["diagnostics_path"] = (
+                    str(diagnostics_path) if diagnostics_write_error is None else None
+                )
+                if diagnostics_write_error is not None:
+                    job["diagnostics_write_error"] = diagnostics_write_error
                 job["finished_at"] = time.time()
         else:
             with self._lock:

@@ -50,9 +50,7 @@ def test_settings_store_defaults_and_persists_atomically(tmp_path: Path):
 
 def test_settings_validation_rejects_complex_form_values():
     with pytest.raises(ValueError, match="JSON scalar"):
-        validate_ui_settings(
-            {**DEFAULT_UI_SETTINGS, "form_values": {"unsafe": {"nested": True}}}
-        )
+        validate_ui_settings({**DEFAULT_UI_SETTINGS, "form_values": {"unsafe": {"nested": True}}})
 
 
 def test_model_scan_is_bounded_to_the_configured_root(tmp_path: Path):
@@ -211,7 +209,10 @@ def test_addon_scan_recognizes_domvox_triattention_checkout(tmp_path: Path):
     source = tmp_path / "triattention-ggml"
     source.mkdir()
     for marker in ("triattention_calibrate.py", "triattention_common.py", "TRIA_FORMAT.md"):
-        (source / marker).write_text("--model --input --output --max-length --device TRIA", encoding="utf-8")
+        (source / marker).write_text(
+            "--model --input --output --max-length --device TRIA triattention_common",
+            encoding="utf-8",
+        )
 
     result = scan_addon_roots([tmp_path])
 
@@ -228,9 +229,7 @@ def test_addon_scan_recognizes_renamed_godzilla_checkout(tmp_path: Path):
     (checkout / "scripts").mkdir()
     (checkout / "src").mkdir()
     (checkout / "CMakeLists.txt").write_text("project(godzilla)\n", encoding="utf-8")
-    (checkout / "common" / "arg.cpp").write_text(
-        "kvarn --triattention-stats\n", encoding="utf-8"
-    )
+    (checkout / "common" / "arg.cpp").write_text("kvarn --triattention-stats\n", encoding="utf-8")
     (checkout / "scripts" / "godzilla-paths.ps1").write_text("", encoding="utf-8")
     (checkout / "src" / "llama-triattention.cpp").write_text("", encoding="utf-8")
 
@@ -450,11 +449,19 @@ def test_environment_job_reports_completion(tmp_path: Path, monkeypatch):
 def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
     from multi_turboquant.integration import godzilla_workspace
 
+    python = tmp_path / "env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
     plan = SimpleNamespace(
         ready=True,
         checkout=tmp_path / "godzilla",
         gguf=tmp_path / "model.gguf",
         output=tmp_path / "model.triattention",
+        python=python,
+        command=(str(python), "calibrate.py"),
+        dependency_validation={"torch": "2.7.1"},
+        device="cuda",
+        tokenizer_backend="transformers",
         mode="official_python",
         issues=[],
     )
@@ -463,10 +470,15 @@ def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
         "plan_godzilla_triattention",
         lambda *args, **kwargs: plan,
     )
+
+    def run_plan(*args, **kwargs):
+        kwargs["runner"]([sys.executable, "-c", "print('HF_TOKEN=hf_abcdefghijklmnop')"])
+        return {"output": str(plan.output), "reused": False}
+
+    monkeypatch.setattr(godzilla_workspace, "run_godzilla_triattention", run_plan)
     monkeypatch.setattr(
-        godzilla_workspace,
-        "run_godzilla_triattention",
-        lambda *args, **kwargs: {"output": str(plan.output), "reused": False},
+        "multi_turboquant.calibration.godzilla_triattention.inspect_calibration_python",
+        lambda *args, **kwargs: {"valid": True, "issues": [], "report": {}},
     )
     manager = GodzillaCalibrationJobManager()
 
@@ -479,6 +491,8 @@ def test_godzilla_job_reports_completion(tmp_path: Path, monkeypatch):
     completed = manager.get(job["id"])
     assert completed["status"] == "completed"
     assert completed["report"] == {"output": str(plan.output), "reused": False}
+    assert "hf_abcdefghijklmnop" not in "\n".join(completed["log"])
+    assert "<redacted>" in "\n".join(completed["log"])
 
 
 def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypatch):
@@ -486,6 +500,9 @@ def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypa
 
     started = threading.Event()
     release = threading.Event()
+    python = tmp_path / "env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
 
     def make_plan(checkout, gguf, **kwargs):
         return SimpleNamespace(
@@ -493,6 +510,11 @@ def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypa
             checkout=Path(checkout),
             gguf=Path(gguf),
             output=Path(kwargs["output"]),
+            python=python,
+            command=(str(python), "calibrate.py"),
+            dependency_validation={"torch": "2.7.1"},
+            device="cuda",
+            tokenizer_backend="transformers",
             mode="official_python",
             issues=[],
         )
@@ -504,6 +526,10 @@ def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(godzilla_workspace, "plan_godzilla_triattention", make_plan)
     monkeypatch.setattr(godzilla_workspace, "run_godzilla_triattention", run_plan)
+    monkeypatch.setattr(
+        "multi_turboquant.calibration.godzilla_triattention.inspect_calibration_python",
+        lambda *args, **kwargs: {"valid": True, "issues": [], "report": {}},
+    )
     manager = GodzillaCalibrationJobManager()
     manager.start(
         tmp_path / "godzilla",
@@ -520,3 +546,69 @@ def test_godzilla_jobs_limit_calibration_to_one_process(tmp_path: Path, monkeypa
         )
 
     release.set()
+
+
+def test_godzilla_job_rechecks_dependencies_and_writes_failure_diagnostics(
+    tmp_path: Path, monkeypatch
+):
+    from multi_turboquant.integration import godzilla_workspace
+
+    python = tmp_path / "env" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_bytes(b"python")
+    plan = SimpleNamespace(
+        ready=True,
+        checkout=tmp_path / "godzilla",
+        gguf=tmp_path / "model.gguf",
+        output=tmp_path / "calibrations" / "model.triattention",
+        python=python,
+        command=(str(python), "triattention_calibrate.py"),
+        dependency_validation={"torch": "2.7.1"},
+        device="cuda",
+        tokenizer_backend="transformers",
+        mode="domvox",
+        issues=[],
+    )
+    monkeypatch.setattr(
+        godzilla_workspace,
+        "plan_godzilla_triattention",
+        lambda *args, **kwargs: plan,
+    )
+    run_calls = []
+    monkeypatch.setattr(
+        godzilla_workspace,
+        "run_godzilla_triattention",
+        lambda *args, **kwargs: run_calls.append(args) or {},
+    )
+    monkeypatch.setattr(
+        "multi_turboquant.calibration.godzilla_triattention.inspect_calibration_python",
+        lambda *args, **kwargs: {
+            "valid": False,
+            "issues": ["torch import failed: ModuleNotFoundError"],
+            "report": {"modules": {"torch": {"status": "error"}}},
+        },
+    )
+    monkeypatch.setattr(
+        godzilla_workspace,
+        "collect_godzilla_calibration_diagnostics",
+        lambda *args, **kwargs: {
+            "schema": 1,
+            "failure": {"message": str(kwargs["failure"])},
+        },
+    )
+    manager = GodzillaCalibrationJobManager()
+
+    job = manager.start(plan.checkout, plan.gguf)
+    deadline = time.time() + 5
+    while manager.get(job["id"])["status"] not in {"completed", "failed"}:
+        assert time.time() < deadline
+        time.sleep(0.02)
+
+    failed = manager.get(job["id"])
+    diagnostics_path = Path(failed["diagnostics_path"])
+    assert failed["status"] == "failed"
+    assert "final dependency preflight" in failed["error"]
+    assert failed["runtime_preflight"]["valid"] is False
+    assert run_calls == []
+    assert diagnostics_path.is_file()
+    assert json.loads(diagnostics_path.read_text(encoding="utf-8"))["schema"] == 1

@@ -793,21 +793,34 @@ job, validates new and existing output artifacts, and never builds the Godzilla
 CMake project. KVarN requires no calibration and remains a launch-time cache
 type choice.
 
-The UI can inspect a bounded list of current, `PATH`, active virtual/Conda,
-managed `.mtq`, and conventional pyenv Python locations for Gigatoken. It never
-recursively scans a drive. A compatible result can populate the calibration
-Python and opt-in tokenizer control. On POSIX systems, managed
+When the calibration Python field is empty, the UI probes at most eight
+interpreters in a deterministic priority order: the owned TriAttention
+environment, an active virtual/Conda environment, the current interpreter,
+other managed environments, `PATH`, and conventional pyenv locations. It never
+recursively scans a drive. A candidate passes only if isolated imports succeed
+for Torch, Transformers, Accelerate, NumPy, Safetensors, Hugging Face Hub,
+Tokenizers, and SentencePiece. Gigatoken and FlashAttention are conditional on
+the selected tokenizer and official attention implementation. The separate
+Gigatoken inventory can inspect up to 64 bounded candidates. On POSIX systems, managed
 `.venv/bin/python` paths are not dereferenced: that entry is normally a symlink,
 and resolving it to a base `uv` or system executable would lose the selected
 environment's packages. The planner also identifies an official script selected
 in domvox mode, or a domvox script selected in official mode, and reports the
 correct mode instead of returning an opaque missing-dependency failure.
 
+The planner never imports packages from one environment into another by
+modifying `sys.path` or copying `site-packages`; native Torch and CUDA packages
+make that unsafe. Missing imports are fail-closed even if a dependency override
+is submitted. The job performs the same isolated check against the exact
+selected interpreter immediately before launch, preventing an environment that
+changed after planning from running the calibrator.
+
 The optional **domvox TRIA v2 (experimental)** mode recognizes a
 `domvox/triattention-ggml` checkout and runs its `triattention_calibrate.py`
 script before adapting the resulting binary to Godzilla v1. It requires the
 matching Hugging Face model for shape and RoPE metadata, validates the domvox
-header and exact file length, and requires an explicit acknowledgement because
+script's sibling `triattention_common.py`, header, and exact file length, and
+requires an explicit acknowledgement because
 Godzilla v1 cannot store domvox layer-budget scales or attention scale. Those
 fields are reported as dropped; this is not a lossless format conversion.
 Calibration lengths from 128 through 200,000 are accepted. Above 32,768 the
@@ -820,6 +833,9 @@ system RAM is not a substitute for discrete VRAM. A GGUF alone remains
 insufficient for calibration.
 Selecting Gigatoken runs domvox through the same fail-closed parity wrapper as
 the official script and forwards only domvox-supported arguments afterward.
+The domvox forward pass and Godzilla conversion both run inside the exact
+validated calibration environment, including the Transformers metadata load;
+the UI host interpreter is not used as a conversion fallback.
 
 The managed dependency path can repair an incomplete TriAttention environment
 after explicit confirmation and a successful host/tool preflight. It ignores
@@ -830,6 +846,18 @@ the plan again. The UI can also generate
 deterministic offline starter text beneath the saved model root. Generated
 files use schema and completion markers and cannot be clobbered by simultaneous
 requests; use representative domain text for final calibration qualification.
+
+Every failed background calibration produces a redacted diagnostic bundle in
+the job view and, when the output directory is writable, an atomic
+`<output>.<job-id>.diagnostics.json` file beside the requested artifact. The
+bundle records the failure and return code; command, working directory, and log
+tails; host and selected Python paths, prefixes, versions, module imports, and
+tracebacks; source revisions; the state of the checkout, model, calibrators,
+helper, inputs, intermediates, and output; bounded discovery attempts; OS,
+CUDA/VRAM, `uv`, Git, `nvidia-smi`, `nvcc`, and disk information; and recovery
+steps. Tokens, passwords, bearer credentials, and authenticated URLs are
+redacted. `mtq-env diagnose triattention --output report.json` remains useful
+for a standalone environment report.
 
 On Debian 12 and 13, the environment planner reports the distribution release
 explicitly; both releases are covered by Linux CI. For an incomplete owned
@@ -1668,6 +1696,7 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Gigatoken calibration, environment discovery, and llama.cpp integration proposal | jawadala / issue #38 | Community contribution |
 | Direct Gigatoken tokenization for Godzilla runtime/inference | jawadala / issue #39 | Community contribution |
 | Debian 12/13 support, exact Godzilla `09214b160` profile, domvox/Gigatoken integration, diagnostics, and reviewed CUDA weight-share source workflow | jawadala / issue #40 | Community contribution |
+| Compatible TriAttention interpreter discovery, fail-closed dependency checks, exact-environment domvox conversion, and detailed calibration failure reports | jawadala / issue #42 | Community contribution |
 
 We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, or llama.cpp source trees; the confirmed workflows clone or accept only exact reviewed upstream revisions and record or validate their provenance. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken calibration and runtime options.
 

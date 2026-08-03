@@ -23,6 +23,49 @@ from run_ui import (
 )
 
 
+def _valid_calibration_python(path) -> dict[str, object]:
+    return {
+        "python": str(Path(path).absolute()),
+        "python_resolved": str(Path(path).resolve()),
+        "valid": True,
+        "compatible": True,
+        "required_modules": [
+            "torch",
+            "transformers",
+            "accelerate",
+            "numpy",
+            "safetensors",
+            "huggingface_hub",
+            "tokenizers",
+            "sentencepiece",
+        ],
+        "report": {
+            "runtime_executable": str(Path(path).absolute()),
+            "prefix": str(Path(path).parent),
+            "base_prefix": "/base",
+            "torch": "2.7.1",
+            "transformers": "4.57.6",
+            "accelerate": "1.14.0",
+            "torch_cuda": "12.6",
+            "cuda_available": True,
+            "modules": {
+                name: {"status": "ok", "version": version}
+                for name, version in {
+                    "torch": "2.7.1",
+                    "transformers": "4.57.6",
+                    "accelerate": "1.14.0",
+                    "numpy": "2.2.6",
+                    "safetensors": "0.6.2",
+                    "huggingface_hub": "0.35.0",
+                    "tokenizers": "0.22.0",
+                    "sentencepiece": "0.2.2",
+                }.items()
+            },
+        },
+        "issues": [],
+    }
+
+
 def test_command_config_translates_triattention_k_method_to_flag():
     config = _command_config({"k_method": "triattention", "v_method": "f16"})
 
@@ -33,14 +76,16 @@ def test_command_config_translates_triattention_k_method_to_flag():
 
 def test_api_generate_command_accepts_legacy_triattention_selection():
     with pytest.warns(RuntimeWarning, match="TriAttention"):
-        result = api_generate_command({
-            "k_method": "triattention",
-            "v_method": "f16",
-            "model_path": "/opt/models/model.gguf",
-            "port": 8080,
-            "context": 4096,
-            "parallel": 1,
-        })
+        result = api_generate_command(
+            {
+                "k_method": "triattention",
+                "v_method": "f16",
+                "model_path": "/opt/models/model.gguf",
+                "port": 8080,
+                "context": 4096,
+                "parallel": 1,
+            }
+        )
 
     assert "--cache-type-k f16" in result["command"]
     assert "--cache-type-v f16" in result["command"]
@@ -48,20 +93,22 @@ def test_api_generate_command_accepts_legacy_triattention_selection():
 
 
 def test_api_generate_command_supports_patched_triattention_flags():
-    result = api_generate_command({
-        "k_method": "turbo3",
-        "v_method": "turbo3",
-        "triattention": True,
-        "use_custom_triattention_llamacpp": True,
-        "triattention_stats_path": "model.triattention",
-        "triattention_budget": 2048,
-        "triattention_window": 256,
-        "triattention_log": True,
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 4096,
-        "parallel": 1,
-    })
+    result = api_generate_command(
+        {
+            "k_method": "turbo3",
+            "v_method": "turbo3",
+            "triattention": True,
+            "use_custom_triattention_llamacpp": True,
+            "triattention_stats_path": "model.triattention",
+            "triattention_budget": 2048,
+            "triattention_window": 256,
+            "triattention_log": True,
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 4096,
+            "parallel": 1,
+        }
+    )
 
     assert "--cache-type-k turbo3" in result["command"]
     assert "--cache-type-v turbo3" in result["command"]
@@ -73,20 +120,20 @@ def test_api_generate_command_supports_patched_triattention_flags():
 
 
 def test_api_generate_command_returns_error_for_missing_triattention_stats():
-    result = api_generate_command({
-        "k_method": "turbo3",
-        "v_method": "turbo3",
-        "use_custom_triattention_llamacpp": True,
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 4096,
-        "parallel": 1,
-    })
+    result = api_generate_command(
+        {
+            "k_method": "turbo3",
+            "v_method": "turbo3",
+            "use_custom_triattention_llamacpp": True,
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 4096,
+            "parallel": 1,
+        }
+    )
 
     assert result["command"] == ""
-    triattention_issues = [
-        issue for issue in result["issues"] if issue["method"] == "triattention"
-    ]
+    triattention_issues = [issue for issue in result["issues"] if issue["method"] == "triattention"]
     assert len(triattention_issues) == 1
     assert "Stats Path" in triattention_issues[0]["message"]
     assert "matching Hugging Face checkpoint" in triattention_issues[0]["suggestion"]
@@ -95,28 +142,28 @@ def test_api_generate_command_returns_error_for_missing_triattention_stats():
 
 
 def test_api_generate_command_supports_cuda_weight_share_wrapper():
-    result = api_generate_command({
-        "k_method": "f16",
-        "v_method": "f16",
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 4096,
-        "parallel": 1,
-        "cuda_weight_share": True,
-        "cuda_weight_share_library": "/opt/cuda-llm-weight-share.so",
-        "cuda_weight_share_model_size": 123456,
-        "cuda_weight_share_tolerance": 1024,
-        "cuda_weight_share_ipc_name": "/cuda_vram_ipc_test",
-        "cuda_weight_share_shm_wait_sec": 15,
-        "cuda_weight_share_suppress_master_free": True,
-        "cuda_weight_share_trace": True,
-        "cuda_weight_share_trace_depth": 8,
-        "cuda_weight_share_trace_normal_allocs": True,
-    })
-
-    assert result["command"].startswith(
-        "env LD_PRELOAD=/opt/cuda-llm-weight-share.so "
+    result = api_generate_command(
+        {
+            "k_method": "f16",
+            "v_method": "f16",
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 4096,
+            "parallel": 1,
+            "cuda_weight_share": True,
+            "cuda_weight_share_library": "/opt/cuda-llm-weight-share.so",
+            "cuda_weight_share_model_size": 123456,
+            "cuda_weight_share_tolerance": 1024,
+            "cuda_weight_share_ipc_name": "/cuda_vram_ipc_test",
+            "cuda_weight_share_shm_wait_sec": 15,
+            "cuda_weight_share_suppress_master_free": True,
+            "cuda_weight_share_trace": True,
+            "cuda_weight_share_trace_depth": 8,
+            "cuda_weight_share_trace_normal_allocs": True,
+        }
     )
+
+    assert result["command"].startswith("env LD_PRELOAD=/opt/cuda-llm-weight-share.so ")
     assert "MODEL_SIZE=123456" in result["command"]
     assert "MODEL_SIZE_TOLERANCE=1024" in result["command"]
     assert "CUDA_VRAM_IPC_NAME=/cuda_vram_ipc_test" in result["command"]
@@ -131,12 +178,14 @@ def test_api_generate_command_supports_cuda_weight_share_wrapper():
 def test_command_context_extension_config_parses_ui_values():
     assert _command_context_extension_config({"rope_scaling": "off"}) is None
 
-    config = _command_context_extension_config({
-        "rope_scale": "8",
-        "yarn_orig_ctx": "4096",
-        "yarn_ext_factor": "0",
-        "yarn_attn_factor": "1.1",
-    })
+    config = _command_context_extension_config(
+        {
+            "rope_scale": "8",
+            "yarn_orig_ctx": "4096",
+            "yarn_ext_factor": "0",
+            "yarn_attn_factor": "1.1",
+        }
+    )
 
     assert config.rope_scaling is None
     assert config.rope_scale == 8.0
@@ -146,16 +195,18 @@ def test_command_context_extension_config_parses_ui_values():
 
 
 def test_api_generate_command_supports_context_extension_flags():
-    result = api_generate_command({
-        "k_method": "f16",
-        "v_method": "f16",
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 32768,
-        "parallel": 1,
-        "rope_scale": "8",
-        "yarn_orig_ctx": "4096",
-    })
+    result = api_generate_command(
+        {
+            "k_method": "f16",
+            "v_method": "f16",
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 32768,
+            "parallel": 1,
+            "rope_scale": "8",
+            "yarn_orig_ctx": "4096",
+        }
+    )
 
     assert "-c 32768" in result["command"]
     assert "--rope-scaling yarn" in result["command"]
@@ -165,16 +216,18 @@ def test_api_generate_command_supports_context_extension_flags():
 
 
 def test_api_generate_command_reports_invalid_context_extension():
-    result = api_generate_command({
-        "k_method": "f16",
-        "v_method": "f16",
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 32768,
-        "parallel": 1,
-        "rope_scaling": "linear",
-        "yarn_orig_ctx": "4096",
-    })
+    result = api_generate_command(
+        {
+            "k_method": "f16",
+            "v_method": "f16",
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 32768,
+            "parallel": 1,
+            "rope_scaling": "linear",
+            "yarn_orig_ctx": "4096",
+        }
+    )
 
     assert result["command"] == ""
     assert any(
@@ -184,10 +237,12 @@ def test_api_generate_command_reports_invalid_context_extension():
 
 
 def test_api_scan_llamacpp_reports_missing_binary():
-    result = api_scan_llamacpp({
-        "binary": "__definitely_missing_llama_server__",
-        "timeout_seconds": "0.1",
-    })
+    result = api_scan_llamacpp(
+        {
+            "binary": "__definitely_missing_llama_server__",
+            "timeout_seconds": "0.1",
+        }
+    )
 
     assert result["binary"] == "__definitely_missing_llama_server__"
     assert result["scanned"] is False
@@ -211,21 +266,23 @@ def test_api_presets_include_godzilla_kvarn():
 
 
 def test_api_generate_command_supports_godzilla_kvarn_dflash():
-    result = api_generate_command({
-        "fork_profile": "godzilla",
-        "k_method": "kvarn4",
-        "v_method": "kvarn4",
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 8192,
-        "parallel": 1,
-        "spec_dflash": True,
-        "spec_draft_model": "/opt/models/draft.gguf",
-        "spec_draft_n_max": 16,
-        "spec_branch_budget": 0,
-        "spec_dflash_cross_ctx": 512,
-        "spec_draft_gpu_layers": "all",
-    })
+    result = api_generate_command(
+        {
+            "fork_profile": "godzilla",
+            "k_method": "kvarn4",
+            "v_method": "kvarn4",
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 8192,
+            "parallel": 1,
+            "spec_dflash": True,
+            "spec_draft_model": "/opt/models/draft.gguf",
+            "spec_draft_n_max": 16,
+            "spec_branch_budget": 0,
+            "spec_dflash_cross_ctx": 512,
+            "spec_draft_gpu_layers": "all",
+        }
+    )
 
     assert "--cache-type-k kvarn4" in result["command"]
     assert "--cache-type-v kvarn4" in result["command"]
@@ -236,14 +293,16 @@ def test_api_generate_command_supports_godzilla_kvarn_dflash():
 
 
 def test_api_generate_command_rejects_kvarn_without_godzilla_profile():
-    result = api_generate_command({
-        "k_method": "kvarn4",
-        "v_method": "kvarn4",
-        "model_path": "/opt/models/model.gguf",
-        "port": 8080,
-        "context": 8192,
-        "parallel": 1,
-    })
+    result = api_generate_command(
+        {
+            "k_method": "kvarn4",
+            "v_method": "kvarn4",
+            "model_path": "/opt/models/model.gguf",
+            "port": 8080,
+            "context": 8192,
+            "parallel": 1,
+        }
+    )
 
     assert result["command"] == ""
     assert any(issue["method"] == "command" for issue in result["issues"])
@@ -359,14 +418,12 @@ def test_evaluated_ui_javascript_has_valid_syntax():
 def test_tokenizer_source_actions_keep_supported_calibration_modes():
     assert (
         "function useGigatokenPython(encodedPath) {\n"
-        "  document.getElementById('godzilla-mode').value = 'official_python';"
-        in run_ui.UI_HTML
+        "  document.getElementById('godzilla-mode').value = 'official_python';" in run_ui.UI_HTML
     )
     assert (
         "function useDomvoxSource(encodedCalibrator, encodedPath) {\n"
         "  document.getElementById('godzilla-mode').value = 'domvox';\n"
-        "  document.getElementById('godzilla-tokenizer').value = 'transformers';"
-        in run_ui.UI_HTML
+        "  document.getElementById('godzilla-tokenizer').value = 'transformers';" in run_ui.UI_HTML
     )
 
 
@@ -460,7 +517,11 @@ def test_api_runtime_start_uses_generated_argv_without_shell(tmp_path, monkeypat
     monkeypatch.setattr(
         run_ui,
         "api_generate_command",
-        lambda params: {"command": "fake", "argv": ["llama-server", "--model", params["model_path"]], "issues": []},
+        lambda params: {
+            "command": "fake",
+            "argv": ["llama-server", "--model", params["model_path"]],
+            "issues": [],
+        },
     )
 
     status = run_ui.api_runtime_start({"model_path": str(model)})
@@ -593,9 +654,7 @@ def test_godzilla_plan_is_bounded_to_saved_roots(tmp_path, monkeypatch):
     assert result["gguf"] == str(model.resolve())
     assert result["kvarn_calibration_required"] is False
     with pytest.raises(ValueError, match="saved add-on root"):
-        run_ui.api_plan_godzilla(
-            {"checkout": str(tmp_path / "outside"), "gguf": str(model)}
-        )
+        run_ui.api_plan_godzilla({"checkout": str(tmp_path / "outside"), "gguf": str(model)})
     with pytest.raises(ValueError, match="checkout or model folder"):
         run_ui.api_plan_godzilla(
             {
@@ -642,6 +701,10 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
         }
     )
     monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    monkeypatch.setattr(
+        "multi_turboquant.integration.godzilla_workspace.inspect_calibration_python",
+        lambda path, **kwargs: _valid_calibration_python(path),
+    )
 
     result = run_ui.api_plan_godzilla(
         {
@@ -652,7 +715,6 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
             "calibration_input": str(calibration_input),
             "hf_model": "org/model",
             "mode": "official_python",
-            "dependency_override": True,
         }
     )
 
@@ -676,9 +738,7 @@ def test_godzilla_official_plan_accepts_calibrator_and_text_inside_saved_roots(
         )
 
 
-def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
-    tmp_path, monkeypatch
-):
+def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(tmp_path, monkeypatch):
     addon_root = tmp_path / "addons"
     checkout = addon_root / "godzilla-llama.cpp"
     triattention = addon_root / "triattention"
@@ -719,6 +779,26 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
         }
     )
     monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
+    discovery = {
+        "schema": 1,
+        "selected": str(calibration_python.resolve()),
+        "candidate_count": 1,
+        "checked_count": 1,
+        "probe_limit": 8,
+        "truncated": False,
+        "bounded": True,
+        "locations": ["managed"],
+        "attempts": [_valid_calibration_python(calibration_python)],
+    }
+    monkeypatch.setattr(
+        run_ui,
+        "select_compatible_calibration_python",
+        lambda **kwargs: discovery,
+    )
+    monkeypatch.setattr(
+        "multi_turboquant.integration.godzilla_workspace.inspect_calibration_python",
+        lambda path, **kwargs: _valid_calibration_python(path),
+    )
     monkeypatch.setattr(
         run_ui,
         "plan_environment",
@@ -732,15 +812,16 @@ def test_godzilla_plan_auto_selects_official_checkout_and_environment_python(
             "calibration_input": str(calibration_input),
             "hf_model": "org/model",
             "mode": "official_python",
-            "dependency_override": True,
         }
     )
 
     assert result["ready"] is True
     assert result["python"] == str(calibration_python.resolve())
     assert result["calibrator"] == str(calibrator.resolve())
-    assert result["dependency_repair"]["available"] is True
+    assert result["dependency_repair"]["available"] is False
+    assert result["dependency_repair"]["needed"] is False
     assert result["dependency_repair"]["profile"] == "triattention"
+    assert result["python_discovery"] == discovery
     assert result["resource_policy"]["max_concurrent_calibrations"] == 1
 
 
@@ -770,19 +851,27 @@ def test_managed_triattention_python_preserves_linux_venv_symlink(tmp_path, monk
     assert selected != base.resolve()
 
 
-def test_godzilla_plan_does_not_offer_managed_repair_for_manual_python(
-    tmp_path, monkeypatch
-):
+def test_godzilla_plan_offers_managed_repair_for_incompatible_custom_python(tmp_path, monkeypatch):
+    environment_root = tmp_path / "envs"
+    store = UISettingsStore(tmp_path / "ui.json")
+    store.save({**DEFAULT_UI_SETTINGS, "environment_root": str(environment_root)})
     plan = SimpleNamespace(
         mode="official_python",
         issues=[SimpleNamespace(code="calibration_dependencies_missing")],
         to_dict=lambda: {"ready": False},
     )
+    monkeypatch.setattr(run_ui, "SETTINGS_STORE", store)
     monkeypatch.setattr(run_ui, "_godzilla_plan_from_params", lambda params: plan)
+    monkeypatch.setattr(
+        run_ui,
+        "plan_environment",
+        lambda *args, **kwargs: SimpleNamespace(ready=True, issues=()),
+    )
 
     result = run_ui.api_plan_godzilla({"python": str(tmp_path / "custom-python")})
 
-    assert result["dependency_repair"]["available"] is False
+    assert result["dependency_repair"]["available"] is True
+    assert result["dependency_repair"]["selection_reset_required"] is True
 
 
 def test_godzilla_plan_preflights_managed_repair(tmp_path, monkeypatch):
@@ -849,9 +938,7 @@ def test_godzilla_creation_requires_confirmation():
         run_ui.api_create_godzilla({"confirm": False})
 
 
-def test_calibration_text_generation_is_confirmed_and_bounded_to_model_root(
-    tmp_path, monkeypatch
-):
+def test_calibration_text_generation_is_confirmed_and_bounded_to_model_root(tmp_path, monkeypatch):
     model_root = tmp_path / "models"
     model_root.mkdir()
     store = UISettingsStore(tmp_path / "ui.json")
@@ -862,18 +949,14 @@ def test_calibration_text_generation_is_confirmed_and_bounded_to_model_root(
     with pytest.raises(ValueError, match="explicit confirmation"):
         run_ui.api_generate_calibration_text({"n_tokens": 512})
 
-    result = run_ui.api_generate_calibration_text(
-        {"n_tokens": 512, "confirm": True}
-    )
+    result = run_ui.api_generate_calibration_text({"n_tokens": 512, "confirm": True})
 
     output = Path(result["path"])
     assert output.is_file()
     assert output.is_relative_to(model_root.resolve())
     assert result["reused"] is False
 
-    reused = run_ui.api_generate_calibration_text(
-        {"n_tokens": 512, "confirm": True}
-    )
+    reused = run_ui.api_generate_calibration_text({"n_tokens": 512, "confirm": True})
     assert reused["reused"] is True
 
 
@@ -892,6 +975,7 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
         mode="official_python",
         attention_implementation="sdpa",
         dependency_override=False,
+        python_discovery={"selected": str(tmp_path / "python.exe")},
     )
     calls = []
 
@@ -924,6 +1008,7 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
                 "attention_implementation": "sdpa",
                 "tokenizer_backend": "transformers",
                 "dependency_override": False,
+                "python_discovery": plan.python_discovery,
             },
         )
     ]

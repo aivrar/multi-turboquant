@@ -112,8 +112,18 @@ preflight. The confirmed action ignores unrelated interpreter and local-source
 overrides, re-synchronizes the pinned `triattention` environment with a
 conservative two-job limit, validates Torch, Transformers, Accelerate, and
 TriAttention, and checks the preparation plan again when the background job
-finishes. A manually selected Python is not modified; repair it outside
-Multi-TurboQuant or select the managed environment.
+finishes. An incompatible manually selected Python is cleared when managed
+repair starts; its environment is not modified.
+
+With no explicit selection, calibration checks at most eight candidates in
+order: the owned TriAttention environment, active virtual/Conda, current Python,
+other managed environments, `PATH`, and conventional pyenv roots. Every probe
+runs in isolation and reports every missing import across Torch, Transformers,
+Accelerate, NumPy, Safetensors, Hugging Face Hub, Tokenizers, and SentencePiece,
+plus Gigatoken or FlashAttention only when used. Multi-TurboQuant does not mix
+`site-packages` between environments. A missing import cannot be bypassed by a
+manual dependency override, and the selected interpreter is checked again just
+before the background process starts.
 
 **Scan Python and pyenv environments for Gigatoken** checks at most 64
 interpreters from the current process, `PATH`, active virtual/Conda environments,
@@ -123,6 +133,16 @@ compatible result fills both the Python and tokenizer controls. On Linux and
 macOS the application deliberately retains `.venv/bin/python` as a lexical path;
 following its final symlink to `uv`'s or the system's base executable would lose
 the virtual-environment prefix and cause false missing-package reports.
+
+The domvox source inspector also requires the sibling
+`triattention_common.py`. Calibration and the subsequent Transformers-backed
+conversion both execute under the selected, validated Python. On failure, the
+job card exposes a redacted diagnostic report and writes an atomic
+`<output>.<job-id>.diagnostics.json` beside the requested artifact. It covers
+the exact process and working directory, host and selected interpreter details,
+all dependency imports and tracebacks, relevant path/file state, source
+revision, discovery attempts, OS and CUDA/toolchain state, VRAM, disk capacity,
+log tails, and recovery steps; common token and URL credentials are redacted.
 
 **Generate generic starter text** creates deterministic offline text under
 `<model-root>/.mtq/calibration/` and selects it as the calibration input. It

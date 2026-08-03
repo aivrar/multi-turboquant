@@ -4,22 +4,24 @@
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
+import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
 from .._paths import lexical_absolute_path
+from ..optimizations.environments import read_os_release, redact_diagnostic_text
 
 from ..calibration.godzilla_triattention import (
     LONG_CALIBRATION_THRESHOLD,
     MAX_CALIBRATION_TOKENS,
-    convert_domvox_triattention_stats,
     inspect_calibration_python,
     inspect_domvox_triattention_calibrator,
     inspect_godzilla_triattention_file,
-    load_huggingface_model_metadata,
     inspect_official_triattention_calibrator,
 )
 
@@ -48,7 +50,12 @@ def _candidate_binaries(root: Path) -> list[Path]:
         root / "build-gigatoken-cuda" / "bin",
         root / "build-gigatoken-cuda" / "bin" / "Release",
     )
-    return [directory / name for directory in directories for name in names if (directory / name).is_file()]
+    return [
+        directory / name
+        for directory in directories
+        for name in names
+        if (directory / name).is_file()
+    ]
 
 
 def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
@@ -76,7 +83,9 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
     if not root.is_dir():
         issues.append(f"Godzilla source checkout is not a directory: {root}")
     else:
-        issues.extend(f"Missing Godzilla marker: {name}" for name, found in markers.items() if not found)
+        issues.extend(
+            f"Missing Godzilla marker: {name}" for name, found in markers.items() if not found
+        )
 
     arg_source = root / "common" / "arg.cpp"
     triattention_source = root / "src" / "llama-triattention.cpp"
@@ -93,8 +102,7 @@ def inspect_godzilla_checkout(path: str | Path) -> dict[str, object]:
         "features": {
             "kvarn": _file_contains(arg_source, "kvarn"),
             "triattention": (
-                triattention_source.is_file()
-                and _file_contains(arg_source, "--triattention-stats")
+                triattention_source.is_file() and _file_contains(arg_source, "--triattention-stats")
             ),
             "triattention_prepare": ensure_script.is_file(),
             "triattention_auto_resolver": resolver_script.is_file(),
@@ -170,6 +178,7 @@ class GodzillaCalibrationPlan:
     environment: tuple[tuple[str, str], ...]
     issues: tuple[GodzillaIssue, ...]
     tokenizer_backend: str = "transformers"
+    python_discovery: Mapping[str, object] | None = None
 
     @property
     def ready(self) -> bool:
@@ -202,6 +211,7 @@ class GodzillaCalibrationPlan:
             "tokenizer_backend": self.tokenizer_backend,
             "dependency_validation": self.dependency_validation,
             "dependency_override": self.dependency_override,
+            "python_discovery": self.python_discovery,
             "command": list(self.command),
             "environment": dict(self.environment),
             "issues": [issue.to_dict() for issue in self.issues],
@@ -230,6 +240,7 @@ def plan_godzilla_triattention(
     tokenizer_backend: str = "transformers",
     verify_dependencies: bool = False,
     dependency_override: bool = False,
+    python_discovery: Mapping[str, object] | None = None,
     dependency_runner=subprocess.run,
     shell_executable: str | None = None,
 ) -> GodzillaCalibrationPlan:
@@ -245,14 +256,13 @@ def plan_godzilla_triattention(
     normalized_device = device.strip().lower()
     normalized_mode = mode.strip().lower()
     normalized_attention = attention_implementation.strip().lower()
+    dependency_attention = normalized_attention if normalized_mode == "official_python" else "sdpa"
     normalized_tokenizer = tokenizer_backend.strip().lower()
     inspection = inspect_godzilla_checkout(checkout_path)
     python_value = python or os.environ.get("TRIATTENTION_PYTHON")
     inspection_paths = inspection.get("paths")
     bundled_calibrator = (
-        inspection_paths.get("bundled_calibrator")
-        if isinstance(inspection_paths, dict)
-        else None
+        inspection_paths.get("bundled_calibrator") if isinstance(inspection_paths, dict) else None
     )
     calibrator_value = (
         calibrator
@@ -271,9 +281,7 @@ def plan_godzilla_triattention(
     python_path = lexical_absolute_path(python_value) if python_value else None
     calibrator_path = Path(calibrator_value).expanduser().resolve() if calibrator_value else None
     domvox_calibrator_path = (
-        Path(domvox_calibrator_value).expanduser().resolve()
-        if domvox_calibrator_value
-        else None
+        Path(domvox_calibrator_value).expanduser().resolve() if domvox_calibrator_value else None
     )
     calibration_input_path = (
         Path(calibration_input_value).expanduser().resolve() if calibration_input_value else None
@@ -420,10 +428,14 @@ def plan_godzilla_triattention(
                     "domvox TRIA v2 to Godzilla v1 conversion drops layer-budget and attention-scale fields; explicitly acknowledge this experimental conversion.",
                 )
             )
-    if not output_exists and normalized_mode in {"official_python", "domvox"} and (
-        calibration_input_path is None
-        or not calibration_input_path.is_file()
-        or calibration_input_path.stat().st_size == 0
+    if (
+        not output_exists
+        and normalized_mode in {"official_python", "domvox"}
+        and (
+            calibration_input_path is None
+            or not calibration_input_path.is_file()
+            or calibration_input_path.stat().st_size == 0
+        )
     ):
         issues.append(
             GodzillaIssue(
@@ -432,10 +444,14 @@ def plan_godzilla_triattention(
                 "Select a non-empty plain-text calibration input file.",
             )
         )
-    if not output_exists and normalized_mode == "official_convert" and (
-        official_stats_input_path is None
-        or not official_stats_input_path.is_file()
-        or official_stats_input_path.suffix.lower() not in {".pt", ".pth"}
+    if (
+        not output_exists
+        and normalized_mode == "official_convert"
+        and (
+            official_stats_input_path is None
+            or not official_stats_input_path.is_file()
+            or official_stats_input_path.suffix.lower() not in {".pt", ".pth"}
+        )
     ):
         issues.append(
             GodzillaIssue(
@@ -481,6 +497,18 @@ def plan_godzilla_triattention(
                 "error",
                 "invalid_attention_implementation",
                 "Attention implementation must be eager, sdpa, or flash_attention_2.",
+            )
+        )
+    elif (
+        normalized_mode == "official_python"
+        and normalized_attention == "flash_attention_2"
+        and normalized_device != "cuda"
+    ):
+        issues.append(
+            GodzillaIssue(
+                "error",
+                "flash_attention_requires_cuda",
+                "flash_attention_2 calibration requires the CUDA device.",
             )
         )
     if (
@@ -597,6 +625,7 @@ def plan_godzilla_triattention(
             python_path,
             device=normalized_device,
             tokenizer_backend=normalized_tokenizer,
+            attention_implementation=dependency_attention,
             runner=dependency_runner,
         )
         report = python_check.get("report")
@@ -641,19 +670,19 @@ def plan_godzilla_triattention(
                 issues.append(
                     GodzillaIssue(
                         "warning",
-                        "calibration_dependency_override",
-                        "Automatic dependency validation failed, but the manual override is active: "
-                        f"{message}. Calibration may still fail.",
+                        "calibration_dependency_override_disabled",
+                        "The dependency override was requested, but missing calibration imports "
+                        "can no longer be bypassed. Select a compatible Python or repair the "
+                        "managed TriAttention environment.",
                     )
                 )
-            else:
-                issues.append(
-                    GodzillaIssue(
-                        "error",
-                        "calibration_dependencies_missing",
-                        f"Calibration dependency check failed: {message}",
-                    )
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "calibration_dependencies_missing",
+                    f"Calibration dependency check failed: {message}",
                 )
+            )
 
     if normalized_mode in {"official_python", "official_convert", "domvox"}:
         issues.append(
@@ -725,6 +754,8 @@ def plan_godzilla_triattention(
             "--tokenizer-backend",
             normalized_tokenizer,
         ]
+        if allow_long_calibration:
+            command.append("--allow-long-calibration")
     elif (
         not output_exists
         and normalized_mode == "domvox"
@@ -733,30 +764,34 @@ def plan_godzilla_triattention(
         and calibration_input_path is not None
         and normalized_hf is not None
     ):
-        executable = [str(python_path), str(domvox_calibrator_path)]
-        if normalized_tokenizer == "gigatoken":
-            wrapper = Path(__file__).resolve().parents[1] / "calibration" / "gigatoken_runner.py"
-            executable = [
-                str(python_path),
-                str(wrapper),
-                "--kind",
-                "domvox",
-                "--calibrator",
-                str(domvox_calibrator_path),
-            ]
+        converter = Path(__file__).resolve().parents[1] / "calibration" / "godzilla_triattention.py"
         command = [
-            *executable,
+            str(python_path),
+            str(converter),
+            "domvox",
+            "--calibrator",
+            str(domvox_calibrator_path),
+            "--python",
+            str(python_path),
             "--model",
             normalized_hf,
             "--input",
             str(calibration_input_path),
             "--output",
+            str(output_path),
+            "--stats-output",
             str(official_stats),
             "--max-length",
             str(n_tokens),
             "--device",
             normalized_device,
+            "--tokenizer-backend",
+            normalized_tokenizer,
         ]
+        if allow_long_calibration:
+            command.append("--allow-long-calibration")
+        if domvox_accept_lossy:
+            command.append("--accept-lossy")
     elif (
         not output_exists
         and normalized_mode == "official_convert"
@@ -825,10 +860,236 @@ def plan_godzilla_triattention(
         environment=tuple(environment),
         issues=tuple(issues),
         tokenizer_backend=normalized_tokenizer,
+        python_discovery=python_discovery,
     )
 
 
 RunCommand = Callable[..., subprocess.CompletedProcess[str]]
+
+_CALIBRATION_DIAGNOSTIC_ENV_KEYS = (
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
+    "PYENV_ROOT",
+    "CUDA_HOME",
+    "CUDA_PATH",
+    "CUDA_VISIBLE_DEVICES",
+    "HIP_VISIBLE_DEVICES",
+    "LD_LIBRARY_PATH",
+    "PATH",
+    "GODZILLA_ROOT",
+    "TRIATTENTION_PYTHON",
+    "TRIATTENTION_CALIBRATE_PY",
+    "TRIATTENTION_DOMVOX_CALIBRATE_PY",
+)
+
+
+def _diagnostic_path(path: Path | None) -> dict[str, object] | None:
+    if path is None:
+        return None
+    lexical = lexical_absolute_path(path)
+    result: dict[str, object] = {
+        "lexical": str(lexical),
+        "resolved": str(lexical.resolve()),
+        "exists": lexical.exists(),
+        "is_file": lexical.is_file(),
+        "is_dir": lexical.is_dir(),
+    }
+    try:
+        stat = lexical.stat()
+    except OSError as exc:
+        result["stat_error"] = f"{type(exc).__name__}: {exc}"
+    else:
+        result["size_bytes"] = stat.st_size
+        result["modified_utc"] = datetime.fromtimestamp(
+            stat.st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+    return result
+
+
+def _diagnostic_command(
+    argv: list[str],
+    *,
+    cwd: Path,
+    runner: RunCommand,
+    timeout: int = 15,
+) -> dict[str, object]:
+    try:
+        result = runner(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"argv": argv, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "argv": argv,
+        "returncode": int(result.returncode),
+        "stdout": (result.stdout or "")[-8000:],
+        "stderr": (result.stderr or "")[-8000:],
+    }
+
+
+def _redact_diagnostic_value(value: object) -> object:
+    if isinstance(value, str):
+        return redact_diagnostic_text(value)
+    if isinstance(value, Mapping):
+        return {str(key): _redact_diagnostic_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_diagnostic_value(item) for item in value]
+    return value
+
+
+def collect_godzilla_calibration_diagnostics(
+    plan: GodzillaCalibrationPlan,
+    *,
+    failure: BaseException | str,
+    returncode: int | None = None,
+    stdout: str = "",
+    stderr: str = "",
+    runner: RunCommand = subprocess.run,
+) -> dict[str, object]:
+    """Collect a bounded, redacted report for one failed calibration job."""
+    run_cwd = (
+        plan.domvox_calibrator.parent
+        if plan.mode == "domvox" and plan.domvox_calibrator is not None
+        else plan.checkout
+    )
+    interpreter_probe = None
+    if plan.python is not None and plan.python.is_file():
+        interpreter_probe = inspect_calibration_python(
+            plan.python,
+            device=plan.device,
+            tokenizer_backend=plan.tokenizer_backend,
+            attention_implementation=(
+                plan.attention_implementation if plan.mode == "official_python" else "sdpa"
+            ),
+            runner=runner,
+            timeout=60,
+        )
+    tools: dict[str, object] = {}
+    tool_commands = {
+        "git": ["git", "--version"],
+        "uv": ["uv", "--version"],
+        "nvidia_smi": [
+            "nvidia-smi",
+            "--query-gpu=index,name,driver_version,memory.total,memory.free",
+            "--format=csv,noheader",
+        ],
+        "nvcc": ["nvcc", "--version"],
+    }
+    for name, argv in tool_commands.items():
+        executable = shutil.which(argv[0])
+        tools[name] = (
+            _diagnostic_command([executable, *argv[1:]], cwd=run_cwd, runner=runner)
+            if executable is not None
+            else {"available": False}
+        )
+    source_control: dict[str, object] = {}
+    git = shutil.which("git")
+    if git is not None and plan.checkout.is_dir():
+        source_control["head"] = _diagnostic_command(
+            [git, "-C", str(plan.checkout), "rev-parse", "HEAD"],
+            cwd=run_cwd,
+            runner=runner,
+        )
+        source_control["origin"] = _diagnostic_command(
+            [git, "-C", str(plan.checkout), "remote", "get-url", "origin"],
+            cwd=run_cwd,
+            runner=runner,
+        )
+        source_control["status"] = _diagnostic_command(
+            [git, "-C", str(plan.checkout), "status", "--short"],
+            cwd=run_cwd,
+            runner=runner,
+        )
+    disk_root = plan.output.parent if plan.output.parent.exists() else plan.checkout
+    try:
+        disk = shutil.disk_usage(disk_root)
+        disk_report: dict[str, object] = {
+            "path": str(disk_root),
+            "total_bytes": disk.total,
+            "used_bytes": disk.used,
+            "free_bytes": disk.free,
+        }
+    except OSError as exc:
+        disk_report = {"path": str(disk_root), "error": f"{type(exc).__name__}: {exc}"}
+    child_environment = {**os.environ, **dict(plan.environment)}
+    environment = {
+        key: child_environment[key]
+        for key in _CALIBRATION_DIAGNOSTIC_ENV_KEYS
+        if key in child_environment
+    }
+    report: dict[str, object] = {
+        "schema": 1,
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "failure": {
+            "type": type(failure).__name__ if isinstance(failure, BaseException) else "Error",
+            "message": str(failure),
+            "returncode": returncode,
+        },
+        "host": {
+            "platform": platform.platform(),
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+            "host_python": sys.version,
+            "host_executable": sys.executable,
+            "host_prefix": sys.prefix,
+            "working_directory": os.getcwd(),
+            "os_release": read_os_release(),
+        },
+        "plan": {
+            "mode": plan.mode,
+            "device": plan.device,
+            "tokenizer_backend": plan.tokenizer_backend,
+            "attention_implementation": plan.attention_implementation,
+            "n_tokens": plan.n_tokens,
+            "dependency_override_requested": plan.dependency_override,
+            "ready_at_submission": plan.ready,
+            "issues": [issue.to_dict() for issue in plan.issues],
+        },
+        "process": {
+            "command": list(plan.command),
+            "cwd": str(run_cwd),
+            "environment": environment,
+            "stdout_tail": stdout[-16000:],
+            "stderr_tail": stderr[-16000:],
+        },
+        "paths": {
+            "checkout": _diagnostic_path(plan.checkout),
+            "gguf": _diagnostic_path(plan.gguf),
+            "output": _diagnostic_path(plan.output),
+            "python": _diagnostic_path(plan.python),
+            "calibrator": _diagnostic_path(plan.calibrator),
+            "domvox_calibrator": _diagnostic_path(plan.domvox_calibrator),
+            "domvox_common": _diagnostic_path(
+                plan.domvox_calibrator.parent / "triattention_common.py"
+                if plan.domvox_calibrator is not None
+                else None
+            ),
+            "calibration_input": _diagnostic_path(plan.calibration_input),
+            "official_stats": _diagnostic_path(plan.official_stats),
+            "official_stats_input": _diagnostic_path(plan.official_stats_input),
+        },
+        "dependency_preflight": plan.dependency_validation,
+        "interpreter_discovery": plan.python_discovery,
+        "interpreter_probe_at_failure": interpreter_probe,
+        "source_control": source_control,
+        "tools": tools,
+        "disk": disk_report,
+        "recovery": [
+            "Do not copy site-packages or modify sys.path across virtual environments.",
+            "Clear a custom Python selection and use the compatible interpreter chosen by the planner.",
+            "If no interpreter passes, run: mtq-env create triattention --recreate --yes",
+            "Collect a standalone report with: mtq-env diagnose triattention --output triattention-diagnostics.json",
+            "Attach this calibration diagnostic JSON and the exact UI/CLI inputs when reporting a failure.",
+        ],
+    }
+    return _redact_diagnostic_value(report)  # type: ignore[return-value]
 
 
 def run_godzilla_triattention(
@@ -872,42 +1133,22 @@ def run_godzilla_triattention(
         )
     if not plan.output.is_file():
         if plan.mode == "domvox":
-            if plan.official_stats is None or not plan.official_stats.is_file():
-                raise RuntimeError(
-                    f"domvox calibration command did not create {plan.official_stats}"
-                )
-            if not plan.hf_model:
-                raise RuntimeError("domvox conversion requires a matching Hugging Face model")
-            model_metadata = load_huggingface_model_metadata(plan.hf_model)
-            display_name = (
-                plan.hf_model.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            intermediate = (
+                f" Intermediate stats exist at {plan.official_stats}."
+                if plan.official_stats is not None and plan.official_stats.is_file()
+                else ""
             )
-            conversion = convert_domvox_triattention_stats(
-                plan.official_stats,
-                plan.output,
-                model_name=display_name,
-                num_layers=int(model_metadata["num_layers"]),
-                num_attention_heads=int(model_metadata["num_attention_heads"]),
-                num_key_value_heads=int(model_metadata["num_key_value_heads"]),
-                rope_theta=float(model_metadata["rope_theta"]),
-                expected_head_dim=int(model_metadata["head_dim"]),
-                accept_lossy=plan.domvox_accept_lossy,
+            raise RuntimeError(
+                f"domvox calibration/conversion command did not create {plan.output}."
+                f"{intermediate} The selected calibration environment must run both stages."
             )
-            artifact = inspect_godzilla_triattention_file(plan.output)
-            return {
-                "output": str(plan.output),
-                "reused": existed,
-                "artifact": artifact,
-                "domvox_stats": str(plan.official_stats),
-                "conversion": conversion,
-                "stdout": result.stdout or "",
-                "stderr": result.stderr or "",
-            }
         raise RuntimeError(f"Godzilla calibration command did not create {plan.output}")
     try:
         artifact = inspect_godzilla_triattention_file(plan.output)
     except ValueError as exc:
-        raise RuntimeError(f"Godzilla calibration command created an invalid artifact: {exc}") from exc
+        raise RuntimeError(
+            f"Godzilla calibration command created an invalid artifact: {exc}"
+        ) from exc
     return {
         "output": str(plan.output),
         "reused": existed,

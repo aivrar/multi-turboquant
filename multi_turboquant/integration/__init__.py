@@ -43,6 +43,7 @@ from .bridge_adapter import BridgeAdapter
 from .godzilla_workspace import (
     GodzillaCalibrationPlan,
     GodzillaIssue,
+    collect_godzilla_calibration_diagnostics,
     inspect_godzilla_checkout,
     plan_godzilla_triattention,
     run_godzilla_triattention,
@@ -90,6 +91,7 @@ __all__ = [
     "BridgeAdapter",
     "GodzillaCalibrationPlan",
     "GodzillaIssue",
+    "collect_godzilla_calibration_diagnostics",
     "inspect_godzilla_checkout",
     "plan_godzilla_triattention",
     "run_godzilla_triattention",
