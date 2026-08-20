@@ -190,6 +190,13 @@ def generate_calibration_text(
     if reusable_report is not None:
         return reusable_report
     if output.exists():
+        reusable_report = _wait_for_concurrent_corpus(
+            output,
+            header=header,
+            requested_tokens=requested_tokens,
+        )
+        if reusable_report is not None:
+            return reusable_report
         raise FileExistsError(f"Refusing to overwrite an existing calibration file: {output}")
 
     target_characters = max(4096, requested_tokens * 6)
