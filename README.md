@@ -38,6 +38,11 @@ does not replace packages in the core Multi-TurboQuant environment.
 The separate `mtq-godzilla-gigatoken` workflow can also prepare, build, and
 qualify a revision-pinned Godzilla llama.cpp runtime with native Gigatoken
 tokenization without modifying an existing checkout.
+For the exact Godzilla `09214b160` compatibility baseline,
+`mtq-godzilla-compose` can create a separate hash-tracked source tree with an
+off-by-default, request-gated PFlash policy and bounded whole-idle-slot
+KVFlash residency. It does not claim arbitrary KV-page restore or remove
+Godzilla's existing TriAttention/KVarN conflict.
 
 ```bash
 git clone https://github.com/aivrar/multi-turboquant
@@ -382,6 +387,46 @@ The validated server is under `build-gigatoken-<backend>/bin` (and
 `bin/Release` for multi-config Windows builds). The default build may serve the
 API without an embedded browser UI; launch it with a local GGUF model path.
 
+### Exact Godzilla PFlash/KVFlash composition
+
+`mtq-godzilla-compose` creates a new source tree pinned to Godzilla commit
+`09214b160b402011359f0ef9d5fa8f8be1112e85`, applies exact fail-closed source
+edits, records hashes for every changed runtime file, and builds only
+`llama-server`. It refuses existing destinations and arbitrary Godzilla
+checkouts.
+
+```bash
+# Read-only plan
+mtq-godzilla-compose plan /opt/godzilla-composed
+
+# Prepare, build, and verify the CPU server
+mtq-godzilla-compose all /opt/godzilla-composed \
+  --backend cpu --max-jobs 2 --yes
+
+# Separate CUDA build with the matching toolkit
+mtq-godzilla-compose build /opt/godzilla-composed \
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+```
+
+Both additions are disabled by default. Start with `--pflash` to permit the
+feature, then set `"pflash": true` only on a plain completion request that has
+passed workload-specific quality checks. Chat, multimodal, embedding, rerank,
+and parallel-parent requests are bypassed. Prefix and suffix tokens are
+protected, while the eligible middle is thinned deterministically.
+
+`--kvflash-pages N --kvflash-page-tokens 256` sets a token-accounted LRU budget
+for complete idle-slot KV state. This is a useful, composable server-residency
+tier; it is not the research fork's unfinished arbitrary-page restore path and
+does not claim disk restore or prefill skipping. `/props` reports the exact
+composition profile and tier, while application and eviction events are sent
+to the server log.
+
+The overlay leaves DFlash/DDTree, KVarN, and TriAttention internals unchanged.
+PFlash may be used before either KVarN or TriAttention, and whole-slot KVFlash
+does not change their cache representation. Godzilla still rejects
+TriAttention plus KVarN, and SpecLA remains outside this profile because it is
+a specialized linear-attention runtime rather than a stackable add-on.
+
 ### Godzilla KVarN and DFlash
 
 KVarN is available through `atomicmilkshake/godzilla-llama.cpp`, not upstream
@@ -607,7 +652,9 @@ builds, and import validation. Constrained research sources, training systems,
 and separate serving runtimes instead receive repository-specific setup
 contracts. This includes Lucebox, ChunkLlama, RaBitQCache, ScoPE,
 DuoAttention, IceCache, the PFlash/KVFlash llama.cpp fork, and the guarded
-Resonance-JetLong composition. In particular, current Maru checkouts are
+Resonance-JetLong composition. The separate `godzilla_composition` catalog
+entry documents the exact pinned overlay rather than treating the HawgAuto
+fork as an installable add-on. In particular, current Maru checkouts are
 recognized through `pyproject.toml`/`setup.py` and the
 `maru_resource_manager`/`maru_server` packages—no root `CMakeLists.txt` is
 required. Maru remains guided-only because its upstream installer expects a
@@ -734,7 +781,8 @@ The browser UI now has two focused views:
   issue #43 projects alongside the earlier add-ons, domvox, the CUDA
   weight-share source, and separate llama.cpp forks without importing or
   executing source code; guided and blocked profiles are not made installable
-  by discovery. The pinned Godzilla + Gigatoken source preparation
+  by discovery. Prepared exact-commit composition trees are recognized by their
+  manifest and routed through the hash-bounded inspector. The pinned Godzilla + Gigatoken source preparation
   and build remains an explicit `mtq-godzilla-gigatoken` CLI operation.
 
 Settings and form defaults persist in
@@ -758,7 +806,7 @@ multi_turboquant/
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, TriAttention adapters, parity wrapper
-  integration/           llama.cpp flags, Godzilla/Gigatoken builder, weight sharing, vLLM patch
+  integration/           llama.cpp flags, pinned Godzilla builders, weight sharing, vLLM patch
   benchmark/             Head-to-head comparison, perplexity, VRAM profiling
 ```
 
@@ -798,6 +846,7 @@ missing:
 | Gigatoken Python tokenizer accelerator | [marcelroed/gigatoken](https://github.com/marcelroed/gigatoken) |
 | Gigatoken llama.cpp runtime integration lineage | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
 | Issue #43 optimization research and source contracts | [JetSpec](https://github.com/hao-ai-lab/JetSpec), [Lucebox](https://github.com/Luce-Org/lucebox), [Proxima](https://github.com/Tenosra/Proxima), [Jet-Long](https://github.com/jet-ai-projects/jet-long), [ChunkLlama](https://github.com/HKUNLP/ChunkLlama), [RaBitQCache](https://github.com/Sakuraaa0/RaBitQCache), [ScoPE](https://github.com/oncemoe/ScoPE), [DuoAttention](https://github.com/mit-han-lab/duo-attention), [IceCache](https://github.com/yuzhenmao/IceCache), and [PFlash/KVFlash llama.cpp](https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash) |
+| Exact Godzilla PFlash/KVFlash composition request | [Godzilla llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp), [PFlash/KVFlash fork](https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash), and issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
 is a command-generation, source-inspection, and preparation-workflow
@@ -831,6 +880,7 @@ contracts and do not imply runtime compatibility.
 | Requested Debian 12/13 hardening, deeper diagnostics, the exact Godzilla `09214b160` compatibility profile, domvox/Gigatoken support, and reviewed CUDA weight-share source handling | [@jawadala](https://github.com/jawadala) | Issue [#40](https://github.com/aivrar/multi-turboquant/issues/40) |
 | Reported a domvox calibration launch under an interpreter without Torch, prompting compatible-environment discovery, fail-closed final preflight, exact-environment conversion, and detailed redacted failure bundles | [@jawadala](https://github.com/jawadala) | Issue [#42](https://github.com/aivrar/multi-turboquant/issues/42) |
 | Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
+| Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
@@ -839,7 +889,8 @@ Godzilla/KVarN support, context-extension tooling, optimization catalog,
 isolated dependency system, practical UI workflow, and the official and
 domvox TriAttention calibration paths, including the interpreter-path
 correction, parity-checked Gigatoken option, and the broader issue #43 research
-catalog with explicit safety boundaries.
+catalog with explicit safety boundaries, including the exact-commit composition
+workflow prompted by issue #44.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

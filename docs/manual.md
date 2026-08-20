@@ -917,6 +917,45 @@ optional and can be supplied with `--fixture-dir`; missing optional fixtures
 are not registered as failures. `verify` reruns the suites and checks the
 resulting `llama-server --version` output.
 
+### Exact Godzilla PFlash/KVFlash composition
+
+`mtq-godzilla-compose` is a separate source-preparation workflow for the exact
+Godzilla `09214b160b402011359f0ef9d5fa8f8be1112e85` baseline. It creates a new
+destination, applies exact-anchor edits, records hashes for all adapted runtime
+files, builds only `llama-server`, and verifies that the resulting binary still
+advertises Godzilla DDTree/TriAttention together with the new PFlash/KVFlash
+surface. Existing destinations and arbitrary checkouts are rejected.
+
+```bash
+mtq-godzilla-compose plan /opt/godzilla-composed
+mtq-godzilla-compose all /opt/godzilla-composed \
+  --backend cpu --max-jobs 2 --yes
+mtq-godzilla-compose build /opt/godzilla-composed \
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+mtq-godzilla-compose verify /opt/godzilla-composed --backend cpu
+```
+
+PFlash has two gates: the server must start with `--pflash`, and an eligible
+plain completion request must contain `"pflash": true`. It remains off for
+chat, multimodal, embedding, rerank, and parallel-parent requests, preserves a
+protected prefix and suffix, and does not operate below
+`--pflash-min-tokens`. `--pflash-keep-ratio` is restricted to `(0, 1]`.
+Because prompt thinning is lossy, validate exact-task bypass, retrieval, code,
+perplexity, and task quality before enabling it for a route.
+
+KVFlash in this profile is deliberately a whole-idle-slot LRU residency tier:
+`--kvflash-pages N --kvflash-page-tokens 256` defines its token-accounted
+budget. It does not manipulate KVarN pages or TriAttention entries and does not
+claim arbitrary-page restore, disk restore, or prefill skipping. `/props`
+reports the configuration and truthful capability limits; PFlash applications
+and KVFlash evictions are logged.
+
+DFlash/DDTree can remain active with the overlay. PFlash may precede either
+KVarN or TriAttention, and the whole-slot residency tier can retain either
+representation. TriAttention plus KVarN remains rejected by Godzilla itself.
+SpecLA is excluded because its linear-attention runtime is not a generic
+Godzilla add-on.
+
 ### CUDA weight-share launch wrapper
 
 For Linux x86-64 + CUDA multi-process serving, Multi-TurboQuant recognizes and
@@ -1556,6 +1595,8 @@ multi_turboquant/
     llamacpp_args.py        Generate llama.cpp CLI flags
     godzilla_gigatoken.py   Pinned combined-source preparation, build, and verification
     godzilla_gigatoken_cli.py Confirmed runtime workflow CLI
+    godzilla_composition.py Exact-commit PFlash/KVFlash overlay and compatibility contract
+    godzilla_composition_cli.py Confirmed composition preparation/build CLI
     weight_share.py         CUDA LD_PRELOAD launch wrapper
     vllm_patch.py           Monkeypatch vLLM for all methods
     bridge_adapter.py       Adapter for Llama_TQ bridge apps
@@ -1627,6 +1668,11 @@ multi_turboquant.integration.plan_godzilla_gigatoken(target, action="prepare")
 multi_turboquant.integration.prepare_godzilla_gigatoken(plan, confirmed=True)
 multi_turboquant.integration.build_godzilla_gigatoken(plan, confirmed=True)
 multi_turboquant.integration.verify_godzilla_gigatoken(plan)
+multi_turboquant.integration.validate_godzilla_composition(config)
+multi_turboquant.integration.plan_godzilla_composition(target, action="prepare")
+multi_turboquant.integration.prepare_godzilla_composition(plan, confirmed=True)
+multi_turboquant.integration.build_godzilla_composition(plan, confirmed=True)
+multi_turboquant.integration.verify_godzilla_composition(plan)
 multi_turboquant.integration.patch_vllm(config)
 multi_turboquant.integration.is_vllm_patched()
 multi_turboquant.integration.BridgeAdapter(config)
@@ -1706,6 +1752,7 @@ these authors for the mathematical ideas and research:
 | Debian 12/13 support, exact Godzilla `09214b160` profile, domvox/Gigatoken integration, diagnostics, and reviewed CUDA weight-share source workflow | jawadala / issue #40 | Community contribution |
 | Compatible TriAttention interpreter discovery, fail-closed dependency checks, exact-environment domvox conversion, and detailed calibration failure reports | jawadala / issue #42 | Community contribution |
 | JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review; pinned source profiles, source contracts, scanner coverage, and fail-closed composition | jawadala / issue #43 | Community contribution |
+| Exact-commit Godzilla PFlash/KVFlash composition workflow and safe pairing boundaries | jawadala / issue #44 | Community contribution |
 
 We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, the issue #43 research projects, or llama.cpp source trees; installable workflows use reviewed revisions in isolated environments, while guided entries remain read-only contracts. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, parity-checked Gigatoken options, and the broader fail-closed optimization review.
 

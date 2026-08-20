@@ -61,6 +61,17 @@ from .godzilla_gigatoken import (
     verify_godzilla_gigatoken,
     get_godzilla_source_profile,
 )
+from .godzilla_composition import (
+    COMPOSITION_PROFILE,
+    GodzillaComposition,
+    GodzillaCompositionPlan,
+    build_godzilla_composition,
+    inspect_godzilla_composition,
+    plan_godzilla_composition,
+    prepare_godzilla_composition,
+    validate_godzilla_composition,
+    verify_godzilla_composition,
+)
 
 __all__ = [
     "patch_vllm",
@@ -106,4 +117,13 @@ __all__ = [
     "prepare_godzilla_gigatoken",
     "verify_godzilla_gigatoken",
     "get_godzilla_source_profile",
+    "COMPOSITION_PROFILE",
+    "GodzillaComposition",
+    "GodzillaCompositionPlan",
+    "build_godzilla_composition",
+    "inspect_godzilla_composition",
+    "plan_godzilla_composition",
+    "prepare_godzilla_composition",
+    "validate_godzilla_composition",
+    "verify_godzilla_composition",
 ]

@@ -50,6 +50,7 @@ def test_builtin_catalog_is_explicit_and_disabled_by_default():
         "duoattention",
         "icecache",
         "pflash_llamacpp",
+        "godzilla_composition",
         "resonance_jetlong",
     } <= set(ids)
     assert all(not plugin.descriptor.default_enabled for plugin in plugins)

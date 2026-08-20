@@ -539,6 +539,42 @@ BUILTIN_DESCRIPTORS = (
         ),
     ),
     OptimizationDescriptor(
+        id="godzilla_composition",
+        name="Pinned Godzilla PFlash/KVFlash composition",
+        source_url="https://github.com/aivrar/multi-turboquant",
+        kind=OptimizationKind.PREFILL,
+        maturity=OptimizationMaturity.EXPERIMENTAL,
+        integration_mode=IntegrationMode.NATIVE_BACKEND_REQUIRED,
+        license="MIT",
+        summary=(
+            "Exact-commit Godzilla overlay with request-gated PFlash and bounded "
+            "whole-idle-slot KVFlash residency."
+        ),
+        supported_engines=("godzilla",),
+        supported_compute=("cpu", "cuda"),
+        supported_os=("windows", "linux"),
+        supported_architectures=("x86_64", "amd64"),
+        composition_domains=("prefill_policy", "server_kv_residency"),
+        required_executables=("git", "cmake"),
+        required_artifacts=(
+            "A new source tree prepared from Godzilla commit 09214b160b402011359f0ef9d5fa8f8be1112e85",
+            "A workload-specific quality corpus before enabling PFlash",
+        ),
+        validation_gates=(
+            "Hash-bounded source inspection and exact-commit llama-server build",
+            "PFlash off/on quality, exact-task bypass, TTFT, and prompt-cache regression",
+            "KVFlash resident-budget, LRU eviction, concurrency, and long-context soak tests",
+        ),
+        quality_risk=QualityRisk.LOSSY,
+        reviewed_source_commit="09214b160b402011359f0ef9d5fa8f8be1112e85",
+        limitations=(
+            "PFlash is off by default, must be enabled at startup and per request, and skips chat, multimodal, embedding, rerank, and parallel-parent tasks.",
+            "KVFlash manages complete idle slots only; arbitrary KV-page restore, disk restore, and prefill skipping are not implemented or claimed.",
+            "TriAttention and KVarN remain mutually exclusive in the pinned upstream revision.",
+            "SpecLA is not included because it is a specialized linear-attention runtime rather than a stackable Godzilla add-on.",
+        ),
+    ),
+    OptimizationDescriptor(
         id="resonance_jetlong",
         name="Resonance JetLongFreq research profile",
         source_url="https://github.com/sheryc/resonance_rope",

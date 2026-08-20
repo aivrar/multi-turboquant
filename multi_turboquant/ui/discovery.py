@@ -664,6 +664,8 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
     if "sageattention" in directories and "setup.py" in files and "csrc" in directories:
         return "sageattention"
     llama_markers = "CMakeLists.txt" in files and "ggml" in directories
+    if llama_markers and ".mtq-godzilla-composition.json" in files:
+        return "godzilla_composition"
     if (
         llama_markers
         and (path / "tools" / "server" / "qwen36-smart-router.py").is_file()
@@ -782,6 +784,11 @@ def scan_addon_roots(
                     from ..integration import inspect_godzilla_checkout
 
                     item["source"] = inspect_godzilla_checkout(directory)
+                if kind == "godzilla_composition":
+                    from ..integration import inspect_godzilla_composition
+
+                    item["source"] = inspect_godzilla_composition(directory)
+                    item["source_profile"] = kind
                 if kind == "triattention":
                     from ..calibration import inspect_official_triattention_checkout
 

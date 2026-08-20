@@ -99,6 +99,7 @@ a separately implemented and validated LMCache SERDE.
 | DuoAttention | Guided research source | Model-specific head patterns and multiple native CUDA components require separate qualification |
 | IceCache | Guided research source | Requires the separate M-DCI artifact, native builds, OpenBLAS/OpenMP, and a high-core-count CPU workflow |
 | PFlash/KVFlash llama.cpp | Guided separate runtime | Hawg33 fork is a separate llama.cpp family, not an arbitrary patch for Godzilla |
+| Godzilla composition | Experimental pinned native workflow | Exact `09214b160` overlay with request-gated PFlash and complete-idle-slot KVFlash residency |
 | Resonance-JetLong | Native backend required | Reviewed only for JetLong `yarn`/`jetlong_freq`; Qwen3 remains a gated research hypothesis |
 
 ## Composition rules
@@ -311,6 +312,7 @@ eligible for the reviewed profile.
 | `duoattention` | Blocked | Model-specific head patterns and native CUDA stack | Requires exact-model artifact and runtime qualification |
 | `icecache` | Blocked | M-DCI artifact, C++/CUDA builds, OpenBLAS/OpenMP, and CPU-heavy indexing | Requires upstream prerequisites and independent evaluation |
 | `pflash_llamacpp` | Blocked | Separate Hawg33 llama.cpp runtime family | Inspect/build the fork separately; do not apply it as a Godzilla patch |
+| `godzilla_composition` | Guided | Exact Godzilla `09214b160` source overlay | Use `mtq-godzilla-compose`; PFlash is lossy and KVFlash is limited to complete idle slots |
 | `resonance_jetlong` | Blocked | Research composition requiring a trained compatible artifact and long-context gates | Planner metadata only; no automatic training or serving claim |
 
 Blocked rows are catalog records, not failed installations. They intentionally
@@ -348,6 +350,24 @@ workflow performs a deliberate port onto either the pinned v0.3.7 baseline
 tree, verifies all source revisions and hashes, builds with
 `LLAMA_GIGATOKEN=ON`, and runs both the differential and legacy tokenizer
 suites. It does not patch a selected or arbitrary checkout.
+
+The Hawg33 PFlash/KVFlash catalog record remains blocked as a separate upstream
+runtime family. The narrower `godzilla_composition` workflow is distinct: it
+creates a new tree from exact Godzilla commit
+`09214b160b402011359f0ef9d5fa8f8be1112e85` and applies a reviewed local
+overlay. PFlash is disabled unless both `--pflash` and per-request
+`"pflash": true` are present, and it bypasses chat, multimodal, embedding,
+rerank, and parallel-parent requests. KVFlash is implemented only as an LRU
+budget over complete idle slots. Arbitrary KV pages, disk restore, and prefill
+skip remain explicitly unsupported.
+
+This narrower residency boundary avoids modifying KVarN's representation or
+TriAttention's intra-sequence pruning. DFlash/DDTree can remain enabled, and
+PFlash may run before either KVarN or TriAttention. The upstream
+TriAttention/KVarN conflict is unchanged, and SpecLA is excluded because it is
+a specialized linear-attention runtime. Use `mtq-godzilla-compose plan` before
+preparation, then run CPU/CUDA build qualification and workload-specific
+PFlash quality plus KVFlash concurrency/soak tests.
 
 ### CUDA weight-share source
 

@@ -199,13 +199,17 @@ picker can also inspect local folders for guided or blocked entries including
 Maru, Speculative Prefill, RocketKV, Lexico, AdaDecode, Resonance YaRN,
 Lucebox, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, and the
 PFlash/KVFlash llama.cpp fork, plus domvox TriAttention and the reviewed CUDA
-weight-share source. Resonance-JetLong is instead a planner-only composition
+weight-share source. A prepared `mtq-godzilla-compose` tree is recognized from
+its manifest and checked with the hash-bounded composition inspector rather
+than labeled as a generic Godzilla checkout. Resonance-JetLong is instead a planner-only composition
 record because it does not have a standalone source checkout. The picker also recognizes the separate
 `chynggi/gigatoken-llama.cpp` checkout as an informational experimental
 Windows x64/Linux x86_64 runtime fork. Discovery does not make it a Godzilla
 build or compile it. Use `mtq-godzilla-gigatoken` separately to create and
 qualify either pinned Godzilla v0.3.7 or the exact `09214b160` compatibility
-profile; the command refuses arbitrary or existing target trees. Renamed
+profile. Use `mtq-godzilla-compose` for the separate exact-`09214b160`
+request-gated PFlash and complete-idle-slot KVFlash overlay. Both commands
+refuse arbitrary or existing target trees. Renamed
 Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention inspection checks
 the expected source markers and reports version and Git remote metadata when
 available.
@@ -243,7 +247,9 @@ If the chosen script belongs to the other calibration mode, the planner now
 identifies the official/domvox mismatch and names the appropriate mode.
 The UI does not configure or compile a Godzilla CMake project automatically.
 Use Godzilla's documented process for ordinary checkouts, or the explicit
-`mtq-godzilla-gigatoken` workflow for its pinned combined runtime. TriAttention remains experimental and
+`mtq-godzilla-gigatoken` workflow for its pinned tokenizer runtime, or
+`mtq-godzilla-compose` for the bounded PFlash/KVFlash profile. These workflows
+remain CLI-only and do not patch a selected UI source folder. TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1
 header, dimensions, sampled indices, numeric arrays, and exact file length pass
 validation.
