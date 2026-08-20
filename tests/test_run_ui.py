@@ -415,6 +415,25 @@ def test_evaluated_ui_javascript_has_valid_syntax():
     assert result.returncode == 0, result.stderr
 
 
+def test_issue_43_profiles_and_capabilities_are_exposed_in_ui():
+    for profile in ("jetspec", "proxima", "jetlong"):
+        assert f'<option value="{profile}">' in run_ui.UI_HTML
+
+    for profile in (
+        "lucebox",
+        "chunkllama",
+        "rabitqcache",
+        "scope_pe",
+        "duoattention",
+        "icecache",
+        "pflash_llamacpp",
+    ):
+        assert f'<option value="{profile}">' in run_ui.UI_HTML
+
+    for capability in ("PFlash", "KVFlash", "DDTree", "SpecLA"):
+        assert f"capabilityTag('{capability}'" in run_ui.UI_HTML
+
+
 def test_tokenizer_source_actions_keep_supported_calibration_modes():
     assert (
         "function useGigatokenPython(encodedPath) {\n"

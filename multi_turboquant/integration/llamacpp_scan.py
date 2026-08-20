@@ -20,7 +20,7 @@ KNOWN_CACHE_TYPES = frozenset({
 
 KNOWN_SPEC_TYPES = frozenset({
     *GODZILLA_SPEC_TYPES,
-    "draft-simple", "draft-eagle3", "draft-mtp",
+    "draft-simple", "draft-eagle3", "draft-mtp", "draft-dflash",
     "ngram-simple", "ngram-map-k", "ngram-map-k4v",
     "ngram-mod", "ngram-cache",
 })
@@ -41,6 +41,7 @@ class LlamaCppCapabilities:
     speculative_types: frozenset[str] = field(default_factory=frozenset)
     build_info: str | None = None
     gigatoken_identified: bool = False
+    props_identified: bool = False
 
     def supports_flag(self, flag: str) -> bool:
         normalized = flag if flag.startswith("--") else f"--{flag}"
@@ -84,13 +85,53 @@ class LlamaCppCapabilities:
 
     @property
     def supports_dflash(self) -> bool:
-        return self.supports_speculative_type("dflash") or self.supports_flag(
-            "--spec-dflash-cross-ctx"
+        return (
+            self.supports_speculative_type("dflash")
+            or self.supports_speculative_type("draft-dflash")
+            or self.supports_flag("--spec-dflash-cross-ctx")
         )
 
     @property
+    def supports_pflash(self) -> bool:
+        return any(
+            self.supports_flag(flag)
+            for flag in (
+                "--pflash-mode",
+                "--pflash-keep-ratio",
+                "--pflash-drafter",
+                "--prefill-compression",
+                "--prefill-drafter",
+            )
+        )
+
+    @property
+    def supports_kvflash(self) -> bool:
+        return any(
+            self.supports_flag(flag)
+            for flag in ("--kvflash", "--kvflash-policy", "--kvflash-drafter")
+        )
+
+    @property
+    def supports_ddtree(self) -> bool:
+        return self.supports_flag("--ddtree") or self.supports_flag("--ddtree-budget")
+
+    @property
+    def supports_specla(self) -> bool:
+        return any("specla" in flag.lower() for flag in self.flags)
+
+    @property
+    def runtime_family(self) -> str:
+        if self.supports_flag("--pflash-mode") or self.supports_flag("--kvflash-policy"):
+            return "pflash_llamacpp"
+        if self.supports_ddtree or self.supports_flag("--prefill-compression"):
+            return "lucebox"
+        if self.supports_kvarn or self.supports_triattention:
+            return "godzilla"
+        return "llamacpp"
+
+    @property
     def supports_props_endpoint(self) -> bool:
-        return self.supports_flag("--props")
+        return self.props_identified or self.supports_flag("--props")
 
     @property
     def supports_gigatoken(self) -> bool:
@@ -114,6 +155,11 @@ class LlamaCppCapabilities:
             "supports_kvarn": self.supports_kvarn,
             "supports_speculative": self.supports_speculative,
             "supports_dflash": self.supports_dflash,
+            "supports_pflash": self.supports_pflash,
+            "supports_kvflash": self.supports_kvflash,
+            "supports_ddtree": self.supports_ddtree,
+            "supports_specla": self.supports_specla,
+            "runtime_family": self.runtime_family,
             "supports_props_endpoint": self.supports_props_endpoint,
             "supports_gigatoken": self.supports_gigatoken,
         }
@@ -160,6 +206,7 @@ def parse_llamacpp_help(
         speculative_types=speculative_types,
         build_info=build_info,
         gigatoken_identified="gigatoken" in lowered,
+        props_identified="/props" in lowered,
     )
 
 

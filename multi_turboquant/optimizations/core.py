@@ -29,6 +29,15 @@ class OptimizationMaturity(str, Enum):
     BLOCKED = "blocked"
 
 
+class QualityRisk(str, Enum):
+    """Expected effect on model outputs when an optimization is enabled."""
+
+    EXACT = "exact"
+    CONDITIONAL = "conditional"
+    LOSSY = "lossy"
+    RESEARCH = "research"
+
+
 class IntegrationMode(str, Enum):
     EXTERNAL_SERVICE = "external_service"
     OPTIONAL_PYTHON = "optional_python"
@@ -60,6 +69,12 @@ class OptimizationDescriptor:
     requires: tuple[str, ...] = ()
     conflicts: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
+    composition_domains: tuple[str, ...] = ()
+    allows_composition_with: tuple[str, ...] = ()
+    required_artifacts: tuple[str, ...] = ()
+    validation_gates: tuple[str, ...] = ()
+    quality_risk: QualityRisk = QualityRisk.CONDITIONAL
+    reviewed_source_commit: str | None = None
     min_python: tuple[int, int] | None = None
     default_enabled: bool = False
 
@@ -84,6 +99,12 @@ class OptimizationDescriptor:
             "requires": list(self.requires),
             "conflicts": list(self.conflicts),
             "limitations": list(self.limitations),
+            "composition_domains": list(self.composition_domains),
+            "allows_composition_with": list(self.allows_composition_with),
+            "required_artifacts": list(self.required_artifacts),
+            "validation_gates": list(self.validation_gates),
+            "quality_risk": self.quality_risk.value,
+            "reviewed_source_commit": self.reviewed_source_commit,
             "min_python": list(self.min_python) if self.min_python else None,
             "default_enabled": self.default_enabled,
         }

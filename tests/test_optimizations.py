@@ -9,6 +9,7 @@ from multi_turboquant.optimizations import (
     OptimizationKind,
     OptimizationMaturity,
     OptimizationRegistry,
+    QualityRisk,
     IntegrationMode,
     create_builtin_registry,
     plan_optimizations,
@@ -38,7 +39,68 @@ def test_builtin_catalog_is_explicit_and_disabled_by_default():
     assert "lmcache" in ids
     assert "resonance_yarn" in ids
     assert {"triattention", "gigatoken", "cuda_weight_share"} <= set(ids)
+    assert {
+        "jetspec",
+        "lucebox",
+        "proxima",
+        "jetlong",
+        "chunkllama",
+        "rabitqcache",
+        "scope_pe",
+        "duoattention",
+        "icecache",
+        "pflash_llamacpp",
+        "resonance_jetlong",
+    } <= set(ids)
     assert all(not plugin.descriptor.default_enabled for plugin in plugins)
+
+
+def test_issue_43_catalog_records_quality_and_validation_boundaries():
+    registry = create_builtin_registry()
+
+    jetspec = registry.get("jetspec").descriptor
+    assert jetspec.quality_risk == QualityRisk.EXACT
+    assert jetspec.required_artifacts
+    assert jetspec.validation_gates
+    assert jetspec.reviewed_source_commit
+
+    rabitq = registry.get("rabitqcache").descriptor
+    assert rabitq.maturity == OptimizationMaturity.BLOCKED
+    assert "No repository software license" == rabitq.license
+
+    icecache = registry.get("icecache").descriptor
+    assert {"openblas", "high_cpu_parallelism"} <= set(icecache.required_capabilities)
+
+
+def test_unreviewed_pipeline_composition_fails_closed():
+    plan = plan_optimizations(
+        ["proxima", "sageattention"],
+        context(
+            installed_modules=frozenset({"proxima_vllm", "sageattention"}),
+        ),
+    )
+    assert not plan.ready
+    issue = next(item for item in plan.issues if item.code == "unvalidated_composition")
+    assert "attention_kernel" in issue.message
+
+
+def test_mutually_allowlisted_resonance_jetlong_composition_is_not_rejected_as_overlap():
+    plan = plan_optimizations(
+        ["jetlong", "resonance_jetlong"],
+        context(
+            engine="transformers",
+            installed_modules=frozenset({"jetlm"}),
+        ),
+    )
+    assert not any(item.code == "unvalidated_composition" for item in plan.issues)
+    assert any(item.code == "native_backend_required" for item in plan.issues)
+    data = plan.to_dict()
+    assert data["quality_risks"] == {
+        "jetlong": "conditional",
+        "resonance_jetlong": "research",
+    }
+    assert any("PG-19" in gate for gate in data["validation_gates"])
+    assert any("Qwen3" in artifact for artifact in data["required_artifacts"])
 
 
 def test_lmcache_is_ready_only_for_validated_vllm_formats():

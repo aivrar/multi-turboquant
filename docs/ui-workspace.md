@@ -193,12 +193,14 @@ button remains available. Results report the resolved roots, scan depth,
 directory count, invalid roots, and missing source markers. The add-on source
 scanner does not search an entire drive, follow directory symlinks, import
 third-party packages, or run source code. Recognized add-ons currently include
-FlashAttention, FastDMS, LMCache, MInference, SageAttention, TriAttention,
-Godzilla, and llama.cpp checkouts. The source picker can also inspect local
-folders for the six reviewed-but-blocked add-ons (`maru`,
-`speculative_prefill`, `rocketkv`, `lexico`, `adadecode`, and
-`resonance_yarn`), domvox TriAttention, and the reviewed CUDA weight-share
-source. It also recognizes the separate
+FlashAttention, FastDMS, JetSpec, Jet-Long, LMCache, MInference, Proxima,
+SageAttention, TriAttention, Godzilla, and llama.cpp checkouts. The source
+picker can also inspect local folders for guided or blocked entries including
+Maru, Speculative Prefill, RocketKV, Lexico, AdaDecode, Resonance YaRN,
+Lucebox, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, and the
+PFlash/KVFlash llama.cpp fork, plus domvox TriAttention and the reviewed CUDA
+weight-share source. Resonance-JetLong is instead a planner-only composition
+record because it does not have a standalone source checkout. The picker also recognizes the separate
 `chynggi/gigatoken-llama.cpp` checkout as an informational experimental
 Windows x64/Linux x86_64 runtime fork. Discovery does not make it a Godzilla
 build or compile it. Use `mtq-godzilla-gigatoken` separately to create and
@@ -208,7 +210,7 @@ Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention in
 the expected source markers and reports version and Git remote metadata when
 available.
 
-For the six reviewed Python add-ons, a recognized checkout has a **Use for
+For the nine reviewed Python add-ons, a recognized checkout has a **Use for
 profile** action. It fills the local-source profile and path controls. Refresh
 the profile plan before creation: the plan validates the checkout markers,
 then `uv` builds that package and resolves its dependencies in the selected

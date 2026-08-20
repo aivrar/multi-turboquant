@@ -46,8 +46,10 @@ cmd = get_llamacpp_command(
 
 The web UI command generator includes the same controls plus a `llama-server`
 scanner. The scanner runs `--help` on the selected binary and reports whether it
-advertises RoPE/YaRN, KVarN, TriAttention, speculative decoding, DFlash, and
-`/props` support.
+advertises RoPE/YaRN, KVarN, TriAttention, speculative decoding, DFlash,
+PFlash, KVFlash, DDTree, SpecLA, and `/props` support. It also classifies
+recognized Godzilla, Lucebox, and PFlash/KVFlash llama.cpp runtime families so
+similarly named flags are not treated as interchangeable implementations.
 
 ## Guardrails
 
@@ -97,9 +99,15 @@ For this repo, the robust v1 is a llama.cpp flag wrapper plus scanner:
 - It gives the UI enough scanner feedback to warn when a selected binary cannot
   support the requested feature set.
 
-Resonance RoPE and LongRoPE remain documented research targets. They should be
-implemented only as a backend/model-extension module when there is a maintained
-runtime target or a controlled conversion/fine-tuning path.
+Resonance RoPE and LongRoPE remain documented research targets. The
+optimization catalog now records a narrower `resonance_jetlong` composition:
+it is mutually allowlisted only with JetLong's `yarn`/`jetlong_freq` path and
+remains blocked from automatic installation. That record captures the required
+trained artifact and correctness, quality, long-context, throughput, memory,
+and fallback gates; it is not evidence that an arbitrary Qwen3 checkpoint is
+compatible. Plain JetLong and other position-encoding overlaps remain
+fail-closed. A production implementation still needs a maintained runtime
+target or controlled conversion/fine-tuning path.
 
 ## KVarN and TriAttention note
 

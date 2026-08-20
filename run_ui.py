@@ -1254,6 +1254,16 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="lexico">Lexico</option>
             <option value="adadecode">AdaDecode</option>
             <option value="resonance_yarn">Resonance YaRN</option>
+            <option value="jetspec">JetSpec</option>
+            <option value="lucebox">Lucebox</option>
+            <option value="proxima">Proxima</option>
+            <option value="jetlong">Jet-Long</option>
+            <option value="chunkllama">ChunkLlama</option>
+            <option value="rabitqcache">RaBitQCache</option>
+            <option value="scope_pe">ScoPE</option>
+            <option value="duoattention">DuoAttention</option>
+            <option value="icecache">IceCache</option>
+            <option value="pflash_llamacpp">PFlash/KVFlash llama.cpp</option>
             <option value="domvox_triattention">domvox TriAttention</option>
             <option value="gigatoken_llamacpp">Gigatoken llama.cpp</option>
           </select></div>
@@ -1276,6 +1286,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="flashattention">FlashAttention</option><option value="fastdms">FastDMS</option>
             <option value="lmcache">LMCache</option><option value="minference">MInference</option>
             <option value="sageattention">SageAttention</option><option value="triattention">TriAttention calibration</option>
+            <option value="jetspec">JetSpec</option><option value="proxima">Proxima</option>
+            <option value="jetlong">Jet-Long</option>
           </select></div>
           <div style="grid-column:span 3"><label>Reviewed local checkout</label><input type="text" id="env-local-source" placeholder="Select a recognized add-on checkout above"></div>
         </div>
@@ -1517,6 +1529,10 @@ function renderCapabilities(cap) {
     capabilityTag('TriAttn', cap.supports_triattention, 'Patched TriAttention flags'),
     capabilityTag('KVarN', cap.supports_kvarn, 'Godzilla KVarN cache aliases'),
     capabilityTag('DFlash', cap.supports_dflash, 'Godzilla DFlash speculative flags'),
+    capabilityTag('PFlash', cap.supports_pflash, 'PFlash speculative flags'),
+    capabilityTag('KVFlash', cap.supports_kvflash, 'KVFlash cache flags'),
+    capabilityTag('DDTree', cap.supports_ddtree, 'DDTree speculative flags'),
+    capabilityTag('SpecLA', cap.supports_specla, 'SpecLA speculative flags'),
     capabilityTag('/props', cap.supports_props_endpoint, 'llama.cpp server props endpoint'),
     capabilityTag('Gigatoken', cap.supports_gigatoken, 'Binary self-identification; source inspection is more reliable'),
   ].join('');

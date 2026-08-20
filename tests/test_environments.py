@@ -45,6 +45,18 @@ def test_profiles_are_isolated_and_explicit():
         "minference",
         "sageattention",
         "triattention",
+        "jetspec",
+        "proxima",
+        "jetlong",
+        "jetlong_fused",
+        "lucebox",
+        "chunkllama",
+        "rabitqcache",
+        "scope_pe",
+        "duoattention",
+        "icecache",
+        "pflash_llamacpp",
+        "resonance_jetlong",
         "maru",
         "speculative_prefill",
         "rocketkv",
@@ -59,6 +71,47 @@ def test_profiles_are_isolated_and_explicit():
     assert all(profile.validation_modules for profile in installable)
     assert all(profile.blocked_reason for profile in blocked)
     assert all("linux" in profile.supported_os for profile in BUILTIN_ENVIRONMENT_PROFILES)
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "package", "module"),
+    [
+        ("jetspec", "jetspec", "jetspec"),
+        ("proxima", "proxima-vllm", "proxima_vllm"),
+        ("jetlong", "jet-long", "jetlm"),
+    ],
+)
+def test_issue_43_installable_profiles_are_pinned_and_accept_local_source(
+    tmp_path: Path, profile_id: str, package: str, module: str
+):
+    profile = get_environment_profile(profile_id)
+    source = tmp_path / profile_id
+    source.mkdir()
+    for marker in profile.local_source_markers:
+        target = source / marker
+        if "." in Path(marker).name:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("marker", encoding="utf-8")
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+
+    rendered = tomllib.loads(render_profile_project(profile, local_source=source))
+
+    assert profile.installable
+    assert any("@ git+https://github.com/" in item for item in profile.packages)
+    assert module in profile.validation_modules
+    assert rendered["tool"]["uv"]["sources"][package]["path"] == str(source.resolve())
+
+
+def test_jetlong_default_and_fused_profiles_remain_separate():
+    default = get_environment_profile("jetlong")
+    fused = get_environment_profile("jetlong_fused")
+
+    assert default.installable
+    assert default.cuda_toolkit_major == 13
+    assert default.no_build_isolation_packages == ("flash-attn",)
+    assert not fused.installable
+    assert "SM90/H100" in fused.blocked_reason
 
 
 def test_blocked_profile_explains_itself_without_creating_commands(tmp_path: Path):

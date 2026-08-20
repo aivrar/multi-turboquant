@@ -6,6 +6,7 @@ from __future__ import annotations
 import platform as platform_module
 import sys
 from dataclasses import dataclass
+from itertools import combinations
 from pathlib import Path
 
 from .catalog import create_builtin_registry
@@ -27,11 +28,33 @@ class OptimizationPlan:
     def ready(self) -> bool:
         return not any(issue.severity == "error" for issue in self.issues)
 
+    @property
+    def required_artifacts(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            artifact
+            for probe in self.probes
+            for artifact in probe.descriptor.required_artifacts
+        ))
+
+    @property
+    def validation_gates(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            gate
+            for probe in self.probes
+            for gate in probe.descriptor.validation_gates
+        ))
+
     def to_dict(self) -> dict:
         return {
             "selected": list(self.selected),
             "ready": self.ready,
             "probes": [probe.to_dict() for probe in self.probes],
+            "required_artifacts": list(self.required_artifacts),
+            "validation_gates": list(self.validation_gates),
+            "quality_risks": {
+                probe.descriptor.id: probe.descriptor.quality_risk.value
+                for probe in self.probes
+            },
             "issues": [issue.to_dict() for issue in self.issues],
         }
 
@@ -78,6 +101,7 @@ def plan_optimizations(
     probes: list[OptimizationProbe] = []
     issues: list[OptimizationIssue] = []
     reported_conflicts: set[tuple[str, str]] = set()
+    descriptors = {}
 
     for optimization_id in normalized:
         try:
@@ -95,6 +119,7 @@ def plan_optimizations(
         issues.extend(probe.issues)
 
         descriptor = plugin.descriptor
+        descriptors[optimization_id] = descriptor
         for requirement in descriptor.requires:
             if requirement not in selected_set:
                 issues.append(OptimizationIssue(
@@ -117,5 +142,27 @@ def plan_optimizations(
                     optimization_id,
                     f"{optimization_id!r} conflicts with {conflict!r}; choose one.",
                 ))
+
+    for left_id, right_id in combinations(descriptors, 2):
+        left = descriptors[left_id]
+        right = descriptors[right_id]
+        shared_domains = sorted(set(left.composition_domains) & set(right.composition_domains))
+        if not shared_domains:
+            continue
+        explicitly_allowed = (
+            right_id in left.allows_composition_with
+            and left_id in right.allows_composition_with
+        )
+        pair = tuple(sorted((left_id, right_id)))
+        if explicitly_allowed or pair in reported_conflicts:
+            continue
+        reported_conflicts.add(pair)
+        issues.append(OptimizationIssue(
+            "error",
+            "unvalidated_composition",
+            left_id,
+            f"{left_id!r} and {right_id!r} both modify {', '.join(shared_domains)}; "
+            "no reviewed composition profile allows them together.",
+        ))
 
     return OptimizationPlan(normalized, tuple(probes), tuple(issues))

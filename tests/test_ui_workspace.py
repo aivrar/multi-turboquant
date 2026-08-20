@@ -161,6 +161,13 @@ def test_informational_addon_source_inspection_reports_missing_markers(tmp_path:
         ("lexico", ("README.md", "setup.py", "lexico")),
         ("adadecode", ("README.md", "requirements.txt", "adadecode")),
         ("resonance_yarn", ("README.md", "requirements.txt", "src")),
+        ("lucebox", ("README.md", "server/CMakeLists.txt", "optimizations/pflash")),
+        ("chunkllama", ("README.md", "requirements.txt", "chunkllama_attn_replace.py")),
+        ("rabitqcache", ("README.md", "setup.py", "rabitqcache")),
+        ("scope_pe", ("README.md", "pyproject.toml", "torchtitan")),
+        ("duoattention", ("README.md", "setup.py", "duo_attn", "attn_patterns")),
+        ("icecache", ("README.md", "IceCache/requirements.txt", "IceCache/source/setup.py")),
+        ("pflash_llamacpp", ("README.md", "CMakeLists.txt", "tools/server/qwen36-smart-router.py")),
     ],
 )
 def test_each_blocked_addon_profile_has_a_read_only_source_contract(
@@ -171,15 +178,61 @@ def test_each_blocked_addon_profile_has_a_read_only_source_contract(
     for marker in markers:
         target = source / marker
         if "." in marker:
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("marker", encoding="utf-8")
         else:
-            target.mkdir()
+            target.mkdir(parents=True)
 
     result = inspect_addon_source(profile, source)
 
     assert result["valid"] is True
     assert result["status"] == "informational_only"
     assert result["setup"]["automatic"] is False
+
+
+@pytest.mark.parametrize(
+    ("folder", "markers", "expected_kind", "has_environment"),
+    [
+        ("JetSpec", ("README.md", "pyproject.toml", "jetspec"), "jetspec", True),
+        ("lucebox", ("README.md", "server/CMakeLists.txt", "optimizations/pflash"), "lucebox", False),
+        ("Proxima", ("README.md", "pyproject.toml", "proxima_vllm"), "proxima", True),
+        ("jet-long", ("README.md", "pyproject.toml", "jetlm", "model_configs"), "jetlong", True),
+        ("ChunkLlama", ("README.md", "requirements.txt", "chunkllama_attn_replace.py"), "chunkllama", False),
+        ("RaBitQCache", ("README.md", "setup.py", "rabitqcache"), "rabitqcache", False),
+        ("ScoPE", ("README.md", "pyproject.toml", "torchtitan"), "scope_pe", False),
+        ("duo-attention", ("README.md", "setup.py", "duo_attn", "attn_patterns"), "duoattention", False),
+        ("IceCache", ("README.md", "IceCache/requirements.txt", "IceCache/source/setup.py"), "icecache", False),
+        (
+            "llama.cpp-dflash-pflash-kvflash",
+            ("README.md", "CMakeLists.txt", "ggml", "tools/server/qwen36-smart-router.py"),
+            "pflash_llamacpp",
+            False,
+        ),
+    ],
+)
+def test_issue_43_checkout_discovery(
+    tmp_path: Path,
+    folder: str,
+    markers: tuple[str, ...],
+    expected_kind: str,
+    has_environment: bool,
+):
+    source = tmp_path / folder
+    source.mkdir()
+    for marker in markers:
+        target = source / marker
+        if "." in Path(marker).name:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("marker", encoding="utf-8")
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+
+    result = scan_addon_roots([tmp_path])
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+
+    assert addon["kind"] == expected_kind
+    assert ("environment_profile" in addon) is has_environment
+    assert addon["source"]["valid"] is True
 
 
 def test_addon_scan_recognizes_blocked_source_as_informational(tmp_path: Path):

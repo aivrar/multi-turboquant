@@ -473,14 +473,21 @@ Use the same model, build, device configuration,
 
 External inference optimizations are cataloged separately from the compression
 methods and remain disabled unless explicitly selected. Inspect requirements,
-platform support, KV-format validation, and conflicts without importing the
-third-party projects:
+platform support, KV-format validation, required artifacts, validation gates,
+quality risk, and conflicts without importing third-party projects:
 
 ```bash
 mtq-optimizations --engine vllm --kv-format fp16 --select lmcache
 mtq-optimizations --engine godzilla --select triattention --select gigatoken
 mtq-optimizations --engine godzilla --active-feature kvarn --select triattention
+mtq-optimizations --engine transformers --select jetlong --select resonance_jetlong
 ```
+
+The planner is fail-closed for unreviewed composition: two methods that alter
+the same attention, KV-cache, position-encoding, or speculative-decoding domain
+are rejected unless both catalog entries explicitly allow the pairing. The
+reviewed Resonance profile is limited to JetLong's `yarn`/`jetlong_freq` mode;
+it does not authorize plain JetLong or claim a production Qwen3 checkpoint.
 
 The Godzilla plan models the exact boundaries: Gigatoken calibration requires
 TriAttention, KVarN conflicts with TriAttention in the reviewed source profiles,
@@ -508,8 +515,9 @@ Multi-TurboQuant or KVarN layouts. See [the optimization integration notes](docs
 
 ### Isolated add-on environments
 
-FastDMS, FlashAttention, LMCache, MInference, SageAttention, and TriAttention
-calibration have stricter or mutually incompatible runtime stacks. Their dependencies remain completely
+FastDMS, FlashAttention, JetSpec, JetLong, LMCache, MInference, Proxima,
+SageAttention, and TriAttention calibration have stricter or mutually
+incompatible runtime stacks. Their dependencies remain completely
 optional and are managed in separate, locked environments. Reviewed research
 projects also appear in the list with an explicit reason when automatic
 installation would be unsafe or incomplete:
@@ -522,6 +530,9 @@ mtq-env plan flashattention
 mtq-env plan lmcache
 mtq-env plan minference
 mtq-env plan triattention
+mtq-env plan jetspec
+mtq-env plan proxima
+mtq-env plan jetlong
 mtq-env plan rocketkv  # reports its research/license block; changes nothing
 
 # Explicitly create .mtq/environments/fastdms/{pyproject.toml,uv.lock,.venv}
@@ -566,7 +577,7 @@ report distro, lexical and resolved interpreters, prefixes, import failures,
 CUDA/toolchain state, and Accelerate environment information.
 
 `--local-source` is a separate option for a checkout you already have. It is
-accepted only for the six reviewed installable profiles, verifies the
+accepted only for the nine reviewed installable profiles, verifies the
 profile-specific source markers, and records an absolute local-path source in
 that profile's generated `uv` project. `uv` then builds the selected package
 and resolves its declared dependencies inside the isolated environment. It
@@ -592,8 +603,11 @@ The Setup & Add-ons view exposes the same override. CUDA 13 `nvcc` is not used
 to compile extensions for the CUDA 12.6 PyTorch profiles.
 
 Reviewed local-source profiles receive managed dependency resolution, bounded
-builds, and import validation. Constrained research sources instead receive a
-repository-specific setup contract. In particular, current Maru checkouts are
+builds, and import validation. Constrained research sources, training systems,
+and separate serving runtimes instead receive repository-specific setup
+contracts. This includes Lucebox, ChunkLlama, RaBitQCache, ScoPE,
+DuoAttention, IceCache, the PFlash/KVFlash llama.cpp fork, and the guarded
+Resonance-JetLong composition. In particular, current Maru checkouts are
 recognized through `pyproject.toml`/`setup.py` and the
 `maru_resource_manager`/`maru_server` packages—no root `CMakeLists.txt` is
 required. Maru remains guided-only because its upstream installer expects a
@@ -716,10 +730,11 @@ The browser UI now has two focused views:
   managed dependency checks can be repaired from the plan, and optional generic
   starter text can be generated locally. Advanced
   Quick Run controls and infrequent Setup sections are collapsed by default.
-  The source picker can inspect local folders for the six blocked add-ons,
-  domvox, the reviewed CUDA weight-share source, and the separate Gigatoken llama.cpp fork without importing or
-  executing source code; blocked and informational profiles are not made
-  installable by discovery. The pinned Godzilla + Gigatoken source preparation
+  The source picker can inspect the reviewed installable, guided, and blocked
+  issue #43 projects alongside the earlier add-ons, domvox, the CUDA
+  weight-share source, and separate llama.cpp forks without importing or
+  executing source code; guided and blocked profiles are not made installable
+  by discovery. The pinned Godzilla + Gigatoken source preparation
   and build remains an explicit `mtq-godzilla-gigatoken` CLI operation.
 
 Settings and form defaults persist in
@@ -763,7 +778,10 @@ Persistent local UI, model discovery and launching, and add-on setup:
 
 ## Attribution
 
-This project reimplements algorithms from published research. All original repos are MIT or Apache-2.0 licensed:
+This project reimplements selected algorithms and integrates reviewed external
+workflows from published research. Upstream licensing varies; blocked catalog
+entries remain blocked when a usable software license or artifact grant is
+missing:
 
 | Contribution | Source |
 |-------------|--------|
@@ -779,14 +797,17 @@ This project reimplements algorithms from published research. All original repos
 | Context-extension research notes: Position Interpolation, YaRN, Resonance RoPE, LongRoPE | [llama.cpp](https://github.com/ggml-org/llama.cpp), [sheryc/resonance_rope](https://github.com/sheryc/resonance_rope), published papers |
 | Gigatoken Python tokenizer accelerator | [marcelroed/gigatoken](https://github.com/marcelroed/gigatoken) |
 | Gigatoken llama.cpp runtime integration lineage | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
+| Issue #43 optimization research and source contracts | [JetSpec](https://github.com/hao-ai-lab/JetSpec), [Lucebox](https://github.com/Luce-Org/lucebox), [Proxima](https://github.com/Tenosra/Proxima), [Jet-Long](https://github.com/jet-ai-projects/jet-long), [ChunkLlama](https://github.com/HKUNLP/ChunkLlama), [RaBitQCache](https://github.com/Sakuraaa0/RaBitQCache), [ScoPE](https://github.com/oncemoe/ScoPE), [DuoAttention](https://github.com/mit-han-lab/duo-attention), [IceCache](https://github.com/yuzhenmao/IceCache), and [PFlash/KVFlash llama.cpp](https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash) |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
 is a command-generation, source-inspection, and preparation-workflow
 integration; context-extension
 support is a llama.cpp command-generation and capability-scanning integration
 only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance
-RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, or llama.cpp source trees; the confirmed
-runtime workflow clones exact upstream revisions into a separate target.
+RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, the issue #43 research
+projects, or llama.cpp source trees. Installable source profiles use reviewed
+revisions in isolated environments; guided-only entries remain read-only source
+contracts and do not imply runtime compatibility.
 
 ## Community Contributors
 
@@ -809,14 +830,16 @@ runtime workflow clones exact upstream revisions into a separate target.
 | Requested a direct Gigatoken tokenizer path for Godzilla runtime/inference, prompting the pinned combined-source workflow and differential qualification suite | [@jawadala](https://github.com/jawadala) | Issue [#39](https://github.com/aivrar/multi-turboquant/issues/39) |
 | Requested Debian 12/13 hardening, deeper diagnostics, the exact Godzilla `09214b160` compatibility profile, domvox/Gigatoken support, and reviewed CUDA weight-share source handling | [@jawadala](https://github.com/jawadala) | Issue [#40](https://github.com/aivrar/multi-turboquant/issues/40) |
 | Reported a domvox calibration launch under an interpreter without Torch, prompting compatible-environment discovery, fail-closed final preflight, exact-environment conversion, and detailed redacted failure bundles | [@jawadala](https://github.com/jawadala) | Issue [#42](https://github.com/aivrar/multi-turboquant/issues/42) |
+| Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
 reports and concrete feature suggestions. They have materially shaped the
 Godzilla/KVarN support, context-extension tooling, optimization catalog,
 isolated dependency system, practical UI workflow, and the official and
-domvox TriAttention calibration paths, including the recent interpreter-path
-correction and parity-checked Gigatoken option.
+domvox TriAttention calibration paths, including the interpreter-path
+correction, parity-checked Gigatoken option, and the broader issue #43 research
+catalog with explicit safety boundaries.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

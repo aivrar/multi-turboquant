@@ -208,6 +208,214 @@ _SOURCE_ADDON_SPECS: dict[str, dict[str, object]] = {
             ),
         },
     },
+    "jetspec": {
+        "profile": "jetspec",
+        "name": "JetSpec",
+        "source_url": "https://github.com/hao-ai-lab/JetSpec",
+        "marker_groups": (("README.md",), ("pyproject.toml",), ("jetspec",)),
+        "summary": "Tree-speculative decoding source with a separate optimized CUDA/Triton engine.",
+        "setup": {
+            "mode": "isolated_environment",
+            "automatic": True,
+            "requirements": (
+                "Linux CUDA and the pinned isolated JetSpec environment",
+                "A draft head matching the exact target model",
+            ),
+            "next_steps": (
+                "Create the jetspec environment only after reviewing the plan.",
+                "Validate greedy output parity and acceptance length before benchmarking.",
+            ),
+        },
+    },
+    "lucebox": {
+        "profile": "lucebox",
+        "name": "Lucebox",
+        "source_url": "https://github.com/Luce-Org/lucebox",
+        "marker_groups": (
+            ("README.md",),
+            ("server/CMakeLists.txt",),
+            ("optimizations/pflash", "server/src"),
+        ),
+        "summary": "Separate native/Docker runtime with model- and hardware-specific inference paths.",
+        "setup": {
+            "mode": "separate_runtime_fork",
+            "automatic": False,
+            "requirements": (
+                "A supported Linux CUDA or ROCm host, or a matching upstream container image",
+                "Supported target and optional drafter/scorer GGUF artifacts",
+            ),
+            "next_steps": (
+                "Build or pull Lucebox independently of other llama.cpp runtimes.",
+                "Capability-scan the server and establish a direct-path output baseline.",
+            ),
+        },
+    },
+    "proxima": {
+        "profile": "proxima",
+        "name": "Proxima / STAR-KV",
+        "source_url": "https://github.com/Tenosra/Proxima",
+        "marker_groups": (("README.md",), ("pyproject.toml",), ("proxima_vllm",)),
+        "summary": "Source-only vLLM 0.10.1.1 plugin for calibrated low-rank KV compression.",
+        "setup": {
+            "mode": "isolated_environment",
+            "automatic": True,
+            "requirements": (
+                "Linux CUDA and the exact pinned vLLM plugin environment",
+                "A STAR-KV checkpoint calibrated from the selected base model",
+            ),
+            "next_steps": (
+                "Create the proxima environment only after reviewing the source pin.",
+                "Compare quality and capacity against stock vLLM before serving.",
+            ),
+        },
+    },
+    "jetlong": {
+        "profile": "jetlong",
+        "name": "Jet-Long",
+        "source_url": "https://github.com/jet-ai-projects/jet-long",
+        "marker_groups": (
+            ("README.md",),
+            ("pyproject.toml",),
+            ("jetlm",),
+            ("model_configs",),
+        ),
+        "summary": "Training-free Qwen3 context extension with separately gated fused kernels.",
+        "setup": {
+            "mode": "isolated_environment",
+            "automatic": True,
+            "requirements": (
+                "Linux CUDA 13, Python 3.12, and the exact reviewed Torch/Transformers stack",
+                "A supported Qwen3 base checkpoint and generated method configuration",
+            ),
+            "next_steps": (
+                "Use the non-fused jetlong profile unless an H100 fused stack is separately qualified.",
+                "Run base-window, perplexity, RULER, and retrieval validation.",
+            ),
+        },
+    },
+    "chunkllama": {
+        "profile": "chunkllama",
+        "name": "ChunkLlama",
+        "source_url": "https://github.com/HKUNLP/ChunkLlama",
+        "marker_groups": (
+            ("README.md",),
+            ("requirements.txt",),
+            ("chunkllama_attn_replace.py", "vllm"),
+        ),
+        "summary": "Older DCA reference used to cross-check Jet-Long's maintained DCA path.",
+        "setup": {
+            "mode": "research_reference",
+            "automatic": False,
+            "requirements": (
+                "A disposable copy of the upstream legacy environment",
+                "Separate review of code versus non-commercial data/weight licensing",
+            ),
+            "next_steps": (
+                "Use the source as a DCA reference rather than a production installer.",
+                "Prefer Jet-Long's DCA implementation for the reviewed Qwen3 workflow.",
+            ),
+        },
+    },
+    "rabitqcache": {
+        "profile": "rabitqcache",
+        "name": "RaBitQCache",
+        "source_url": "https://github.com/Sakuraaa0/RaBitQCache",
+        "marker_groups": (("README.md",), ("setup.py",), ("rabitqcache",)),
+        "summary": "Unlicensed research source for adaptive binary-quantized KV retrieval.",
+        "setup": {
+            "mode": "license_blocked",
+            "automatic": False,
+            "requirements": ("A repository software license supplied by upstream",),
+            "next_steps": (
+                "Do not install, redistribute, or port source code while licensing is absent.",
+                "Retain only catalog metadata and public research references.",
+            ),
+        },
+    },
+    "scope_pe": {
+        "profile": "scope_pe",
+        "name": "ScoPE",
+        "source_url": "https://github.com/oncemoe/ScoPE",
+        "marker_groups": (("README.md",), ("pyproject.toml",), ("torchtitan",)),
+        "summary": "TorchTitan positional-encoding training system requiring compatible trained weights.",
+        "setup": {
+            "mode": "artifact_required",
+            "automatic": False,
+            "requirements": (
+                "A model trained with ScoPE-compatible architecture and per-head masks",
+                "A recent FlexAttention/context-parallel Torch stack",
+            ),
+            "next_steps": (
+                "Use upstream's training and evaluation workflow in a research environment.",
+                "Do not expose ScoPE as a retrofit option for ordinary checkpoints.",
+            ),
+        },
+    },
+    "duoattention": {
+        "profile": "duoattention",
+        "name": "DuoAttention",
+        "source_url": "https://github.com/mit-han-lab/duo-attention",
+        "marker_groups": (("README.md",), ("setup.py",), ("duo_attn",), ("attn_patterns",)),
+        "summary": "Research per-head retrieval/streaming policy with model-specific attention patterns.",
+        "setup": {
+            "mode": "guided_native_build",
+            "automatic": False,
+            "requirements": (
+                "Linux CUDA and the documented Torch, FlashAttention, FlashInfer, and block-sparse stack",
+                "A retrieval-head pattern calibrated for the exact model",
+            ),
+            "next_steps": (
+                "Reproduce the pinned upstream environment on disposable target hardware.",
+                "Validate native kernels and long-context retrieval quality before integration.",
+            ),
+        },
+    },
+    "icecache": {
+        "profile": "icecache",
+        "name": "IceCache",
+        "source_url": "https://github.com/yuzhenmao/IceCache",
+        "marker_groups": (
+            ("README.md",),
+            ("IceCache/requirements.txt",),
+            ("IceCache/source/setup.py",),
+        ),
+        "summary": "CPU KV offload research runtime requiring a second native M-DCI source project.",
+        "setup": {
+            "mode": "guided_multi_source_build",
+            "automatic": False,
+            "requirements": (
+                "Linux CUDA, GCC, CMake, OpenBLAS, OpenMP, and matching M-DCI source",
+                "High CPU parallelism; upstream recommends at least 64 threads",
+            ),
+            "next_steps": (
+                "Inspect IceCache and M-DCI independently before any build.",
+                "Benchmark TTFT and retrieval quality at the selected CPU/page budget.",
+            ),
+        },
+    },
+    "pflash_llamacpp": {
+        "profile": "pflash_llamacpp",
+        "name": "llama.cpp PFlash/KVFlash fork",
+        "source_url": "https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash",
+        "marker_groups": (
+            ("README.md",),
+            ("CMakeLists.txt",),
+            ("tools/server/qwen36-smart-router.py",),
+        ),
+        "summary": "Separate experimental llama.cpp runtime with PFlash, KVFlash, DFlash, and routing.",
+        "setup": {
+            "mode": "separate_runtime_fork",
+            "automatic": False,
+            "requirements": (
+                "A separately built capability-scanned server binary",
+                "Exact target, drafter, and scorer GGUFs for the selected path",
+            ),
+            "next_steps": (
+                "Establish a direct server baseline before enabling PFlash or KVFlash.",
+                "Use direct verification or bypass for exactness-sensitive requests.",
+            ),
+        },
+    },
     "domvox_triattention": {
         "profile": "domvox_triattention",
         "name": "domvox TriAttention",
@@ -457,6 +665,12 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         return "sageattention"
     llama_markers = "CMakeLists.txt" in files and "ggml" in directories
     if (
+        llama_markers
+        and (path / "tools" / "server" / "qwen36-smart-router.py").is_file()
+        and (path / "README.md").is_file()
+    ):
+        return "pflash_llamacpp"
+    if (
         "GODZILLA_KING.md" in files
         or (path / "scripts" / "godzilla-paths.ps1").is_file()
         or ("godzilla" in name and llama_markers)
@@ -495,6 +709,21 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         "gigatoken_llamacpp": "gigatoken_llamacpp",
         "cuda_llm_weight_share": "cuda_weight_share",
         "cuda_weight_share": "cuda_weight_share",
+        "jetspec": "jetspec",
+        "lucebox": "lucebox",
+        "lucebox_hub": "lucebox",
+        "proxima": "proxima",
+        "jet_long": "jetlong",
+        "jetlong": "jetlong",
+        "chunkllama": "chunkllama",
+        "rabitqcache": "rabitqcache",
+        "scope": "scope_pe",
+        "scope_pe": "scope_pe",
+        "duo_attention": "duoattention",
+        "duoattention": "duoattention",
+        "icecache": "icecache",
+        "llama.cpp_dflash_pflash_kvflash": "pflash_llamacpp",
+        "pflash_llamacpp": "pflash_llamacpp",
     }
     source_kind = source_aliases.get(source_name)
     if source_kind is not None and all(
@@ -577,6 +806,9 @@ def scan_addon_roots(
                     "minference",
                     "sageattention",
                     "triattention",
+                    "jetspec",
+                    "proxima",
+                    "jetlong",
                 }:
                     from ..optimizations.environments import inspect_profile_source
 

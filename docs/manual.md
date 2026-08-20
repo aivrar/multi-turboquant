@@ -665,7 +665,10 @@ context window.
 
 The web UI's command generator includes a `llama-server` binary scanner. It
 runs `--help`, then reports whether the selected binary advertises RoPE/YaRN,
-KVarN, TriAttention, speculative decoding, DFlash, and `/props` support.
+KVarN, TriAttention, speculative decoding, DFlash, PFlash, KVFlash, DDTree,
+SpecLA, and `/props` support. It classifies recognized Godzilla, Lucebox, and
+PFlash/KVFlash runtime families rather than assuming similarly named flags are
+interchangeable.
 
 ### Godzilla KVarN and DFlash
 
@@ -1215,10 +1218,12 @@ for a different port, `--no-browser` to suppress auto-open,
   environment and create deterministic starter text. Advanced Quick Run controls and
   infrequent setup sections are collapsed until expanded.
 
-The source picker can inspect local folders for the six reviewed-but-blocked
-add-ons, domvox, the reviewed CUDA weight-share source, and the separate
-Gigatoken llama.cpp fork without importing or
-executing source code. Blocked and informational profiles never receive an
+The source picker can inspect local folders for reviewed installable, guided,
+and blocked add-ons, including JetSpec, Proxima, Jet-Long, Lucebox,
+ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, and the separate
+PFlash/KVFlash llama.cpp fork. It also recognizes domvox, the reviewed CUDA
+weight-share source, and the separate Gigatoken llama.cpp fork without
+importing or executing source code. Blocked and informational profiles never receive an
 automatic Create action merely because a folder was selected; their inspection
 results include repository-specific host, license, runtime, and artifact
 requirements. Current Maru source layouts no longer require a root
@@ -1667,7 +1672,10 @@ multi_turboquant.optimizations.plan_optimizations(selected, context)
 
 ## 23. Attribution
 
-Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or Apache-2.0 licensed. Credit goes to these authors for the mathematical ideas and research:
+Multi-TurboQuant reimplements selected algorithms and integrates reviewed
+external workflows from these repositories. Upstream licensing varies, and a
+missing or restricted grant remains an explicit catalog block. Credit goes to
+these authors for the mathematical ideas and research:
 
 | Contribution | Author / Repo | License |
 |-------------|---------------|---------|
@@ -1697,8 +1705,9 @@ Multi-TurboQuant reimplements algorithms from these repositories. All are MIT or
 | Direct Gigatoken tokenization for Godzilla runtime/inference | jawadala / issue #39 | Community contribution |
 | Debian 12/13 support, exact Godzilla `09214b160` profile, domvox/Gigatoken integration, diagnostics, and reviewed CUDA weight-share source workflow | jawadala / issue #40 | Community contribution |
 | Compatible TriAttention interpreter discovery, fail-closed dependency checks, exact-environment domvox conversion, and detailed calibration failure reports | jawadala / issue #42 | Community contribution |
+| JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review; pinned source profiles, source contracts, scanner coverage, and fail-closed composition | jawadala / issue #43 | Community contribution |
 
-We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, or llama.cpp source trees; the confirmed workflows clone or accept only exact reviewed upstream revisions and record or validate their provenance. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, and the parity-checked Gigatoken calibration and runtime options.
+We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, the issue #43 research projects, or llama.cpp source trees; installable workflows use reviewed revisions in isolated environments, while guided entries remain read-only contracts. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, parity-checked Gigatoken options, and the broader fail-closed optimization review.
 
 ---
 

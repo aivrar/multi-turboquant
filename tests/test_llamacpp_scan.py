@@ -68,6 +68,53 @@ def test_parse_llamacpp_help_detects_gigatoken_self_identification():
     assert capabilities.to_dict()["supports_gigatoken"] is True
 
 
+def test_parse_llamacpp_help_detects_pflash_kvflash_fork_without_claiming_godzilla():
+    capabilities = parse_llamacpp_help(
+        """
+build: pflash-kvflash-test
+  --pflash-mode MODE
+  --pflash-keep-ratio N
+  --pflash-drafter FILE
+  --kvflash N
+  --kvflash-policy POLICY
+  --spec-type TYPE       supported: draft-dflash
+  /props reports runtime configuration
+"""
+    )
+
+    assert capabilities.runtime_family == "pflash_llamacpp"
+    assert capabilities.supports_pflash is True
+    assert capabilities.supports_kvflash is True
+    assert capabilities.supports_dflash is True
+    assert capabilities.supports_props_endpoint is True
+    assert capabilities.supports_kvarn is False
+
+    data = capabilities.to_dict()
+    assert data["runtime_family"] == "pflash_llamacpp"
+    assert data["supports_pflash"] is True
+    assert data["supports_kvflash"] is True
+
+
+def test_parse_llamacpp_help_detects_lucebox_runtime_capabilities():
+    capabilities = parse_llamacpp_help(
+        """
+version: lucebox-test
+  --prefill-compression MODE
+  --prefill-drafter FILE
+  --kvflash N
+  --ddtree
+  --ddtree-budget N
+  --specla
+"""
+    )
+
+    assert capabilities.runtime_family == "lucebox"
+    assert capabilities.supports_pflash is True
+    assert capabilities.supports_kvflash is True
+    assert capabilities.supports_ddtree is True
+    assert capabilities.supports_specla is True
+
+
 def test_scan_llamacpp_binary_reports_missing_binary():
     capabilities = scan_llamacpp_binary(
         "__definitely_missing_llama_server__",

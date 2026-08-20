@@ -89,8 +89,26 @@ a separately implemented and validated LMCache SERDE.
 | Lexico | Research only | WIP and requires per-model dictionaries |
 | AdaDecode | Blocked | No source license and requires trained prediction heads |
 | Resonance YaRN | Native backend required | Fine-tuning implementation is not a llama.cpp plugin |
+| JetSpec | Installable isolated source profile | CUDA/Triton speculative decoding research; headline results are hardware-specific and its vLLM path uses a separate fork |
+| Lucebox | Guided separate runtime | Full CUDA/ROCm serving runtime with DFlash, PFlash, KVFlash, DDTree, and SpecLA; not a Python add-on |
+| Proxima | Installable isolated source profile | Source-only vLLM plugin pinned to its reviewed vLLM baseline; reference calibrated checkpoint is not public |
+| Jet-Long | Installable reference profile | Exact Python 3.12/Torch 2.9.1/Transformers 5.3 stack; fused path requires Hopper/SM90 and CUDA 13 |
+| ChunkLlama | Guided research source | Older DCA reference with separate non-commercial data/weight terms and no reviewed serving connector |
+| RaBitQCache | Blocked | No usable repository software license was found |
+| ScoPE | Guided training system | TorchTitan training method, not an existing-checkpoint serving add-on |
+| DuoAttention | Guided research source | Model-specific head patterns and multiple native CUDA components require separate qualification |
+| IceCache | Guided research source | Requires the separate M-DCI artifact, native builds, OpenBLAS/OpenMP, and a high-core-count CPU workflow |
+| PFlash/KVFlash llama.cpp | Guided separate runtime | Hawg33 fork is a separate llama.cpp family, not an arbitrary patch for Godzilla |
+| Resonance-JetLong | Native backend required | Reviewed only for JetLong `yarn`/`jetlong_freq`; Qwen3 remains a gated research hypothesis |
 
 ## Composition rules
+
+Every catalog entry declares the runtime domains it changes. The planner
+rejects overlapping domains with `unvalidated_composition` unless both entries
+explicitly allow the pairing. Coexisting source folders or isolated
+environments therefore do not imply that two optimizations may run in the same
+model process. The plan JSON also exposes required artifacts, validation gates,
+quality-risk labels, and reviewed source commits.
 
 The planner treats token eviction methods as alternatives unless a combination
 has a dedicated implementation and evaluation. It also rejects cache-storage
@@ -115,7 +133,15 @@ independent add-ons for other engines remain separate processes/environments.
 mtq-optimizations --engine godzilla --select triattention --select gigatoken
 mtq-optimizations --engine godzilla --active-feature kvarn --select triattention
 mtq-optimizations --engine godzilla --select cuda_weight_share
+mtq-optimizations --engine transformers --select jetlong --select resonance_jetlong
 ```
+
+The only newly allowlisted overlap is `jetlong` with `resonance_jetlong`, and
+only in JetLong's YaRN/frequency path. It remains a research composition until
+the declared artifact, long-context correctness, perplexity, retrieval,
+throughput, memory, and fallback gates pass for the exact model and source
+revisions. Plain JetLong, arbitrary Qwen3 checkpoints, and other overlapping
+attention/KV methods remain rejected.
 
 ## Isolated dependency environments
 
@@ -176,7 +202,8 @@ than applying an unreviewed source-build procedure.
 `--local-source PATH` addresses a different case: installing the profile's
 primary package from an existing checkout. It is available for
 `flashattention`, `fastdms`, `lmcache`, `minference`, `sageattention`, and
-`triattention`.
+`triattention`, plus the source-only `jetspec`, `proxima`, and `jetlong`
+profiles.
 Planning resolves the path and verifies a profile-specific marker set (for
 example `setup.py`, the import package, and `csrc` where applicable). The
 generated project replaces only that package requirement with a
@@ -267,12 +294,24 @@ eligible for the reviewed profile.
 | `minference` | Installable | Official v0.1.6 source commit `d76b76e`, Transformers 4.x, and PyTorch 2.7.1 CUDA 12.6 | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports Torch, Triton, and MInference |
 | `sageattention` | Installable | Audited upstream commit `d1a57a5`, PyTorch 2.7.1 CUDA 12.6, and build helpers | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports SageAttention |
 | `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.6, Accelerate 1.14.0, SentencePiece 0.2.2, and Gigatoken 0.10.0 | Linux CUDA + Git; imports the official/domvox calibration stack and supplies the UI's automatic calibration Python |
+| `jetspec` | Installable | Reviewed JetSpec commit, Python 3.11, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.1, and Triton | Linux CUDA + Git; validates the local package and preserves the separate-vLLM-fork boundary |
+| `proxima` | Installable | Reviewed Proxima commit and its source-declared vLLM 0.10.1.1 baseline | Linux CUDA + Git; validates the plugin while requiring a separately supplied calibrated model artifact |
+| `jetlong` | Installable | Reviewed Jet-Long commit, Python 3.12, PyTorch 2.9.1 CUDA 13.0, Transformers 5.3, and FlashAttention 2.8.3 | Linux CUDA 13 + Git; validates the reference path; fused SM90 execution is a separate guided profile |
 | `maru` | Blocked | Upstream installer builds a host C++ resource manager and expects CXL `/dev/dax` | Use upstream installation on a dedicated CXL host |
 | `speculative_prefill` | Blocked | Unpackaged monkeypatch pinned to Torch 2.4.0 and vLLM 0.6.3.post1 | Requires a separately qualified legacy source checkout |
 | `rocketkv` | Blocked | Unpackaged research snapshot under a non-commercial research license | Not exposed as a supported serving add-on |
 | `lexico` | Blocked | WIP source tree requiring a trained dictionary per model/configuration | Dependencies alone cannot produce a usable runtime |
 | `adadecode` | Blocked | No repository software license and requires task-specific prediction heads | Automatic installation is not legally or operationally complete |
 | `resonance_yarn` | Blocked | Old training environment and Hugging Face LLaMA fork | Needs a native serving-backend implementation, not an environment install |
+| `jetlong_fused` | Blocked | Hopper/SM90 fused-kernel path with CUDA 13 and exact upstream stack | Use the reference `jetlong` profile unless the host and model pass fused-path qualification |
+| `lucebox` | Blocked | Separate CUDA/ROCm runtime with its own build, container, model, and evaluation contracts | Build and qualify upstream independently; discovery and scanner output are informational |
+| `chunkllama` | Blocked | DCA research source with separate code/data/weight terms | Requires model-specific long-context evaluation and a maintained serving target |
+| `rabitqcache` | Blocked | Repository has no usable software license | No automated install or integration |
+| `scope_pe` | Blocked | TorchTitan training workflow and trained artifacts | Not applicable as a drop-in inference profile |
+| `duoattention` | Blocked | Model-specific head patterns and native CUDA stack | Requires exact-model artifact and runtime qualification |
+| `icecache` | Blocked | M-DCI artifact, C++/CUDA builds, OpenBLAS/OpenMP, and CPU-heavy indexing | Requires upstream prerequisites and independent evaluation |
+| `pflash_llamacpp` | Blocked | Separate Hawg33 llama.cpp runtime family | Inspect/build the fork separately; do not apply it as a Godzilla patch |
+| `resonance_jetlong` | Blocked | Research composition requiring a trained compatible artifact and long-context gates | Planner metadata only; no automatic training or serving claim |
 
 Blocked rows are catalog records, not failed installations. They intentionally
 have no create command until the missing hardware contract, licensing,
@@ -419,3 +458,14 @@ native operator, not a model-specific sparse-attention configuration.
 - domvox TriAttention: <https://github.com/domvox/triattention-ggml>
 - Gigatoken: <https://github.com/marcelroed/gigatoken>
 - Gigatoken llama.cpp fork: <https://github.com/chynggi/gigatoken-llama.cpp>
+- JetSpec: <https://github.com/hao-ai-lab/JetSpec>
+- Lucebox hub: <https://github.com/Luce-Org/lucebox-hub>
+- Lucebox runtime: <https://github.com/Luce-Org/lucebox>
+- Proxima: <https://github.com/Tenosra/Proxima>
+- Jet-Long: <https://github.com/jet-ai-projects/jet-long>
+- ChunkLlama: <https://github.com/HKUNLP/ChunkLlama>
+- RaBitQCache: <https://github.com/Sakuraaa0/RaBitQCache>
+- ScoPE: <https://github.com/oncemoe/ScoPE>
+- DuoAttention: <https://github.com/mit-han-lab/duo-attention>
+- IceCache: <https://github.com/yuzhenmao/IceCache>
+- PFlash/KVFlash llama.cpp fork: <https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash>
