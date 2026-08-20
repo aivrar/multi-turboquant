@@ -108,12 +108,20 @@ class LlamaCppCapabilities:
     def supports_kvflash(self) -> bool:
         return any(
             self.supports_flag(flag)
-            for flag in ("--kvflash", "--kvflash-policy", "--kvflash-drafter")
+            for flag in (
+                "--kvflash",
+                "--kvflash-pages",
+                "--kvflash-policy",
+                "--kvflash-drafter",
+            )
         )
 
     @property
     def supports_ddtree(self) -> bool:
-        return self.supports_flag("--ddtree") or self.supports_flag("--ddtree-budget")
+        return any(
+            self.supports_flag(flag)
+            for flag in ("--ddtree", "--ddtree-budget", "--spec-branch-budget")
+        )
 
     @property
     def supports_specla(self) -> bool:
@@ -121,12 +129,15 @@ class LlamaCppCapabilities:
 
     @property
     def runtime_family(self) -> str:
+        # KVarN and TriAttention are the strongest Godzilla markers. Check them
+        # before add-on flags so a reviewed Godzilla build does not change
+        # family merely because DDTree, PFlash, or KVFlash is also present.
+        if self.supports_kvarn or self.supports_triattention:
+            return "godzilla"
         if self.supports_flag("--pflash-mode") or self.supports_flag("--kvflash-policy"):
             return "pflash_llamacpp"
         if self.supports_ddtree or self.supports_flag("--prefill-compression"):
             return "lucebox"
-        if self.supports_kvarn or self.supports_triattention:
-            return "godzilla"
         return "llamacpp"
 
     @property

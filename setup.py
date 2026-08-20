@@ -54,6 +54,7 @@ setup(
             "mtq-triattention-stats=multi_turboquant.calibration.generate_stats:main",
             "mtq-godzilla-triattention=multi_turboquant.calibration.godzilla_triattention:main",
             "mtq-godzilla-gigatoken=multi_turboquant.integration.godzilla_gigatoken_cli:main",
+            "mtq-godzilla-compose=multi_turboquant.integration.godzilla_composition_cli:main",
             "mtq-weight-share=multi_turboquant.integration.weight_share_cli:main",
             "mtq-benchmark=multi_turboquant.benchmark.run_benchmark:main",
             "mtq-optimizations=multi_turboquant.optimizations.cli:main",

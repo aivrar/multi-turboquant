@@ -14,6 +14,7 @@ Version: godzilla-test
   --yarn-orig-ctx N
   --triattention-stats FILE
   --spec-type TYPE           supported: dflash draft-mtp
+  --spec-branch-budget N     DDTree branch nodes beyond the main draft path
   --spec-dflash-cross-ctx N
 """
 
@@ -31,13 +32,16 @@ Version: godzilla-test
     assert capabilities.supports_kvarn is True
     assert capabilities.supports_speculative is True
     assert capabilities.supports_dflash is True
+    assert capabilities.supports_ddtree is True
     assert capabilities.supports_cache_type("kvarn4") is True
     assert capabilities.supports_cache_type("turbo3_tcq") is True
     assert capabilities.supports_speculative_type("draft-mtp") is True
+    assert capabilities.runtime_family == "godzilla"
 
     data = capabilities.to_dict()
     assert data["binary"] == "llama-server-godzilla"
     assert data["supports_yarn"] is True
+    assert data["supports_ddtree"] is True
     assert "kvarn4" in data["cache_types"]
 
 
@@ -54,6 +58,7 @@ build: 1234
     assert capabilities.supports_yarn is False
     assert capabilities.supports_kvarn is False
     assert capabilities.supports_triattention is False
+    assert capabilities.supports_ddtree is False
     assert capabilities.supports_cache_type("f16") is True
     assert capabilities.supports_cache_type("kvarn4") is False
 
@@ -113,6 +118,38 @@ version: lucebox-test
     assert capabilities.supports_kvflash is True
     assert capabilities.supports_ddtree is True
     assert capabilities.supports_specla is True
+
+
+def test_godzilla_family_wins_when_reviewed_addon_flags_are_present():
+    capabilities = parse_llamacpp_help(
+        """
+version: godzilla-composition-test
+  --cache-type-k TYPE        supported: f16 kvarn2..kvarn8
+  --triattention-stats FILE
+  --spec-type TYPE           supported: dflash
+  --spec-branch-budget N
+  --pflash-mode MODE
+  --kvflash-policy POLICY
+"""
+    )
+
+    assert capabilities.runtime_family == "godzilla"
+    assert capabilities.supports_ddtree is True
+    assert capabilities.supports_pflash is True
+    assert capabilities.supports_kvflash is True
+
+
+def test_composition_overlay_kvflash_pages_is_detected():
+    capabilities = parse_llamacpp_help("""
+      --triattention-stats PATH
+      --pflash
+      --pflash-keep-ratio RATIO
+      --kvflash-pages N
+    """)
+
+    assert capabilities.runtime_family == "godzilla"
+    assert capabilities.supports_pflash is True
+    assert capabilities.supports_kvflash is True
 
 
 def test_scan_llamacpp_binary_reports_missing_binary():

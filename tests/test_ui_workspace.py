@@ -250,6 +250,27 @@ def test_addon_scan_recognizes_blocked_source_as_informational(tmp_path: Path):
     assert "environment_profile" not in addon
 
 
+def test_addon_scan_recognizes_prepared_godzilla_composition(tmp_path: Path, monkeypatch):
+    import multi_turboquant.integration as integration
+
+    source = tmp_path / "renamed-runtime"
+    (source / "ggml").mkdir(parents=True)
+    (source / "CMakeLists.txt").write_text("project(godzilla)", encoding="utf-8")
+    (source / ".mtq-godzilla-composition.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        integration,
+        "inspect_godzilla_composition",
+        lambda path: {"valid": True, "target": str(Path(path).resolve()), "issues": []},
+    )
+
+    result = scan_addon_roots([tmp_path])
+    addon = next(item for item in result["addons"] if item["path"] == str(source.resolve()))
+
+    assert addon["kind"] == "godzilla_composition"
+    assert addon["source_profile"] == "godzilla_composition"
+    assert addon["source"]["valid"] is True
+
+
 def test_addon_scan_does_not_classify_an_empty_blocked_named_folder(tmp_path: Path):
     (tmp_path / "rocketkv").mkdir()
 

@@ -140,6 +140,25 @@ runtime workflow ports the reviewed tokenizer changes onto either exact
 Godzilla v0.3.7 or `09214b160` source profile and runs differential plus legacy
 tokenizer tests. Neither path changes the KVarN/TriAttention guardrail.
 
+Issue #44 adds a separate exact-commit composition workflow. Running
+`mtq-godzilla-compose` against a new destination prepares Godzilla
+`09214b160b402011359f0ef9d5fa8f8be1112e85` with two deliberately bounded
+server additions:
+
+- PFlash is off by default, requires startup and per-request opt-in, protects
+  prompt edges, and bypasses chat, multimodal, embedding, rerank, and
+  parallel-parent requests.
+- KVFlash retains complete idle-slot KV states under a token-accounted LRU
+  budget. It does not implement or claim arbitrary-page restore, disk restore,
+  or prefill skipping.
+
+Because the KVFlash tier never edits individual cache entries, it stays outside
+KVarN's representation and TriAttention's pruning domain. PFlash can precede
+either path, but it remains a lossy prefill policy requiring model/workload
+quality validation. DFlash/DDTree remains available. TriAttention plus KVarN
+is still rejected, and SpecLA is not included because it is a different
+linear-attention runtime.
+
 ## Sources
 
 - llama.cpp server documentation:
