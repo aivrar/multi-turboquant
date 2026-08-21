@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -487,8 +488,6 @@ def test_calibration_python_preflight_selects_explicit_cuda_device(tmp_path: Pat
 
 
 def test_model_metadata_prefers_nested_rope_and_exposes_context(monkeypatch):
-    import transformers
-
     config = SimpleNamespace(
         num_hidden_layers=36,
         num_attention_heads=16,
@@ -502,11 +501,13 @@ def test_model_metadata_prefers_nested_rope_and_exposes_context(monkeypatch):
         rope_theta=10_000.0,
         rope_parameters={"rope_theta": 1_000_000.0, "rope_type": "default"},
     )
-    monkeypatch.setattr(
-        transformers.AutoConfig,
-        "from_pretrained",
-        staticmethod(lambda *_args, **_kwargs: config),
+    fake_transformers = SimpleNamespace(
+        __version__="test",
+        AutoConfig=SimpleNamespace(
+            from_pretrained=staticmethod(lambda *_args, **_kwargs: config)
+        ),
     )
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
     metadata = calibration.load_huggingface_model_metadata("org/model")
 
