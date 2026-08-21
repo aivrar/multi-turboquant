@@ -126,6 +126,14 @@ older checkout-owned PowerShell workflow remains an explicit fallback for
 compatible checkouts. Multi-TurboQuant never synthesizes unverified model
 statistics and reuses existing artifacts only after strict validation.
 
+Calibration performs a Transformers BF16 model load; a small `IQ4_XS` GGUF does
+not reduce that memory. The preflight resolves the matching Hugging Face config,
+prefers nested `rope_parameters.rope_theta` over conflicting legacy defaults,
+bounds the sequence by `max_position_embeddings`, estimates the official
+one-shot memory floor, and supports explicit `cuda:N` selection. The upstream
+32,768-token default remains the evidence-backed target; 200,000 is only the
+application's global ceiling for models and hardware that pass those checks.
+
 The UI selects calibration Python only after a bounded isolated import probe,
 does not combine packages from different environments, and rechecks the exact
 interpreter immediately before launch. domvox calibration and conversion stay

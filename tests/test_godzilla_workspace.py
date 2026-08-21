@@ -472,6 +472,35 @@ def test_long_calibration_requires_acknowledgement_and_has_hard_cap(tmp_path: Pa
     assert any(issue.code == "invalid_token_count" for issue in capped.issues)
 
 
+def test_plan_rejects_tokens_beyond_matching_model_context(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "Mythos-nano-heretic.IQ4_XS.gguf"
+    model.write_bytes(b"gguf")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        hf_model="richardyoung/Mythos-nano-heretic",
+        n_tokens=200_000,
+        allow_long_calibration=True,
+        model_metadata_loader=lambda _model: {
+            "head_dim": 128,
+            "num_layers": 36,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 2,
+            "rope_theta": 1_000_000.0,
+            "rope_theta_source": "rope_parameters",
+            "rope_theta_conflict": True,
+            "max_position_embeddings": 131_072,
+            "hidden_size": 2048,
+            "estimated_bf16_weight_bytes": 6_171_394_048,
+        },
+    )
+
+    assert any(issue.code == "model_metadata_incompatible" for issue in plan.issues)
+    assert not plan.ready
+
+
 def test_gigatoken_plan_forwards_backend_and_wraps_domvox(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
     model = tmp_path / "model.gguf"
@@ -766,6 +795,10 @@ def test_failed_calibration_diagnostics_are_detailed_and_redacted(tmp_path: Path
                 "sentencepiece": "0.2.2",
                 "torch_cuda": "12.6",
                 "cuda_available": True,
+                "cuda_device": "Test GPU",
+                "cuda_device_index": 0,
+                "cuda_free_memory_bytes": 24 * 1024**3,
+                "cuda_total_memory_bytes": 24 * 1024**3,
                 "modules": {
                     "torch": {"status": "ok", "version": "2.7.1"},
                     "transformers": {"status": "ok", "version": "4.57.6"},

@@ -37,6 +37,7 @@ from multi_turboquant import (
 from multi_turboquant.calibration import (
     CALIBRATION_CORPUS_SCHEMA_VERSION,
     generate_calibration_text,
+    load_huggingface_model_metadata,
     select_compatible_calibration_python,
 )
 from multi_turboquant._paths import lexical_absolute_path
@@ -101,6 +102,7 @@ def api_status():
     plat = detect_platform()
     gpus = [
         {
+            "index": g.index,
             "name": g.name,
             "vram_mb": g.vram_total_mb,
             "vram_used_mb": g.vram_used_mb,
@@ -870,6 +872,9 @@ def _godzilla_plan_from_params(params):
         verify_dependencies=True,
         dependency_override=_truthy(params.get("dependency_override")),
         python_discovery=python_discovery,
+        model_metadata_loader=lambda model_id: load_huggingface_model_metadata(
+            model_id, trust_remote_code=False
+        ),
     )
 
 
@@ -914,7 +919,8 @@ def api_plan_godzilla(params):
         "max_concurrent_calibrations": GODZILLA_JOBS.max_concurrent_jobs,
         "message": (
             "The local UI permits one calibration job at a time to prevent overlapping "
-            "model loads. This does not reduce the memory used by one long sequence."
+            "model loads. Model context and a conservative one-shot memory floor are checked "
+            "before weights are loaded."
         ),
     }
     return result
@@ -1589,14 +1595,14 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         </div>
         <div class="form-row">
           <div><label>Calibration tokens</label><input type="number" id="godzilla-tokens" value="2048" min="128" max="200000"></div>
-          <div><label>Device</label><select id="godzilla-device"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
+          <div><label>Device</label><select id="godzilla-device"><option value="">Detecting CUDA devices...</option></select></div>
           <div style="grid-column:span 2" class="button-row">
             <button class="secondary" onclick="planGodzilla()">Check Plan</button>
             <label><input type="checkbox" id="godzilla-confirm"> Confirm model load/download and preparation</label>
             <button onclick="startGodzilla()">Prepare TriAttention</button>
           </div>
         </div>
-        <div class="setup-note"><label><input type="checkbox" id="godzilla-long-calibration"> Allow one-shot calibration above 32,768 tokens (up to 200,000; high memory/runtime risk)</label></div>
+        <div class="setup-note"><label><input type="checkbox" id="godzilla-long-calibration"> Allow one-shot calibration above 32,768 tokens only when the model context and selected device pass preflight (global ceiling 200,000)</label></div>
         <div class="setup-note"><label><input type="checkbox" id="godzilla-domvox-lossy"> I understand domvox TRIA v2 to Godzilla v1 conversion is experimental and drops fields not represented by Godzilla v1.</label></div>
         <div id="godzilla-plan" class="item-list"><div class="muted">No preparation plan checked.</div></div>
         </div>
@@ -1926,6 +1932,29 @@ async function init() {
     });
   }
   document.getElementById('gpu-status').innerHTML = gpuHtml;
+  const calibrationDevice = document.getElementById('godzilla-device');
+  const previousCalibrationDevice = calibrationDevice.value;
+  calibrationDevice.replaceChildren();
+  const cudaGpus = status.gpus.filter(g => g.compute === 'cuda');
+  const rankedGpus = [...cudaGpus].sort((a, b) =>
+    (b.vram_mb - b.vram_used_mb) - (a.vram_mb - a.vram_used_mb));
+  cudaGpus.forEach(g => {
+    const option = document.createElement('option');
+    option.value = `cuda:${g.index}`;
+    option.textContent = `CUDA ${g.index}: ${g.name} (${(g.vram_mb / 1024).toFixed(1)} GB)`;
+    calibrationDevice.appendChild(option);
+  });
+  const cpuOption = document.createElement('option');
+  cpuOption.value = 'cpu';
+  cpuOption.textContent = 'CPU';
+  calibrationDevice.appendChild(cpuOption);
+  if ([...calibrationDevice.options].some(option => option.value === previousCalibrationDevice)) {
+    calibrationDevice.value = previousCalibrationDevice;
+  } else if (rankedGpus.length) {
+    calibrationDevice.value = `cuda:${rankedGpus[0].index}`;
+  } else {
+    calibrationDevice.value = 'cpu';
+  }
 
   // Library stats
   document.getElementById('lib-status').innerHTML =
@@ -2320,6 +2349,10 @@ function renderGodzillaPlan(plan) {
       `<div class="muted">Python: ${escapeHtml(plan.python || 'not found')}</div>` +
       discoveryHtml +
     `<div class="muted">Output: ${escapeHtml(plan.output)}</div>` +
+    (plan.model_metadata ? `<div class="muted">Model preflight: context ${escapeHtml(plan.model_metadata.max_position_embeddings || 'unknown')}, ` +
+      `RoPE theta ${escapeHtml(plan.model_metadata.rope_theta || 'unknown')} (${escapeHtml(plan.model_metadata.rope_theta_source || 'unknown source')}).</div>` : '') +
+    (plan.memory_estimate?.estimated_floor_bytes ? `<div class="muted">Official one-shot memory floor: ` +
+      `${escapeHtml((plan.memory_estimate.estimated_floor_bytes / (1024 ** 3)).toFixed(1))} GiB.</div>` : '') +
     (plan.resource_policy ? `<div class="muted">${escapeHtml(plan.resource_policy.message)}</div>` : '') +
     (plan.official_stats ? `<div class="muted">Official .pt stats: ${escapeHtml(plan.official_stats)}</div>` : '') +
     (plan.issues || []).map(issue =>
