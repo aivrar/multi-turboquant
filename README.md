@@ -935,6 +935,7 @@ contracts and do not imply runtime compatibility.
 | Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
 | Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 | Requested full guarded treatment of the reviewed add-on catalog, workload routing, simulation, LuceBox composition research, UI coverage, and SM86/SM89 qualification for the canonical Godzilla baseline | [@jawadala](https://github.com/jawadala) | Issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
+| Reported model-specific TriAttention calibration failures with Mythos-nano-heretic `IQ4_XS`, prompting source-model context validation, nested RoPE correction, memory preflight, and explicit multi-GPU device selection | [@jawadala](https://github.com/jawadala) | Community testing report (August 2026) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
@@ -946,6 +947,8 @@ correction, parity-checked Gigatoken option, and the broader issue #43 research
 catalog with explicit safety boundaries, including the exact-commit composition
 workflow prompted by issue #44 and the full guarded composition, routing,
 simulation, LuceBox, UI, and SM86/SM89 qualification follow-up in issue #46.
+Their subsequent Mythos-nano-heretic calibration report also prompted the
+model-aware context, RoPE, memory, and CUDA-device safeguards.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 
