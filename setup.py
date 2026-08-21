@@ -25,6 +25,11 @@ setup(
             "safetensors>=0.4.0",
             "transformers>=4.36.0,<5",
         ],
+        "gguf-calibration": [
+            "accelerate>=1.0.0",
+            "gguf>=0.10.0",
+            "transformers>=4.46.0,<5",
+        ],
         "triton": [
             "triton>=2.1.0",
         ],
@@ -40,6 +45,8 @@ setup(
             "pytest-cov",
         ],
         "all": [
+            "accelerate>=1.0.0",
+            "gguf>=0.10.0",
             "safetensors>=0.4.0",
             "transformers>=4.36.0,<5",
             "triton>=2.1.0",
@@ -53,6 +60,7 @@ setup(
             "mtq-calibrate=multi_turboquant.calibration.generate_metadata:main",
             "mtq-triattention-stats=multi_turboquant.calibration.generate_stats:main",
             "mtq-godzilla-triattention=multi_turboquant.calibration.godzilla_triattention:main",
+            "mtq-triattention-gguf-stream=multi_turboquant.calibration.gguf_streaming:main",
             "mtq-godzilla-gigatoken=multi_turboquant.integration.godzilla_gigatoken_cli:main",
             "mtq-godzilla-compose=multi_turboquant.integration.godzilla_composition_cli:main",
             "mtq-weight-share=multi_turboquant.integration.weight_share_cli:main",

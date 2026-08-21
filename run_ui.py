@@ -1340,7 +1340,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div style="grid-column:1/-1"><label>TriAttention Stats Path</label>
           <input type="text" id="cmd-tri-stats" value="" placeholder="model.triattention" onchange="generateCommand()">
         </div>
-        <div class="setup-note" style="grid-column:1/-1">Godzilla's current policy treats TriAttention as experimental, opt-in, and manually calibrated. Its checkout may not include a calibrator. A GGUF file alone cannot supply the required pre-RoPE query statistics; Multi-TurboQuant's Python <code>.pt</code> stats are a different format.</div>
+        <div class="setup-note" style="grid-column:1/-1">Godzilla's current policy treats TriAttention as experimental, opt-in, and manually calibrated. Its checkout may not include a calibrator. This field requires a finished <code>.triattention</code> artifact. The UI calibration modes use matching Hugging Face weights; the separate experimental <code>mtq-triattention-gguf-stream</code> CLI can derive statistics from supported local GGUF models by executing dequantized weights.</div>
       </div>
         </div>
       </details>

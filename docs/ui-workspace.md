@@ -56,8 +56,10 @@ UI server shuts down. A binary path can be supplied in the command controls, or
 
 For patched Godzilla TriAttention, the stats-path control expects the finished
 binary `.triattention` file. Producing that file is a model-specific offline
-calibration against the matching Hugging Face checkpoint; a discovered GGUF
-alone does not contain the required pre-RoPE query statistics.
+calibration. The UI modes use the matching Hugging Face checkpoint. A separate
+experimental `mtq-triattention-gguf-stream` CLI can derive the missing statistics
+from supported local GGUF models by executing dequantized weights; it is not yet a UI
+job mode.
 
 The default **Generate stats + convert** mode uses the official TriAttention
 checkout's `scripts/calibrate.py`, keeps its `.pt` output, converts that payload
@@ -92,14 +94,16 @@ resulting TRIA v2 file, and adapts it to Godzilla v1 only after the explicit
 lossy-conversion acknowledgement is selected. Layer-budget scales and
 attention scale are not representable in Godzilla v1 and are reported as
 dropped. The matching Hugging Face model is required for shape and RoPE checks;
-a GGUF by itself is not sufficient.
+a GGUF by itself is not sufficient for this domvox mode.
 When Gigatoken is selected, domvox is launched through the same fail-closed
 parity wrapper as the official calibrator; its script receives only supported
 arguments after parity succeeds.
 
-`IQ4_XS` and similar names are GGUF weight encodings, not calibration model IDs.
-Both Python calibrators load the matching Hugging Face checkpoint rather than
-the selected quantized GGUF. The plan now validates that checkpoint's config
+`IQ4_XS` and similar names are GGUF weight encodings, not calibration model IDs for
+the official or domvox UI modes. Both UI calibrators load the matching Hugging Face
+checkpoint rather than the selected quantized GGUF. The experimental local-GGUF CLI
+is distinct and explicitly warns that Transformers dequantizes those weights. The UI
+plan validates its checkpoint's config
 before weight download, uses nested `rope_parameters.rope_theta` when it
 conflicts with a legacy fallback, and reports the model context and RoPE source.
 It also reports when the checkpoint's recorded Transformers version differs from

@@ -25,6 +25,11 @@ from .godzilla_triattention import (
     estimate_official_calibration_bytes,
     validate_model_calibration_length,
 )
+from .gguf_streaming import (
+    StreamingQueryStats,
+    calibrate_local_gguf_streaming,
+    load_local_gguf_metadata,
+)
 
 __all__ = [
     "generate_turboquant_metadata",
@@ -50,4 +55,7 @@ __all__ = [
     "select_compatible_calibration_python",
     "estimate_official_calibration_bytes",
     "validate_model_calibration_length",
+    "StreamingQueryStats",
+    "calibrate_local_gguf_streaming",
+    "load_local_gguf_metadata",
 ]
