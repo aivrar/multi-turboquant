@@ -23,6 +23,9 @@ from ..calibration.godzilla_triattention import (
     inspect_domvox_triattention_calibrator,
     inspect_godzilla_triattention_file,
     inspect_official_triattention_calibrator,
+    estimate_official_calibration_bytes,
+    normalize_calibration_device,
+    validate_model_calibration_length,
 )
 
 
@@ -179,6 +182,8 @@ class GodzillaCalibrationPlan:
     issues: tuple[GodzillaIssue, ...]
     tokenizer_backend: str = "transformers"
     python_discovery: Mapping[str, object] | None = None
+    model_metadata: Mapping[str, object] | None = None
+    memory_estimate: Mapping[str, object] | None = None
 
     @property
     def ready(self) -> bool:
@@ -212,6 +217,8 @@ class GodzillaCalibrationPlan:
             "dependency_validation": self.dependency_validation,
             "dependency_override": self.dependency_override,
             "python_discovery": self.python_discovery,
+            "model_metadata": self.model_metadata,
+            "memory_estimate": self.memory_estimate,
             "command": list(self.command),
             "environment": dict(self.environment),
             "issues": [issue.to_dict() for issue in self.issues],
@@ -243,6 +250,7 @@ def plan_godzilla_triattention(
     python_discovery: Mapping[str, object] | None = None,
     dependency_runner=subprocess.run,
     shell_executable: str | None = None,
+    model_metadata_loader: Callable[[str], Mapping[str, object]] | None = None,
 ) -> GodzillaCalibrationPlan:
     """Plan a validated official-Python or checkout-owned calibration workflow."""
     checkout_path = Path(checkout).expanduser().resolve()
@@ -253,7 +261,12 @@ def plan_godzilla_triattention(
         else checkout_path / "calibrations" / f"{gguf_path.stem}.triattention"
     )
     normalized_hf = hf_model.strip() if hf_model and hf_model.strip() else None
-    normalized_device = device.strip().lower()
+    device_error = None
+    try:
+        normalized_device = normalize_calibration_device(device)
+    except ValueError as exc:
+        normalized_device = device.strip().lower()
+        device_error = str(exc)
     normalized_mode = mode.strip().lower()
     normalized_attention = attention_implementation.strip().lower()
     dependency_attention = normalized_attention if normalized_mode == "official_python" else "sdpa"
@@ -301,6 +314,8 @@ def plan_godzilla_triattention(
     output_exists = output_path.is_file()
     issues: list[GodzillaIssue] = []
     dependency_validation: Mapping[str, object] | None = None
+    model_metadata: Mapping[str, object] | None = None
+    memory_estimate: Mapping[str, object] | None = None
 
     if not inspection["valid"]:
         issues.append(
@@ -485,8 +500,8 @@ def plan_godzilla_triattention(
                     "The upstream calibrator processes one long sequence; no chunked aggregation is being assumed. Expect substantially higher memory and runtime.",
                 )
             )
-    if normalized_device not in {"cuda", "cpu"}:
-        issues.append(GodzillaIssue("error", "invalid_device", "Device must be 'cuda' or 'cpu'."))
+    if device_error is not None:
+        issues.append(GodzillaIssue("error", "invalid_device", device_error))
     if normalized_mode == "official_python" and normalized_attention not in {
         "eager",
         "sdpa",
@@ -502,7 +517,7 @@ def plan_godzilla_triattention(
     elif (
         normalized_mode == "official_python"
         and normalized_attention == "flash_attention_2"
-        and normalized_device != "cuda"
+        and not normalized_device.startswith("cuda")
     ):
         issues.append(
             GodzillaIssue(
@@ -542,6 +557,64 @@ def plan_godzilla_triattention(
                     "Provide the matching Hugging Face model because this checkout has no resolver.",
                 )
             )
+    if (
+        not output_exists
+        and normalized_hf is not None
+        and normalized_mode in {"official_python", "official_convert", "domvox"}
+        and model_metadata_loader is not None
+    ):
+        try:
+            loaded_metadata = model_metadata_loader(normalized_hf)
+            model_metadata = dict(loaded_metadata)
+            if normalized_mode in {"official_python", "domvox"}:
+                validate_model_calibration_length(n_tokens, model_metadata)
+            if normalized_mode == "official_python":
+                memory_estimate = estimate_official_calibration_bytes(model_metadata, n_tokens)
+        except Exception as exc:
+            issues.append(
+                GodzillaIssue(
+                    "error",
+                    "model_metadata_incompatible",
+                    f"Matching Hugging Face model metadata could not be validated: {exc}",
+                )
+            )
+        else:
+            context = model_metadata.get("max_position_embeddings")
+            theta = model_metadata.get("rope_theta")
+            issues.append(
+                GodzillaIssue(
+                    "info",
+                    "model_metadata_validated",
+                    f"Validated model metadata: context={context or 'unknown'}, "
+                    f"RoPE theta={theta or 'unknown'}.",
+                )
+            )
+            if model_metadata.get("rope_theta_conflict"):
+                issues.append(
+                    GodzillaIssue(
+                        "warning",
+                        "nested_rope_theta_selected",
+                        "The model declares conflicting legacy and nested RoPE values; the "
+                        "calibration wrapper will use rope_parameters.rope_theta.",
+                    )
+                )
+            declared_transformers = model_metadata.get("declared_transformers_version")
+            runtime_transformers = model_metadata.get("runtime_transformers_version")
+            if (
+                declared_transformers
+                and runtime_transformers
+                and declared_transformers != runtime_transformers
+            ):
+                issues.append(
+                    GodzillaIssue(
+                        "warning",
+                        "model_transformers_version_differs",
+                        "The model config was saved by Transformers "
+                        f"{declared_transformers}, while calibration uses {runtime_transformers}. "
+                        "The compatibility wrapper normalizes reviewed RoPE metadata, but model "
+                        "code compatibility must still be validated.",
+                    )
+                )
     issues.append(
         GodzillaIssue(
             "info",
@@ -651,10 +724,35 @@ def plan_godzilla_triattention(
                         "info",
                         "calibration_device_memory",
                         f"{device_name}: {free_gib:.1f} GiB free of {total_gib:.1f} GiB VRAM "
-                        "at preflight time. This is capacity information, not a 200k-token "
-                        "memory guarantee.",
+                        "at preflight time. This capacity snapshot is not a peak-memory "
+                        "guarantee.",
                     )
                 )
+                if memory_estimate is not None:
+                    floor = memory_estimate.get("estimated_floor_bytes")
+                    free_bytes = dependency_validation.get("cuda_free_memory_bytes")
+                    if isinstance(floor, int) and isinstance(free_bytes, int):
+                        if floor > free_bytes:
+                            issues.append(
+                                GodzillaIssue(
+                                    "error",
+                                    "calibration_memory_floor_exceeded",
+                                    "The official one-shot calibration memory floor is "
+                                    f"{floor / gib:.1f} GiB, exceeding the selected device's "
+                                    f"{free_bytes / gib:.1f} GiB currently free. Select another "
+                                    "CUDA device or reduce calibration tokens.",
+                                )
+                            )
+                        else:
+                            issues.append(
+                                GodzillaIssue(
+                                    "info",
+                                    "calibration_memory_floor",
+                                    "The official one-shot calibration memory floor is "
+                                    f"approximately {floor / gib:.1f} GiB. This is a lower-bound "
+                                    "estimate, not a guarantee.",
+                                )
+                            )
             elif dependency_validation and dependency_validation.get("cuda_memory_error"):
                 issues.append(
                     GodzillaIssue(
@@ -861,6 +959,8 @@ def plan_godzilla_triattention(
         issues=tuple(issues),
         tokenizer_backend=normalized_tokenizer,
         python_discovery=python_discovery,
+        model_metadata=model_metadata,
+        memory_estimate=memory_estimate,
     )
 
 
@@ -1048,6 +1148,8 @@ def collect_godzilla_calibration_diagnostics(
             "tokenizer_backend": plan.tokenizer_backend,
             "attention_implementation": plan.attention_implementation,
             "n_tokens": plan.n_tokens,
+            "model_metadata": plan.model_metadata,
+            "memory_estimate": plan.memory_estimate,
             "dependency_override_requested": plan.dependency_override,
             "ready_at_submission": plan.ready,
             "issues": [issue.to_dict() for issue in plan.issues],

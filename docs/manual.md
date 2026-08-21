@@ -826,14 +826,18 @@ script's sibling `triattention_common.py`, header, and exact file length, and
 requires an explicit acknowledgement because
 Godzilla v1 cannot store domvox layer-budget scales or attention scale. Those
 fields are reported as dropped; this is not a lossless format conversion.
-Calibration lengths from 128 through 200,000 are accepted. Above 32,768 the
-operator must enable long calibration explicitly; the upstream script processes
-one long sequence, so the UI warns about memory and runtime instead of assuming
-chunked aggregation. The UI runs at most one calibration job at a time and
-reports the selected CUDA device's current free/total VRAM after dependency
-preflight. That snapshot cannot predict the long sequence's peak usage, and
-system RAM is not a substitute for discrete VRAM. A GGUF alone remains
-insufficient for calibration.
+The 200,000-token value is a global input ceiling, not a recommendation or a
+guarantee. Upstream documents a 32,768-token default. The actual limit is also
+bounded by the matching Hugging Face model's declared context, and the planner
+rejects an oversized request before downloading weights. Above 32,768 the
+operator must still enable long calibration explicitly; the upstream script
+processes one sequence rather than treating the value as total tokens across a
+chunked corpus. The official path reports a conservative memory floor for its
+retained Q tensors, BF16 weights, and transient state and blocks a request that
+cannot fit the selected GPU's currently free VRAM. Select GPUs explicitly as
+`cuda:N`; the UI initially chooses the device with the most free VRAM. System
+RAM is not a substitute for discrete VRAM, and a GGUF alone remains insufficient
+for calibration. GGUF labels such as `IQ4_XS` describe inference weights only.
 Selecting Gigatoken runs domvox through the same fail-closed parity wrapper as
 the official script and forwards only domvox-supported arguments afterward.
 The domvox forward pass and Godzilla conversion both run inside the exact

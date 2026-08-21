@@ -97,13 +97,24 @@ When Gigatoken is selected, domvox is launched through the same fail-closed
 parity wrapper as the official calibrator; its script receives only supported
 arguments after parity succeeds.
 
-Calibration lengths from 128 through 200,000 tokens are supported. Values above
-32,768 require the explicit **Allow long calibration** checkbox and produce a
-one-shot memory/runtime warning; the UI does not silently chunk or aggregate
-the upstream calibrator's sequence. It permits one calibration job at a time so
-two model loads cannot overlap. A successful dependency preflight reports the
-selected CUDA device's free and total VRAM, but that snapshot is not a memory
-estimate or guarantee for a 200,000-token run.
+`IQ4_XS` and similar names are GGUF weight encodings, not calibration model IDs.
+Both Python calibrators load the matching Hugging Face checkpoint rather than
+the selected quantized GGUF. The plan now validates that checkpoint's config
+before weight download, uses nested `rope_parameters.rope_theta` when it
+conflicts with a legacy fallback, and reports the model context and RoPE source.
+It also reports when the checkpoint's recorded Transformers version differs from
+the managed calibration runtime.
+
+The global input ceiling remains 200,000 tokens, but the effective one-shot
+limit is also bounded by the matching model's `max_position_embeddings`. Values
+above 32,768 require **Allow long calibration**; the upstream guide recommends
+approaching its 32,768-token default and does not establish 200,000 as best.
+The UI does not silently reinterpret 200k total corpus tokens as one or more
+safe sequences. For the official path it estimates retained Q tensors, BF16
+weights, and transient state and blocks a run when that conservative floor
+already exceeds free VRAM. Individual `cuda:N` devices are selectable, with the
+largest currently free GPU selected initially. The estimate remains a lower
+bound and one-job concurrency does not reduce a single sequence's peak use.
 
 If the automatically selected managed interpreter is missing `accelerate` or
 another declared dependency, the plan offers **Repair TriAttention

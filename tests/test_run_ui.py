@@ -23,6 +23,26 @@ from run_ui import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _model_metadata(monkeypatch):
+    monkeypatch.setattr(
+        run_ui,
+        "load_huggingface_model_metadata",
+        lambda _model, **_kwargs: {
+            "head_dim": 128,
+            "num_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rope_theta": 10_000.0,
+            "rope_theta_source": "legacy",
+            "rope_theta_conflict": False,
+            "max_position_embeddings": 32_768,
+            "hidden_size": 256,
+            "estimated_bf16_weight_bytes": 1024,
+        },
+    )
+
+
 def _valid_calibration_python(path) -> dict[str, object]:
     return {
         "python": str(Path(path).absolute()),
@@ -48,6 +68,10 @@ def _valid_calibration_python(path) -> dict[str, object]:
             "accelerate": "1.14.0",
             "torch_cuda": "12.6",
             "cuda_available": True,
+            "cuda_device": "Test GPU",
+            "cuda_device_index": 0,
+            "cuda_free_memory_bytes": 24 * 1024**3,
+            "cuda_total_memory_bytes": 24 * 1024**3,
             "modules": {
                 name: {"status": "ok", "version": version}
                 for name, version in {
@@ -377,6 +401,7 @@ def test_api_status_reports_ram_and_vram_separately(monkeypatch):
     assert result["total_vram_gb"] == 24
     assert result["available_vram_gb"] == 16
     assert result["combined_memory_gb"] == 88
+    assert result["gpus"][0]["index"] == 0
 
 
 def test_api_inspects_informational_addon_source(tmp_path):

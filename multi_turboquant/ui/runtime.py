@@ -359,6 +359,7 @@ class GodzillaCalibrationJobManager:
         dependency_override: bool = False,
         python_discovery: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
+        from ..calibration.godzilla_triattention import load_huggingface_model_metadata
         from ..integration.godzilla_workspace import plan_godzilla_triattention
 
         plan = plan_godzilla_triattention(
@@ -381,6 +382,9 @@ class GodzillaCalibrationJobManager:
             verify_dependencies=True,
             dependency_override=dependency_override,
             python_discovery=python_discovery,
+            model_metadata_loader=lambda model_id: load_huggingface_model_metadata(
+                model_id, trust_remote_code=False
+            ),
         )
         if not plan.ready:
             errors = "; ".join(issue.message for issue in plan.issues if issue.severity == "error")

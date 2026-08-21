@@ -220,7 +220,7 @@ mtq-godzilla-triattention calibrate \
   --input calibration.txt \
   --output model.triattention \
   --max-length 2048 \
-  --device cuda \
+  --device cuda:1 \
   --attn-implementation sdpa
 ```
 
@@ -285,6 +285,15 @@ not offered because the current Godzilla binary does not expose a real calibrati
 command. Calibration still needs the exact Hugging Face model or a compatible
 source; a GGUF alone does not contain the pre-RoPE query statistics. The official
 script uses `trust_remote_code=True`, so only calibrate model sources you trust.
+`IQ4_XS`, `Q4_K_M`, and similar labels describe the selected GGUF's weight
+encoding; they do not make the Transformers calibration load quantized. Before
+weights are downloaded, the workflow now reads the matching model config,
+prefers authoritative nested `rope_parameters.rope_theta` over conflicting
+legacy defaults, and rejects a requested sequence longer than the model's
+declared context. `--device` accepts `cuda:N`, and the UI lists each GPU and
+defaults to the one with the most free VRAM. A model-config Transformers version
+different from the managed runtime is reported for qualification rather than
+silently treated as compatible.
 The older Godzilla checkout-owned PowerShell workflow remains available as an
 explicit fallback for checkouts that provide it. `mtq-triattention-stats` writes
 a different `.pt` schema for Multi-TurboQuant's Python/vLLM path and cannot be
@@ -315,14 +324,16 @@ mtq-godzilla-triattention domvox \
 
 The conversion is deliberately opt-in and lossy: Godzilla v1 has no fields
 for domvox layer-budget scales or attention scale, so those fields are reported
-as dropped. Calibration lengths from 128 through 200,000 tokens are accepted;
-anything above 32,768 requires `--allow-long-calibration` and is processed as
-one upstream sequence, with substantially higher memory and runtime risk. The
-default remains conservative. The local UI accepts only one calibration job at
-a time and reports current CUDA free/total VRAM, but neither measure reduces or
-predicts the memory required by the one long sequence. System RAM and GPU VRAM
-are shown separately; their optional combined figure is capacity inventory,
-not interchangeable calibration memory. The UI can also create deterministic
+as dropped. The upstream guide targets enough coherent text to approach its
+32,768-token default; it does not establish 200,000 tokens as an optimal
+calibration. Multi-TurboQuant retains 200,000 only as a global input ceiling.
+The effective limit is the smaller of that ceiling and the matching model's
+declared context, and anything above 32,768 still requires
+`--allow-long-calibration`. The official path also estimates its retained Q
+tensors, BF16 weights, and transient state and fails before model download when
+that conservative floor exceeds the selected GPU's free VRAM. The estimate is
+a lower bound, not a promise that a run will fit. System RAM and GPU VRAM remain
+separate capacity domains. The UI can also create deterministic
 offline starter text inside the saved model root without overwriting unrelated
 files. Corpus files carry a schema and completion marker, and simultaneous
 requests cannot clobber one another or reuse a partial file. Use representative
@@ -924,6 +935,7 @@ contracts and do not imply runtime compatibility.
 | Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
 | Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 | Requested full guarded treatment of the reviewed add-on catalog, workload routing, simulation, LuceBox composition research, UI coverage, and SM86/SM89 qualification for the canonical Godzilla baseline | [@jawadala](https://github.com/jawadala) | Issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
+| Reported model-specific TriAttention calibration failures with Mythos-nano-heretic `IQ4_XS`, prompting source-model context validation, nested RoPE correction, memory preflight, and explicit multi-GPU device selection | [@jawadala](https://github.com/jawadala) | Community testing report (August 2026) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
@@ -935,6 +947,8 @@ correction, parity-checked Gigatoken option, and the broader issue #43 research
 catalog with explicit safety boundaries, including the exact-commit composition
 workflow prompted by issue #44 and the full guarded composition, routing,
 simulation, LuceBox, UI, and SM86/SM89 qualification follow-up in issue #46.
+Their subsequent Mythos-nano-heretic calibration report also prompted the
+model-aware context, RoPE, memory, and CUDA-device safeguards.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

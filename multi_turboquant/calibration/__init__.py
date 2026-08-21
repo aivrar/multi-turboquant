@@ -19,7 +19,11 @@ from .godzilla_triattention import (
     inspect_domvox_triattention_file,
     inspect_official_triattention_calibrator,
     inspect_official_triattention_checkout,
+    load_huggingface_model_metadata,
+    normalize_calibration_device,
     select_compatible_calibration_python,
+    estimate_official_calibration_bytes,
+    validate_model_calibration_length,
 )
 
 __all__ = [
@@ -41,5 +45,9 @@ __all__ = [
     "inspect_domvox_triattention_file",
     "inspect_official_triattention_calibrator",
     "inspect_official_triattention_checkout",
+    "load_huggingface_model_metadata",
+    "normalize_calibration_device",
     "select_compatible_calibration_python",
+    "estimate_official_calibration_bytes",
+    "validate_model_calibration_length",
 ]

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import struct
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -78,6 +80,7 @@ def _python_probe_report(
     cuda_available: bool = True,
     gigatoken: str | None = None,
     module_errors: dict[str, str] | None = None,
+    cuda_device_index: int = 0,
 ) -> str:
     versions = {
         "torch": "2.7.1",
@@ -113,6 +116,10 @@ def _python_probe_report(
             "modules": modules,
             "torch_cuda": torch_cuda,
             "cuda_available": cuda_available,
+            "cuda_device": "Test GPU",
+            "cuda_device_index": cuda_device_index,
+            "cuda_free_memory_bytes": 24 * 1024**3,
+            "cuda_total_memory_bytes": 24 * 1024**3,
         }
     )
 
@@ -216,7 +223,7 @@ def test_domvox_calibration_runs_then_converts(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         calibration,
         "load_huggingface_model_metadata",
-        lambda model: {
+        lambda model, **_kwargs: {
             "head_dim": 4,
             "num_layers": 1,
             "num_attention_heads": 2,
@@ -266,7 +273,7 @@ def test_domvox_calibration_wraps_gigatoken_with_exact_parity_guard(tmp_path: Pa
     monkeypatch.setattr(
         calibration,
         "load_huggingface_model_metadata",
-        lambda model: {
+        lambda model, **_kwargs: {
             "head_dim": 4,
             "num_layers": 1,
             "num_attention_heads": 2,
@@ -288,8 +295,10 @@ def test_domvox_calibration_wraps_gigatoken_with_exact_parity_guard(tmp_path: Pa
         runner=runner,
     )
 
-    assert Path(calls[0][1]).name == "gigatoken_runner.py"
-    assert calls[0][2:6] == ["--kind", "domvox", "--calibrator", str(script.resolve())]
+    assert Path(calls[0][1]).name == "triattention_runner.py"
+    assert calls[0][2:8] == [
+        "--kind", "domvox", "--tokenizer-backend", "gigatoken", "--calibrator", str(script.resolve())
+    ]
     assert "--attn-implementation" not in calls[0]
     assert report["tokenizer_backend"] == "gigatoken"
 
@@ -380,7 +389,7 @@ def test_official_calibration_runs_script_then_converts(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         calibration,
         "load_huggingface_model_metadata",
-        lambda model: {
+        lambda model, **_kwargs: {
             "head_dim": 4,
             "num_layers": 2,
             "num_attention_heads": 2,
@@ -453,6 +462,79 @@ def test_calibration_python_preflight_checks_dependencies_and_cuda(tmp_path: Pat
     assert report["valid"] is True
     assert report["report"]["torch_cuda"] == "12.6"
     assert "torch.cuda.mem_get_info" in commands[0][-1]
+
+
+def test_calibration_python_preflight_selects_explicit_cuda_device(tmp_path: Path):
+    python = tmp_path / "python"
+    python.write_bytes(b"python")
+    commands = []
+
+    def runner(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=_python_probe_report(cuda_device_index=1) + "\n",
+            stderr="",
+        )
+
+    report = calibration.inspect_calibration_python(
+        python, device="cuda:1", runner=runner
+    )
+
+    assert report["valid"] is True
+    assert report["report"]["cuda_device_index"] == 1
+    assert "requested_index = 1" in commands[0][-1]
+
+
+def test_model_metadata_prefers_nested_rope_and_exposes_context(monkeypatch):
+    config = SimpleNamespace(
+        num_hidden_layers=36,
+        num_attention_heads=16,
+        num_key_value_heads=2,
+        head_dim=128,
+        hidden_size=2048,
+        intermediate_size=11008,
+        vocab_size=151936,
+        tie_word_embeddings=True,
+        max_position_embeddings=131072,
+        rope_theta=10_000.0,
+        rope_parameters={"rope_theta": 1_000_000.0, "rope_type": "default"},
+    )
+    fake_transformers = SimpleNamespace(
+        __version__="test",
+        AutoConfig=SimpleNamespace(
+            from_pretrained=staticmethod(lambda *_args, **_kwargs: config)
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    metadata = calibration.load_huggingface_model_metadata("org/model")
+
+    assert metadata["rope_theta"] == 1_000_000.0
+    assert metadata["legacy_rope_theta"] == 10_000.0
+    assert metadata["rope_theta_conflict"] is True
+    assert metadata["rope_theta_source"] == "rope_parameters"
+    assert metadata["max_position_embeddings"] == 131_072
+
+
+def test_mythos_shape_rejects_200k_and_reports_memory_floor():
+    metadata = {
+        "head_dim": 128,
+        "num_layers": 36,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 2,
+        "hidden_size": 2048,
+        "estimated_bf16_weight_bytes": 6_171_394_048,
+        "max_position_embeddings": 131_072,
+    }
+
+    with pytest.raises(ValueError, match="131072"):
+        calibration.validate_model_calibration_length(200_000, metadata)
+
+    estimate = calibration.estimate_official_calibration_bytes(metadata, 200_000)
+    assert estimate["captured_q_bytes"] == 29_491_200_000
+    assert estimate["estimated_floor_bytes"] == 38_939_394_048
 
 
 @pytest.mark.parametrize(
@@ -678,7 +760,7 @@ def test_official_calibration_uses_fail_closed_gigatoken_wrapper(tmp_path: Path,
     monkeypatch.setattr(
         calibration,
         "load_huggingface_model_metadata",
-        lambda model: {
+        lambda model, **_kwargs: {
             "head_dim": 4,
             "num_layers": 2,
             "num_attention_heads": 2,
@@ -698,6 +780,13 @@ def test_official_calibration_uses_fail_closed_gigatoken_wrapper(tmp_path: Path,
         runner=runner,
     )
 
-    assert Path(calls[0][1]).name == "gigatoken_runner.py"
-    assert calls[0][2:4] == ["--calibrator", str(script.resolve())]
+    assert Path(calls[0][1]).name == "triattention_runner.py"
+    assert calls[0][2:8] == [
+        "--kind",
+        "official",
+        "--tokenizer-backend",
+        "gigatoken",
+        "--calibrator",
+        str(script.resolve()),
+    ]
     assert report["tokenizer_backend"] == "gigatoken"

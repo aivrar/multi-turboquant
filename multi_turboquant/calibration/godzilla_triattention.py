@@ -69,6 +69,122 @@ _DOMVOX_CALIBRATOR_MARKERS = (
     "TRIA",
     "triattention_common",
 )
+_CUDA_DEVICE = re.compile(r"cuda(?::(\d+))?\Z")
+
+
+def normalize_calibration_device(value: str) -> str:
+    """Return a supported CPU or explicitly indexed CUDA device."""
+    normalized = value.strip().lower()
+    if normalized == "cpu":
+        return normalized
+    match = _CUDA_DEVICE.fullmatch(normalized)
+    if match is None:
+        raise ValueError("Calibration device must be 'cpu', 'cuda', or 'cuda:N'")
+    return "cuda" if match.group(1) is None else f"cuda:{int(match.group(1))}"
+
+
+def calibration_device_index(value: str) -> int | None:
+    normalized = normalize_calibration_device(value)
+    if normalized == "cpu":
+        return None
+    return int(normalized.split(":", 1)[1]) if ":" in normalized else 0
+
+
+def _config_value(config: object, name: str) -> object | None:
+    value = getattr(config, name, None)
+    if value is not None:
+        return value
+    if isinstance(config, Mapping):
+        return config.get(name)
+    return None
+
+
+def _nested_rope_theta(config: object) -> float | None:
+    parameters = _config_value(config, "rope_parameters")
+    if parameters is None:
+        parameters = _config_value(config, "rope_scaling")
+    value = _config_value(parameters, "rope_theta") if parameters is not None else None
+    return float(value) if value is not None else None
+
+
+def estimate_official_calibration_bytes(
+    metadata: Mapping[str, object], max_length: int
+) -> dict[str, int | None]:
+    """Estimate a conservative memory floor for the upstream one-shot calibrator."""
+    layers = _require_positive_int(metadata.get("num_layers"), "metadata.num_layers")
+    heads = _require_positive_int(
+        metadata.get("num_attention_heads"), "metadata.num_attention_heads"
+    )
+    head_dim = _require_positive_int(metadata.get("head_dim"), "metadata.head_dim")
+    hidden_size = metadata.get("hidden_size")
+    captured_q = layers * heads * max_length * head_dim * 2
+    transient = (
+        max_length * _require_positive_int(hidden_size, "metadata.hidden_size") * 2 * 4
+        if hidden_size is not None
+        else None
+    )
+    weights = metadata.get("estimated_bf16_weight_bytes")
+    floor = captured_q
+    if isinstance(weights, int):
+        floor += weights
+    if isinstance(transient, int):
+        floor += transient
+    return {
+        "captured_q_bytes": captured_q,
+        "estimated_bf16_weight_bytes": weights if isinstance(weights, int) else None,
+        "estimated_transient_bytes": transient,
+        "estimated_floor_bytes": floor,
+    }
+
+
+def validate_official_calibration_memory(
+    metadata: Mapping[str, object], max_length: int, device: str
+) -> dict[str, int | str | None]:
+    """Reject a CUDA run when its known memory floor cannot fit."""
+    normalized = normalize_calibration_device(device)
+    estimate = estimate_official_calibration_bytes(metadata, max_length)
+    report: dict[str, int | str | None] = {**estimate, "device": normalized}
+    if normalized == "cpu":
+        return report
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("torch is required to inspect CUDA calibration capacity") from exc
+    index = calibration_device_index(normalized)
+    assert index is not None
+    count = torch.cuda.device_count()
+    if index >= count:
+        raise ValueError(f"CUDA device {index} was requested, but only {count} device(s) are visible")
+    free_bytes, total_bytes = torch.cuda.mem_get_info(index)
+    report.update(
+        {
+            "device_index": index,
+            "device_name": torch.cuda.get_device_name(index),
+            "free_bytes": int(free_bytes),
+            "total_bytes": int(total_bytes),
+        }
+    )
+    floor = int(estimate["estimated_floor_bytes"] or 0)
+    if floor > int(free_bytes):
+        gib = 1024**3
+        raise ValueError(
+            "Official one-shot TriAttention calibration cannot fit on "
+            f"cuda:{index} ({torch.cuda.get_device_name(index)}): the conservative memory "
+            f"floor is {floor / gib:.1f} GiB but only {int(free_bytes) / gib:.1f} GiB is free. "
+            "Choose another CUDA device or reduce the one-shot calibration length."
+        )
+    return report
+
+
+def validate_model_calibration_length(
+    max_length: int, metadata: Mapping[str, object]
+) -> None:
+    context = metadata.get("max_position_embeddings")
+    if isinstance(context, int) and max_length > context:
+        raise ValueError(
+            f"Requested calibration length {max_length} exceeds the model's declared "
+            f"context limit of {context} tokens"
+        )
 
 
 def inspect_calibration_python(
@@ -82,10 +198,14 @@ def inspect_calibration_python(
 ) -> dict[str, object]:
     """Verify one calibration interpreter without importing it into this process."""
     interpreter = lexical_absolute_path(python)
-    normalized_device = device.strip().lower()
+    issues: list[str] = []
+    try:
+        normalized_device = normalize_calibration_device(device)
+    except ValueError as exc:
+        normalized_device = device.strip().lower()
+        issues.append(str(exc))
     normalized_tokenizer = tokenizer_backend.strip().lower()
     normalized_attention = attention_implementation.strip().lower()
-    issues: list[str] = []
     required_modules = list(_CALIBRATION_REQUIRED_MODULES)
     if normalized_attention == "flash_attention_2":
         required_modules.append("flash_attn")
@@ -103,8 +223,7 @@ def inspect_calibration_python(
             "issues": issues,
         }
 
-    if normalized_device not in {"cuda", "cpu"}:
-        issues.append("Calibration device must be 'cuda' or 'cpu'")
+    if issues:
         return unavailable()
     if normalized_tokenizer not in {"transformers", "gigatoken"}:
         issues.append("Tokenizer backend must be 'transformers' or 'gigatoken'")
@@ -112,7 +231,7 @@ def inspect_calibration_python(
     if normalized_attention not in {"eager", "sdpa", "flash_attention_2"}:
         issues.append("Attention implementation must be 'eager', 'sdpa', or 'flash_attention_2'")
         return unavailable()
-    if normalized_attention == "flash_attention_2" and normalized_device != "cuda":
+    if normalized_attention == "flash_attention_2" and not normalized_device.startswith("cuda"):
         issues.append("flash_attention_2 calibration requires the CUDA device")
         return unavailable()
     if not interpreter.is_file():
@@ -147,6 +266,9 @@ def inspect_calibration_python(
         "    report['cuda_available'] = torch.cuda.is_available()\n"
         "    if report['cuda_available']:\n"
         "        try:\n"
+        f"            requested_index = {calibration_device_index(normalized_device)!r}\n"
+        "            if requested_index is not None:\n"
+        "                torch.cuda.set_device(requested_index)\n"
         "            device_index = torch.cuda.current_device()\n"
         "            free_bytes, total_bytes = torch.cuda.mem_get_info(device_index)\n"
         "            report.update({'cuda_device': torch.cuda.get_device_name(device_index), "
@@ -207,13 +329,25 @@ def inspect_calibration_python(
         )
     if (
         isinstance(report, dict)
-        and normalized_device == "cuda"
+        and normalized_device.startswith("cuda")
         and not any(issue.startswith("torch import failed:") for issue in issues)
     ):
         if not report.get("torch_cuda"):
             issues.append("Calibration Python has a CPU-only PyTorch build")
         elif report.get("cuda_available") is not True:
             issues.append("Calibration Python cannot access CUDA")
+        else:
+            expected_index = calibration_device_index(normalized_device)
+            if report.get("cuda_memory_error"):
+                issues.append(
+                    "Calibration Python could not select the requested CUDA device: "
+                    f"{report['cuda_memory_error']}"
+                )
+            elif report.get("cuda_device_index") != expected_index:
+                issues.append(
+                    f"Calibration Python selected CUDA device {report.get('cuda_device_index')}, "
+                    f"expected {expected_index}"
+                )
     return {
         "python": str(interpreter),
         "python_resolved": str(interpreter.resolve()),
@@ -955,13 +1089,16 @@ def inspect_godzilla_triattention_file(path: str | Path) -> dict[str, object]:
     }
 
 
-def load_huggingface_model_metadata(model: str) -> dict[str, object]:
+def load_huggingface_model_metadata(
+    model: str, *, trust_remote_code: bool = True
+) -> dict[str, object]:
     """Load only the matching Hugging Face config needed by the converter."""
     try:
+        import transformers
         from transformers import AutoConfig
     except ImportError as exc:
         raise RuntimeError("transformers is required to load model calibration metadata") from exc
-    config = AutoConfig.from_pretrained(model, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(model, trust_remote_code=trust_remote_code)
     text_config = getattr(config, "text_config", config)
     num_layers = _require_positive_int(
         getattr(text_config, "num_hidden_layers", None), "config.num_hidden_layers"
@@ -981,15 +1118,60 @@ def load_huggingface_model_metadata(model: str) -> dict[str, object]:
         if hidden_size % num_attention_heads:
             raise ValueError("config.hidden_size is not divisible by num_attention_heads")
         head_dim = hidden_size // num_attention_heads
-    rope_theta = getattr(text_config, "rope_theta", None)
+    head_dim = _require_positive_int(head_dim, "config.head_dim")
+    legacy_rope_theta = getattr(text_config, "rope_theta", None)
+    nested_rope_theta = _nested_rope_theta(text_config)
+    rope_theta = nested_rope_theta if nested_rope_theta is not None else legacy_rope_theta
     if rope_theta is None:
         raise ValueError("The Hugging Face config does not declare rope_theta")
+    max_positions = getattr(text_config, "max_position_embeddings", None)
+    if max_positions is not None:
+        max_positions = _require_positive_int(
+            max_positions, "config.max_position_embeddings"
+        )
+    hidden_size = _require_positive_int(
+        getattr(text_config, "hidden_size", None), "config.hidden_size"
+    )
+    intermediate_size = getattr(text_config, "intermediate_size", None)
+    vocab_size = getattr(text_config, "vocab_size", None)
+    estimated_weights = None
+    if intermediate_size is not None and vocab_size is not None:
+        intermediate_size = _require_positive_int(
+            intermediate_size, "config.intermediate_size"
+        )
+        vocab_size = _require_positive_int(vocab_size, "config.vocab_size")
+        attention_parameters = hidden_size * (
+            num_attention_heads * head_dim
+            + 2 * num_key_value_heads * head_dim
+            + hidden_size
+        )
+        mlp_parameters = 3 * hidden_size * intermediate_size
+        embedding_parameters = vocab_size * hidden_size
+        if not bool(getattr(text_config, "tie_word_embeddings", True)):
+            embedding_parameters *= 2
+        estimated_weights = 2 * (
+            num_layers * (attention_parameters + mlp_parameters) + embedding_parameters
+        )
     return {
-        "head_dim": _require_positive_int(head_dim, "config.head_dim"),
+        "head_dim": head_dim,
         "num_layers": num_layers,
         "num_attention_heads": num_attention_heads,
         "num_key_value_heads": num_key_value_heads,
         "rope_theta": float(rope_theta),
+        "rope_theta_source": "rope_parameters" if nested_rope_theta is not None else "legacy",
+        "legacy_rope_theta": (
+            float(legacy_rope_theta) if legacy_rope_theta is not None else None
+        ),
+        "rope_theta_conflict": (
+            nested_rope_theta is not None
+            and legacy_rope_theta is not None
+            and not math.isclose(float(nested_rope_theta), float(legacy_rope_theta))
+        ),
+        "max_position_embeddings": max_positions,
+        "hidden_size": hidden_size,
+        "estimated_bf16_weight_bytes": estimated_weights,
+        "declared_transformers_version": getattr(config, "transformers_version", None),
+        "runtime_transformers_version": transformers.__version__,
     }
 
 
@@ -1009,6 +1191,7 @@ def calibrate_official_triattention_for_godzilla(
 ) -> dict[str, object]:
     """Run the official calibrator, then convert and verify its output."""
     max_length = _validate_calibration_length(max_length, allow_long=allow_long_calibration)
+    normalized_device = normalize_calibration_device(device)
     script = Path(calibrator).expanduser().resolve()
     script_report = inspect_official_triattention_calibrator(script)
     if not script_report["valid"]:
@@ -1030,10 +1213,22 @@ def calibrate_official_triattention_for_godzilla(
     normalized_tokenizer = tokenizer_backend.strip().lower()
     if normalized_tokenizer not in {"transformers", "gigatoken"}:
         raise ValueError("Tokenizer backend must be 'transformers' or 'gigatoken'")
-    executable = [sys.executable, str(script)]
-    if normalized_tokenizer == "gigatoken":
-        wrapper = Path(__file__).with_name("gigatoken_runner.py")
-        executable = [sys.executable, str(wrapper), "--calibrator", str(script)]
+    model_metadata = load_huggingface_model_metadata(model, trust_remote_code=True)
+    validate_model_calibration_length(max_length, model_metadata)
+    memory_report = validate_official_calibration_memory(
+        model_metadata, max_length, normalized_device
+    )
+    wrapper = Path(__file__).with_name("triattention_runner.py")
+    executable = [
+        sys.executable,
+        str(wrapper),
+        "--kind",
+        "official",
+        "--tokenizer-backend",
+        normalized_tokenizer,
+        "--calibrator",
+        str(script),
+    ]
     command = [
         *executable,
         "--model",
@@ -1045,7 +1240,7 @@ def calibrate_official_triattention_for_godzilla(
         "--max-length",
         str(max_length),
         "--device",
-        device,
+        normalized_device,
         "--attn-implementation",
         attention_implementation,
     ]
@@ -1056,7 +1251,6 @@ def calibrate_official_triattention_for_godzilla(
         )
     if not stats_output.is_file():
         raise RuntimeError(f"Official calibrator did not create {stats_output}")
-    model_metadata = load_huggingface_model_metadata(model)
     payload = _load_official_payload(stats_output)
     metadata = payload.get("metadata")
     if not isinstance(metadata, Mapping):
@@ -1081,6 +1275,7 @@ def calibrate_official_triattention_for_godzilla(
         "command": command,
         "official_stats": str(stats_output),
         "tokenizer_backend": normalized_tokenizer,
+        "memory_estimate": memory_report,
         **report,
     }
 
@@ -1103,6 +1298,7 @@ def calibrate_domvox_triattention_for_godzilla(
 ) -> dict[str, object]:
     """Run domvox calibration and explicitly adapt TRIA v2 to Godzilla v1."""
     max_length = _validate_calibration_length(max_length, allow_long=allow_long_calibration)
+    normalized_device = normalize_calibration_device(device)
     script = Path(calibrator).expanduser().resolve()
     script_report = inspect_domvox_triattention_calibrator(script)
     if not script_report["valid"]:
@@ -1127,17 +1323,19 @@ def calibrate_domvox_triattention_for_godzilla(
     normalized_tokenizer = tokenizer_backend.strip().lower()
     if normalized_tokenizer not in {"transformers", "gigatoken"}:
         raise ValueError("Tokenizer backend must be 'transformers' or 'gigatoken'")
-    executable = [str(python_path), str(script)]
-    if normalized_tokenizer == "gigatoken":
-        wrapper = Path(__file__).with_name("gigatoken_runner.py")
-        executable = [
-            str(python_path),
-            str(wrapper),
-            "--kind",
-            "domvox",
-            "--calibrator",
-            str(script),
-        ]
+    model_metadata = load_huggingface_model_metadata(model, trust_remote_code=True)
+    validate_model_calibration_length(max_length, model_metadata)
+    wrapper = Path(__file__).with_name("triattention_runner.py")
+    executable = [
+        str(python_path),
+        str(wrapper),
+        "--kind",
+        "domvox",
+        "--tokenizer-backend",
+        normalized_tokenizer,
+        "--calibrator",
+        str(script),
+    ]
     command = [
         *executable,
         "--model",
@@ -1149,7 +1347,7 @@ def calibrate_domvox_triattention_for_godzilla(
         "--max-length",
         str(max_length),
         "--device",
-        device,
+        normalized_device,
     ]
     result = runner(command, check=False)
     if result.returncode != 0:
@@ -1158,7 +1356,6 @@ def calibrate_domvox_triattention_for_godzilla(
         )
     if not stats_output.is_file():
         raise RuntimeError(f"domvox calibrator did not create {stats_output}")
-    model_metadata = load_huggingface_model_metadata(model)
     display_name = model.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
     report = convert_domvox_triattention_stats(
         stats_output,
@@ -1231,7 +1428,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"Allow one-shot calibration above {LONG_CALIBRATION_THRESHOLD} tokens (maximum {MAX_CALIBRATION_TOKENS})",
     )
-    calibrate.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    calibrate.add_argument(
+        "--device", default="cuda", help="Calibration device: cpu, cuda, or cuda:N"
+    )
     calibrate.add_argument(
         "--attn-implementation",
         choices=("eager", "sdpa", "flash_attention_2"),
@@ -1255,7 +1454,9 @@ def build_parser() -> argparse.ArgumentParser:
     domvox.add_argument("--stats-output")
     domvox.add_argument("--max-length", type=int, default=2048)
     domvox.add_argument("--allow-long-calibration", action="store_true")
-    domvox.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    domvox.add_argument(
+        "--device", default="cuda", help="Calibration device: cpu, cuda, or cuda:N"
+    )
     domvox.add_argument("--accept-lossy", action="store_true")
     domvox.add_argument(
         "--tokenizer-backend",
