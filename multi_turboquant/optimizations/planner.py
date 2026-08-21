@@ -10,6 +10,11 @@ from itertools import combinations
 from pathlib import Path
 
 from .catalog import create_builtin_registry
+from .composition import (
+    CompositionDisposition,
+    CompositionRule,
+    build_composition_matrix,
+)
 from .core import (
     OptimizationContext,
     OptimizationIssue,
@@ -23,6 +28,7 @@ class OptimizationPlan:
     selected: tuple[str, ...]
     probes: tuple[OptimizationProbe, ...]
     issues: tuple[OptimizationIssue, ...]
+    composition_rules: tuple[CompositionRule, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -55,6 +61,7 @@ class OptimizationPlan:
                 probe.descriptor.id: probe.descriptor.quality_risk.value
                 for probe in self.probes
             },
+            "composition_rules": [rule.to_dict() for rule in self.composition_rules],
             "issues": [issue.to_dict() for issue in self.issues],
         }
 
@@ -143,12 +150,20 @@ def plan_optimizations(
                     f"{optimization_id!r} conflicts with {conflict!r}; choose one.",
                 ))
 
+    composition_rules: list[CompositionRule] = []
+    matrix = None
+    if len(descriptors) >= 2:
+        matrix = build_composition_matrix(
+            plugin.descriptor for plugin in registry.list()
+        )
+
     for left_id, right_id in combinations(descriptors, 2):
         left = descriptors[left_id]
         right = descriptors[right_id]
+        rule = matrix.rule(left_id, right_id) if matrix is not None else None
+        if rule is not None:
+            composition_rules.append(rule)
         shared_domains = sorted(set(left.composition_domains) & set(right.composition_domains))
-        if not shared_domains:
-            continue
         explicitly_allowed = (
             right_id in left.allows_composition_with
             and left_id in right.allows_composition_with
@@ -156,13 +171,22 @@ def plan_optimizations(
         pair = tuple(sorted((left_id, right_id)))
         if explicitly_allowed or pair in reported_conflicts:
             continue
+        if rule is None or rule.disposition == CompositionDisposition.DIRECT:
+            continue
         reported_conflicts.add(pair)
-        issues.append(OptimizationIssue(
-            "error",
-            "unvalidated_composition",
-            left_id,
-            f"{left_id!r} and {right_id!r} both modify {', '.join(shared_domains)}; "
-            "no reviewed composition profile allows them together.",
-        ))
+        if rule.disposition == CompositionDisposition.ROUTED:
+            code = "separate_runtime_required"
+        elif rule.disposition == CompositionDisposition.CONDITIONAL:
+            code = "conditional_composition"
+        elif shared_domains:
+            code = "unvalidated_composition"
+        else:
+            code = "prohibited_composition"
+        issues.append(OptimizationIssue("error", code, left_id, rule.reason))
 
-    return OptimizationPlan(normalized, tuple(probes), tuple(issues))
+    return OptimizationPlan(
+        normalized,
+        tuple(probes),
+        tuple(issues),
+        tuple(composition_rules),
+    )

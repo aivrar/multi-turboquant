@@ -207,6 +207,23 @@ def _resolve_cuda_compiler(value: str | Path | None) -> Path | None:
     return Path(found).resolve() if found else None
 
 
+def _cuda_compiler_configure_args(
+    cuda_compiler: Path,
+    generator: str | None,
+    *,
+    system_name: str | None = None,
+) -> tuple[str, ...]:
+    """Select CUDA without allowing Visual Studio to ignore the requested toolkit."""
+    effective_system = (system_name or os.name).lower()
+    effective_generator = (generator or os.environ.get("CMAKE_GENERATOR", "")).lower()
+    if effective_system == "nt" and (
+        not effective_generator or effective_generator.startswith("visual studio")
+    ):
+        toolkit_root = cuda_compiler.parent.parent
+        return "-T", f"cuda={toolkit_root}"
+    return (f"-DCMAKE_CUDA_COMPILER={cuda_compiler}",)
+
+
 def _configure_command(
     target: Path,
     build_dir: Path,
@@ -234,7 +251,7 @@ def _configure_command(
         )
     )
     if cuda_compiler is not None:
-        command.append(f"-DCMAKE_CUDA_COMPILER={cuda_compiler}")
+        command.extend(_cuda_compiler_configure_args(cuda_compiler, generator))
     if fixture_dir is not None:
         command.append(f"-DLLAMA_GIGATOKEN_FIXTURE_DIR={fixture_dir}")
     return tuple(command)

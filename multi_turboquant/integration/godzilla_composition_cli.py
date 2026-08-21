@@ -22,6 +22,13 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-jobs", type=int, default=2)
     parser.add_argument("--generator", help="Optional CMake generator")
     parser.add_argument("--cuda-toolkit", type=Path, help="CUDA toolkit root or nvcc path")
+    parser.add_argument(
+        "--cuda-architectures",
+        nargs="+",
+        metavar="SM",
+        default=(),
+        help="Qualified CUDA targets: 86 and/or 89 (accepts sm_86 spelling)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         max_jobs=args.max_jobs,
         generator=args.generator,
         cuda_toolkit=args.cuda_toolkit,
+        cuda_architectures=args.cuda_architectures,
     )
     if args.action == "plan":
         print(json.dumps(plan.to_dict(), indent=2))
@@ -82,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_jobs=args.max_jobs,
                 generator=args.generator,
                 cuda_toolkit=args.cuda_toolkit,
+                cuda_architectures=args.cuda_architectures,
             )
             result = build_godzilla_composition(build_plan, confirmed=args.yes)
     except (OSError, RuntimeError, ValueError) as exc:

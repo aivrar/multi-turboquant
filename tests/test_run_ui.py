@@ -434,6 +434,154 @@ def test_issue_43_profiles_and_capabilities_are_exposed_in_ui():
         assert f"capabilityTag('{capability}'" in run_ui.UI_HTML
 
 
+def test_composition_profiles_and_read_only_workbench_are_exposed_in_ui():
+    profiles = run_ui.api_composition_profiles()
+    ids = {profile["id"] for profile in profiles}
+    assert {"lucebox_guarded", "lucebox_qwen36_composed", "godzilla_guarded"} <= ids
+    assert 'id="tab-compose"' in run_ui.UI_HTML
+    assert 'id="view-compose"' in run_ui.UI_HTML
+    assert "/api/composition/plan" in run_ui.UI_HTML
+    assert "/api/composition/route" in run_ui.UI_HTML
+    assert "/api/composition/simulate-capacity" in run_ui.UI_HTML
+    assert "/api/composition/godzilla-build-plan" in run_ui.UI_HTML
+    assert "SM86 (Ampere)" in run_ui.UI_HTML
+    assert "SM89 (Ada)" in run_ui.UI_HTML
+    assert "Planning is read-only" in run_ui.UI_HTML
+    assert "analytical-simulation" in run_ui.UI_HTML
+
+
+def test_composition_profile_api_fails_closed_then_accepts_required_artifacts(monkeypatch):
+    monkeypatch.setattr(
+        run_ui,
+        "detect_platform",
+        lambda: PlatformInfo(os="linux", arch="x86_64", gpus=[]),
+    )
+    missing = run_ui.api_composition_plan({
+        "profile": "lucebox_guarded",
+        "os": "linux",
+        "compute": "cuda",
+        "artifacts": [],
+        "active_features": [],
+    })
+    assert not missing["ready"]
+    assert {issue["code"] for issue in missing["issues"]} >= {"missing_artifact"}
+
+    ready = run_ui.api_composition_plan({
+        "profile": "lucebox_guarded",
+        "os": "linux",
+        "compute": "cuda",
+        "artifacts": ["lucebox_source", "gguf_model"],
+        "active_features": [],
+    })
+    assert ready["ready"]
+    assert "commands" not in ready
+
+
+def test_composition_route_api_selects_lucebox_only_with_every_gate(monkeypatch):
+    monkeypatch.setattr(
+        run_ui,
+        "detect_platform",
+        lambda: PlatformInfo(os="linux", arch="x86_64", gpus=[]),
+    )
+    request = {
+        "task": "long_context",
+        "prompt_tokens": 32768,
+        "expected_output_tokens": 1024,
+        "os": "linux",
+        "compute": "cuda",
+        "profiles": ["lucebox_qwen36_composed"],
+        "artifacts": [
+            "lucebox_source", "gguf_model", "lucebox_drafter",
+            "lucebox_prefill_drafter",
+        ],
+        "model_traits": ["qwen36_27b", "lucebox_supported_gpu"],
+        "active_features": [],
+    }
+    routed = run_ui.api_composition_route(request)
+    assert routed["selected_profile"] == "lucebox_qwen36_composed"
+
+    request["exact_output_required"] = True
+    exact = run_ui.api_composition_route(request)
+    assert exact["selected_profile"] is None
+    assert any(
+        issue["code"] == "exact_output_required"
+        for issue in exact["candidates"][0]["issues"]
+    )
+
+
+def test_capacity_simulation_api_is_provenance_labelled_and_performance_free():
+    result = run_ui.api_capacity_simulation({
+        "layers": 32,
+        "kv_heads": 8,
+        "head_dim": 128,
+        "context_tokens": 32768,
+        "available_memory_gib": 24,
+        "model_weights_gib": 14,
+        "runtime_overhead_gib": 2,
+        "k_bits": 4,
+        "v_bits": 4,
+        "retained_fraction": 0.5,
+        "allocator_efficiency": 0.9,
+    })
+    assert result["provenance"] == "analytical-simulation"
+    assert result["candidate_max_concurrency"] > result["baseline_max_concurrency"]
+    assert not ({"latency", "throughput", "speedup"} & result.keys())
+
+
+def test_composition_apis_reject_non_list_contract_values():
+    with pytest.raises(ValueError, match="JSON list"):
+        run_ui.api_composition_plan({
+            "profile": "vllm_lmcache",
+            "os": "linux",
+            "compute": "cuda",
+            "artifacts": "not-a-list",
+            "active_features": [],
+        })
+    with pytest.raises(ValueError, match="JSON boolean"):
+        run_ui.api_composition_route({
+            "task": "chat",
+            "prompt_tokens": 1,
+            "repeated_prefix": "false",
+            "artifacts": [],
+            "model_traits": [],
+            "active_features": [],
+        })
+    with pytest.raises(ValueError, match="JSON integer"):
+        run_ui.api_capacity_simulation({
+            "layers": True,
+            "kv_heads": 8,
+            "head_dim": 128,
+            "context_tokens": 1024,
+        })
+    with pytest.raises(ValueError, match="JSON string"):
+        run_ui.api_composition_plan({"profile": "vllm_lmcache", "os": 123})
+    with pytest.raises(ValueError, match="non-empty JSON string"):
+        run_ui.api_godzilla_composition_build_plan({"target": ""})
+
+
+def test_godzilla_composition_build_api_is_read_only_and_forwards_architectures(monkeypatch):
+    captured = {}
+
+    def fake_plan(target, **kwargs):
+        captured["target"] = target
+        captured.update(kwargs)
+        return SimpleNamespace(to_dict=lambda: {"ready": True, "commands": [["cmake"]]})
+
+    monkeypatch.setattr(run_ui, "plan_godzilla_composition", fake_plan)
+    result = run_ui.api_godzilla_composition_build_plan({
+        "target": "/opt/godzilla-composed",
+        "action": "build",
+        "backend": "cuda",
+        "cuda_toolkit": "/usr/local/cuda-12.8",
+        "cuda_architectures": ["86", "89"],
+        "max_jobs": 4,
+    })
+    assert result["ready"]
+    assert captured["cuda_architectures"] == ["86", "89"]
+    assert captured["action"] == "build"
+    assert captured["max_jobs"] == 4
+
+
 def test_tokenizer_source_actions_keep_supported_calibration_modes():
     assert (
         "function useGigatokenPython(encodedPath) {\n"

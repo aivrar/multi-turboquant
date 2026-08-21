@@ -85,6 +85,25 @@ def test_unreviewed_pipeline_composition_fails_closed():
     assert "attention_kernel" in issue.message
 
 
+def test_conditional_and_routed_compositions_fail_closed_with_actionable_rules():
+    conditional = plan_optimizations(
+        ["lmcache", "proxima"],
+        context(installed_modules=frozenset({"lmcache", "proxima_vllm"})),
+    )
+    issue = next(item for item in conditional.issues if item.code == "conditional_composition")
+    assert "serializer" in issue.message
+    assert conditional.to_dict()["composition_rules"][0]["disposition"] == "conditional"
+
+    routed = plan_optimizations(
+        ["lmcache", "jetspec"],
+        context(
+            engine="jetspec",
+            installed_modules=frozenset({"lmcache", "jetspec"}),
+        ),
+    )
+    assert any(item.code == "separate_runtime_required" for item in routed.issues)
+
+
 def test_mutually_allowlisted_resonance_jetlong_composition_is_not_rejected_as_overlap():
     plan = plan_optimizations(
         ["jetlong", "resonance_jetlong"],

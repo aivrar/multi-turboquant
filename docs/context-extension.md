@@ -159,6 +159,14 @@ quality validation. DFlash/DDTree remains available. TriAttention plus KVarN
 is still rejected, and SpecLA is not included because it is a different
 linear-attention runtime.
 
+Issue #46 extends the planning boundary across the complete reviewed add-on
+catalog. `mtq-compose` provides guarded profiles and deterministic routing, but
+does not collapse separate engines into Godzilla. In particular, LuceBox's
+model-specific DFlash/DDTree, PFlash, and KVFlash route remains a separately
+pinned LuceBox runtime. For the Godzilla overlay, the native build planner can
+explicitly target SM86 and SM89 and verifies that CMake used both the requested
+CUDA toolkit and architecture list.
+
 ## Sources
 
 - llama.cpp server documentation:

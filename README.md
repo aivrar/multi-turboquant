@@ -35,6 +35,10 @@ SageAttention, and the official TriAttention calibrator are managed through
 `mtq-env`. Each receives its own reviewed,
 locked `uv` project and virtual environment, so experimenting with an add-on
 does not replace packages in the core Multi-TurboQuant environment.
+`mtq-compose` adds a side-effect-free composition layer over the full reviewed
+catalog: a complete pairwise compatibility matrix, guarded execution profiles,
+deterministic workload routing with baseline fallback, benchmark provenance,
+and analytical KV-capacity estimates. It never installs or launches an add-on.
 The separate `mtq-godzilla-gigatoken` workflow can also prepare, build, and
 qualify a revision-pinned Godzilla llama.cpp runtime with native Gigatoken
 tokenization without modifying an existing checkout.
@@ -405,8 +409,14 @@ mtq-godzilla-compose all /opt/godzilla-composed \
 
 # Separate CUDA build with the matching toolkit
 mtq-godzilla-compose build /opt/godzilla-composed \
-  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 \
+  --cuda-architectures 86 89 --max-jobs 2 --yes
 ```
+
+SM86 and SM89 are the explicitly reviewed CUDA targets. Verification checks
+that CMake retained both the selected architecture list and requested toolkit;
+the Windows Visual Studio path uses CMake's CUDA toolset selection so another
+installed toolkit is not silently substituted.
 
 Both additions are disabled by default. Start with `--pflash` to permit the
 feature, then set `"pflash": true` only on a plain completion request that has
@@ -538,6 +548,33 @@ The Godzilla plan models the exact boundaries: Gigatoken calibration requires
 TriAttention, KVarN conflicts with TriAttention in the reviewed source profiles,
 and CUDA weight sharing is limited to Linux/CUDA/x86-64 with a validated source
 build. Add-ons for different engines are not forced into one process.
+
+### Guarded composition and workload routing
+
+The composition layer covers every reviewed optimization in the catalog and
+classifies every pair as compatible, conditional, conflicting, or separate
+runtime. Thirteen executable profiles describe combinations that have a
+concrete activation path, including FastDMS/FlashAttention, LMCache,
+MInference, TriAttention, Proxima, JetSpec, Jet-Long, FlashAttention or
+SageAttention, two LuceBox routes, and two Godzilla routes. Missing model
+artifacts, unsupported hosts, conflicting active features, and exact-output
+requirements fail closed. When no candidate qualifies, routing explicitly
+returns the unmodified baseline instead of guessing.
+
+```bash
+mtq-compose profiles
+mtq-compose plan vllm_lmcache
+mtq-compose route --task rag --prompt-tokens 65536 --repeated-prefix
+mtq-compose simulate-capacity --layers 32 --kv-heads 8 --head-dim 128 \
+  --context-tokens 131072 --available-memory-gib 24 --k-bits 4 --v-bits 4
+```
+
+Capacity output is deterministic byte accounting, not a speed, latency, or
+quality prediction. Benchmark records similarly distinguish measured,
+upstream-reported, and simulated evidence and reject incomparable baselines.
+LuceBox remains a separate pinned runtime: its reviewed general profile and
+documented Qwen 3.6 27B DFlash/DDTree + PFlash + KVFlash route do not transplant
+model-specific kernels or headline results into Godzilla.
 
 The LMCache integration generates its documented vLLM connector configuration
 and optional multiprocess server command without launching processes or changing
@@ -757,7 +794,7 @@ IsoQuant and PlanarQuant need **no calibration** — just works.
 python run_ui.py
 ```
 
-The browser UI now has two focused views:
+The browser UI now has three focused views:
 
 - **Quick Run** keeps hardware detection, cache-method benchmarking, capacity
   planning, presets, and llama.cpp command generation together. It can discover
@@ -784,6 +821,10 @@ The browser UI now has two focused views:
   by discovery. Prepared exact-commit composition trees are recognized by their
   manifest and routed through the hash-bounded inspector. The pinned Godzilla + Gigatoken source preparation
   and build remains an explicit `mtq-godzilla-gigatoken` CLI operation.
+- **Composition Lab** exposes the same read-only profile planning, deterministic
+  workload routing, and analytical capacity simulator as `mtq-compose`. It also
+  previews the exact pinned Godzilla build commands and qualified CUDA targets
+  (SM86 and SM89) without patching, compiling, or launching from the browser.
 
 Settings and form defaults persist in
 `~/.multi-turboquant/ui-settings.json`. The server remains bound to localhost,
@@ -802,12 +843,12 @@ multi_turboquant/
   hardware.py            GPU and host-memory detection (NVIDIA, AMD, Metal)
   compatibility.py       Method/platform compatibility checks
   tokenizer_backends.py  Bounded Gigatoken interpreter discovery
-  optimizations/         Optional manifests, conflict planner, isolated env manager
+  optimizations/         Catalog, pairwise matrix, guarded profiles/router, isolated envs
   methods/               5 method families, all with encode/decode
   kernels/triton/        Attention backend, vectorized encode, dispatch
   calibration/           Weight-norm analysis, TriAttention adapters, parity wrapper
   integration/           llama.cpp flags, pinned Godzilla builders, weight sharing, vLLM patch
-  benchmark/             Head-to-head comparison, perplexity, VRAM profiling
+  benchmark/             Comparisons, provenance contracts, capacity simulation
 ```
 
 ## Documentation
@@ -847,6 +888,7 @@ missing:
 | Gigatoken llama.cpp runtime integration lineage | [chynggi/gigatoken-llama.cpp](https://github.com/chynggi/gigatoken-llama.cpp) |
 | Issue #43 optimization research and source contracts | [JetSpec](https://github.com/hao-ai-lab/JetSpec), [Lucebox](https://github.com/Luce-Org/lucebox), [Proxima](https://github.com/Tenosra/Proxima), [Jet-Long](https://github.com/jet-ai-projects/jet-long), [ChunkLlama](https://github.com/HKUNLP/ChunkLlama), [RaBitQCache](https://github.com/Sakuraaa0/RaBitQCache), [ScoPE](https://github.com/oncemoe/ScoPE), [DuoAttention](https://github.com/mit-han-lab/duo-attention), [IceCache](https://github.com/yuzhenmao/IceCache), and [PFlash/KVFlash llama.cpp](https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash) |
 | Exact Godzilla PFlash/KVFlash composition request | [Godzilla llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp), [PFlash/KVFlash fork](https://github.com/HawgAuto/llama.cpp-dflash-pflash-kvflash), and issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
+| Full guarded composition, routing, simulation, LuceBox review, and SM86/SM89 Godzilla qualification | [Godzilla llama.cpp](https://github.com/atomicmilkshake/godzilla-llama.cpp), [LuceBox](https://github.com/Luce-Org/lucebox), and issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
 
 We reimplemented the Python-native algorithms in Python. Godzilla/KVarN support
 is a command-generation, source-inspection, and preparation-workflow
@@ -881,6 +923,7 @@ contracts and do not imply runtime compatibility.
 | Reported a domvox calibration launch under an interpreter without Torch, prompting compatible-environment discovery, fail-closed final preflight, exact-environment conversion, and detailed redacted failure bundles | [@jawadala](https://github.com/jawadala) | Issue [#42](https://github.com/aivrar/multi-turboquant/issues/42) |
 | Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
 | Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
+| Requested full guarded treatment of the reviewed add-on catalog, workload routing, simulation, LuceBox composition research, UI coverage, and SM86/SM89 qualification for the canonical Godzilla baseline | [@jawadala](https://github.com/jawadala) | Issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
@@ -890,7 +933,8 @@ isolated dependency system, practical UI workflow, and the official and
 domvox TriAttention calibration paths, including the interpreter-path
 correction, parity-checked Gigatoken option, and the broader issue #43 research
 catalog with explicit safety boundaries, including the exact-commit composition
-workflow prompted by issue #44.
+workflow prompted by issue #44 and the full guarded composition, routing,
+simulation, LuceBox, UI, and SM86/SM89 qualification follow-up in issue #46.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

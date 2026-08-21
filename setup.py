@@ -58,6 +58,7 @@ setup(
             "mtq-weight-share=multi_turboquant.integration.weight_share_cli:main",
             "mtq-benchmark=multi_turboquant.benchmark.run_benchmark:main",
             "mtq-optimizations=multi_turboquant.optimizations.cli:main",
+            "mtq-compose=multi_turboquant.optimizations.composition_cli:main",
             "mtq-env=multi_turboquant.optimizations.env_cli:main",
         ],
     },

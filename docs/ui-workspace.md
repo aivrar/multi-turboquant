@@ -187,6 +187,13 @@ Setup & Add-ons holds configuration that is changed less often:
 - an optional FlashAttention source checkout;
 - environment profile status and explicit creation controls.
 
+Composition Lab is the read-only decision workspace. It lists the guarded
+execution profiles, validates one profile against host/artifact/feature inputs,
+routes a workload with an explicit baseline fallback, and performs analytical
+KV byte-capacity simulation. Its Godzilla card previews a pinned
+`09214b160` CUDA build plan for the reviewed SM86/SM89 targets. These actions do
+not install packages, alter source trees, compile binaries, or start runtimes.
+
 The scanners are bounded and inspect only configured roots. Add-on scanning
 runs at UI startup and shortly after its root list changes, while the manual
 button remains available. Results report the resolved roots, scan depth,
@@ -248,8 +255,10 @@ identifies the official/domvox mismatch and names the appropriate mode.
 The UI does not configure or compile a Godzilla CMake project automatically.
 Use Godzilla's documented process for ordinary checkouts, or the explicit
 `mtq-godzilla-gigatoken` workflow for its pinned tokenizer runtime, or
-`mtq-godzilla-compose` for the bounded PFlash/KVFlash profile. These workflows
-remain CLI-only and do not patch a selected UI source folder. TriAttention remains experimental and
+`mtq-godzilla-compose` for the bounded PFlash/KVFlash profile. Composition Lab
+can render the latter's exact build plan, including SM86/SM89 selection, but
+execution remains CLI-only and does not patch a selected UI source folder.
+TriAttention remains experimental and
 model-specific. Existing `.triattention` output is reused only after its v1
 header, dimensions, sampled indices, numeric arrays, and exact file length pass
 validation.

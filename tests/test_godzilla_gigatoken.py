@@ -91,6 +91,35 @@ def test_build_plan_validates_optional_fixture_directory(tmp_path, monkeypatch):
     assert any(issue.code == "invalid_fixture_dir" for issue in plan.issues)
 
 
+def test_cuda_compiler_selection_pins_visual_studio_toolkit(tmp_path):
+    compiler = tmp_path / "cuda" / "bin" / "nvcc.exe"
+
+    assert runtime._cuda_compiler_configure_args(
+        compiler, None, system_name="nt"
+    ) == ("-T", f"cuda={tmp_path / 'cuda'}")
+    assert runtime._cuda_compiler_configure_args(
+        compiler, "Ninja", system_name="nt"
+    ) == (f"-DCMAKE_CUDA_COMPILER={compiler}",)
+
+
+def test_gigatoken_configure_uses_pinned_visual_studio_toolkit(tmp_path, monkeypatch):
+    compiler = tmp_path / "cuda" / "bin" / "nvcc.exe"
+    monkeypatch.setattr(runtime.os, "name", "nt")
+
+    command = runtime._configure_command(
+        tmp_path / "source",
+        tmp_path / "build",
+        backend="cuda",
+        with_curl=False,
+        generator=None,
+        cuda_compiler=compiler,
+        fixture_dir=None,
+    )
+
+    assert command[command.index("-T") + 1] == f"cuda={tmp_path / 'cuda'}"
+    assert not any(item.startswith("-DCMAKE_CUDA_COMPILER=") for item in command)
+
+
 def test_review_diff_selection_is_path_and_hash_bounded(monkeypatch):
     keep = b"diff --git a/keep b/keep\n--- a/keep\n+++ b/keep\n@@ -1 +1 @@\n-a\n+b\n"
     ignore = b"diff --git a/ignore b/ignore\n--- a/ignore\n+++ b/ignore\n@@ -1 +1 @@\n-x\n+y\n"

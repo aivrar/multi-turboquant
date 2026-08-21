@@ -26,6 +26,7 @@ from .godzilla_gigatoken import (
     GODZILLA_URL,
     RuntimeIssue,
     _checkout_godzilla_source,
+    _cuda_compiler_configure_args,
     _git_revision,
     _replace_once,
     _resolve_cuda_compiler,
@@ -37,6 +38,7 @@ from .godzilla_gigatoken import (
 COMPOSITION_SCHEMA = 1
 COMPOSITION_PROFILE = "godzilla-09214b160-pflash-kvflash-v1"
 MANIFEST_NAME = ".mtq-godzilla-composition.json"
+QUALIFIED_CUDA_ARCHITECTURES = ("86", "89")
 _RUNTIME_FILES = (
     "common/common.h",
     "common/arg.cpp",
@@ -105,6 +107,7 @@ class GodzillaCompositionPlan:
     cuda_compiler: Path | None
     commands: tuple[tuple[str, ...], ...]
     issues: tuple[RuntimeIssue, ...]
+    cuda_architectures: tuple[str, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -119,6 +122,7 @@ class GodzillaCompositionPlan:
             "max_jobs": self.max_jobs,
             "generator": self.generator,
             "cuda_compiler": str(self.cuda_compiler) if self.cuda_compiler else None,
+            "cuda_architectures": list(self.cuda_architectures),
             "commands": [list(command) for command in self.commands],
             "issues": [issue.to_dict() for issue in self.issues],
             "ready": self.ready,
@@ -141,13 +145,24 @@ def plan_godzilla_composition(
     max_jobs: int = 2,
     generator: str | None = None,
     cuda_toolkit: str | Path | None = None,
+    cuda_architectures: Sequence[str | int] = (),
 ) -> GodzillaCompositionPlan:
     target_path = Path(target).expanduser().resolve()
     normalized_action = action.strip().lower()
     normalized_backend = backend.strip().lower()
-    build_dir = target_path / f"build-mtq-composition-{normalized_backend}"
+    normalized_architectures, architecture_issues = _normalize_cuda_architectures(
+        cuda_architectures,
+        backend=normalized_backend,
+    )
+    architecture_suffix = (
+        "-" + "-".join(f"sm{item}" for item in normalized_architectures)
+        if normalized_architectures
+        else ""
+    )
+    build_dir = target_path / f"build-mtq-composition-{normalized_backend}{architecture_suffix}"
     cuda_compiler = _resolve_cuda_compiler(cuda_toolkit) if normalized_backend == "cuda" else None
     issues = list(validate_godzilla_composition(GodzillaComposition()))
+    issues.extend(architecture_issues)
     commands: list[tuple[str, ...]] = []
 
     if normalized_action not in {"prepare", "build", "all", "verify"}:
@@ -178,24 +193,56 @@ def plan_godzilla_composition(
     if normalized_action in {"build", "all"}:
         if shutil.which("cmake") is None:
             issues.append(RuntimeIssue("error", "cmake_missing", "CMake is required."))
-        configure = [
-            "cmake", "-S", str(target_path), "-B", str(build_dir),
+        configure = ["cmake", "-S", str(target_path), "-B", str(build_dir)]
+        if generator:
+            configure.extend(("-G", generator))
+        if cuda_compiler is not None:
+            configure.extend(_cuda_compiler_configure_args(cuda_compiler, generator))
+        configure.extend((
             "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TESTS=OFF", "-DLLAMA_BUILD_UI=OFF",
             "-DLLAMA_CURL=OFF", f"-DGGML_CUDA={'ON' if normalized_backend == 'cuda' else 'OFF'}",
             "-DGGML_NATIVE=OFF", "-DGGML_CCACHE=OFF",
-        ]
-        if generator:
-            configure[5:5] = ["-G", generator]
-        if cuda_compiler is not None:
-            configure.append(f"-DCMAKE_CUDA_COMPILER={cuda_compiler}")
+        ))
+        if normalized_architectures:
+            configure.append(
+                f"-DCMAKE_CUDA_ARCHITECTURES={';'.join(normalized_architectures)}"
+            )
         commands.extend((tuple(configure), (
             "cmake", "--build", str(build_dir), "--config", "Release",
             "--target", "llama-server", "-j", str(max_jobs),
         )))
     return GodzillaCompositionPlan(
         normalized_action, target_path, build_dir, normalized_backend, max_jobs, generator, cuda_compiler,
-        tuple(commands), tuple(issues),
+        tuple(commands), tuple(issues), normalized_architectures,
     )
+
+
+def _normalize_cuda_architectures(
+    values: Sequence[str | int],
+    *,
+    backend: str,
+) -> tuple[tuple[str, ...], tuple[RuntimeIssue, ...]]:
+    normalized = tuple(str(value).strip().lower().removeprefix("sm_") for value in values)
+    issues: list[RuntimeIssue] = []
+    if normalized and backend != "cuda":
+        issues.append(RuntimeIssue(
+            "error",
+            "cuda_architecture_without_cuda",
+            "CUDA architectures can be selected only with the CUDA backend.",
+        ))
+    if len(set(normalized)) != len(normalized):
+        issues.append(RuntimeIssue(
+            "error", "duplicate_cuda_architecture", "CUDA architectures must be unique."
+        ))
+    unsupported = sorted(set(normalized) - set(QUALIFIED_CUDA_ARCHITECTURES))
+    if unsupported:
+        issues.append(RuntimeIssue(
+            "error",
+            "unqualified_cuda_architecture",
+            "The pinned composition currently qualifies only SM86 and SM89; "
+            f"unqualified targets: {', '.join(unsupported)}.",
+        ))
+    return normalized, tuple(issues)
 
 
 def _apply_overlay(root: Path) -> None:
@@ -507,7 +554,15 @@ def inspect_godzilla_composition(target: str | Path) -> dict[str, object]:
         changed, untracked = source_state
         if changed != set(_RUNTIME_FILES):
             issues.append("tracked source changes do not match the reviewed overlay allowlist")
-        unexpected = untracked - {MANIFEST_NAME}
+        unexpected = set()
+        for name in untracked:
+            normalized = name.replace("\\", "/")
+            top_level, separator, _remainder = normalized.partition("/")
+            owned_build_output = (
+                bool(separator) and top_level.startswith("build-mtq-composition-")
+            )
+            if name != MANIFEST_NAME and not owned_build_output:
+                unexpected.add(name)
         if unexpected:
             issues.append("unexpected untracked source files: " + ", ".join(sorted(unexpected)))
     return {"valid": not issues, "target": str(root), "profile": COMPOSITION_PROFILE, "issues": issues}
@@ -541,10 +596,52 @@ def verify_godzilla_composition(plan: GodzillaCompositionPlan) -> dict[str, obje
         for flag in ("--pflash", "--kvflash-pages", "--spec-branch-budget", "--triattention-stats"):
             if flag not in help_text:
                 issues.append(f"built server help is missing {flag}")
+    if plan.cuda_architectures:
+        cache_path = plan.build_dir / "CMakeCache.txt"
+        configured = _read_cmake_cache_value(cache_path, "CMAKE_CUDA_ARCHITECTURES")
+        expected = ";".join(plan.cuda_architectures)
+        if configured != expected:
+            issues.append(
+                f"CMake CUDA architectures are {configured!r}, expected {expected!r}"
+            )
+    if plan.cuda_compiler is not None:
+        cache_path = plan.build_dir / "CMakeCache.txt"
+        configured_compiler = _read_cmake_cache_value(cache_path, "CMAKE_CUDA_COMPILER")
+        # Visual Studio's CUDA toolset integration does not populate
+        # CMAKE_CUDA_COMPILER.  FindCUDAToolkit records the nvcc executable
+        # actually selected by the generated project instead.
+        if configured_compiler is None:
+            configured_compiler = _read_cmake_cache_value(
+                cache_path, "CUDAToolkit_NVCC_EXECUTABLE"
+            )
+        expected_compiler = os.path.normcase(str(plan.cuda_compiler.resolve()))
+        actual_compiler = (
+            os.path.normcase(str(Path(configured_compiler).resolve()))
+            if configured_compiler
+            else None
+        )
+        if actual_compiler != expected_compiler:
+            issues.append(
+                "CMake CUDA compiler/toolkit is "
+                f"{configured_compiler!r}, expected {str(plan.cuda_compiler)!r}"
+            )
     return {
         "valid": not issues,
         "target": str(plan.target),
         "build_dir": str(plan.build_dir),
         "server": str(server) if server else None,
         "issues": issues,
+        "cuda_architectures": list(plan.cuda_architectures),
     }
+
+
+def _read_cmake_cache_value(path: Path, key: str) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    prefix = f"{key}:"
+    for line in lines:
+        if line.startswith(prefix) and "=" in line:
+            return line.split("=", 1)[1].strip()
+    return None

@@ -931,7 +931,8 @@ mtq-godzilla-compose plan /opt/godzilla-composed
 mtq-godzilla-compose all /opt/godzilla-composed \
   --backend cpu --max-jobs 2 --yes
 mtq-godzilla-compose build /opt/godzilla-composed \
-  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 --max-jobs 2 --yes
+  --backend cuda --cuda-toolkit /usr/local/cuda-12.6 \
+  --cuda-architectures 86 89 --max-jobs 2 --yes
 mtq-godzilla-compose verify /opt/godzilla-composed --backend cpu
 ```
 
@@ -955,6 +956,34 @@ KVarN or TriAttention, and the whole-slot residency tier can retain either
 representation. TriAttention plus KVarN remains rejected by Godzilla itself.
 SpecLA is excluded because its linear-attention runtime is not a generic
 Godzilla add-on.
+
+### Guarded composition lab
+
+Use `mtq-compose` to inspect the complete reviewed compatibility matrix through
+guarded execution profiles. `profiles` lists the available routes, `plan`
+checks one route without launching it, `route` deterministically chooses an
+eligible profile or the baseline, and `simulate-capacity` performs analytical
+KV byte accounting. The browser's **Composition Lab** exposes the same planning,
+routing, simulation, and read-only Godzilla build-plan APIs.
+
+Profiles include reviewed paths for FastDMS/FlashAttention, LMCache,
+MInference, TriAttention, Proxima, JetSpec, Jet-Long, FlashAttention,
+SageAttention, LuceBox, and Godzilla. They do not imply that all projects can
+share one process. Artifact, platform, model-trait, quality, and active-feature
+checks fail closed; ineligible routing falls back to the unmodified runtime.
+
+LuceBox stays a separate native service. Its general guarded profile and its
+documented Qwen 3.6 27B DFlash/DDTree + PFlash + KVFlash route require pinned
+source, matching model/drafter artifacts, and supported hardware. The latter is
+lossy and must be compared with direct inference for the selected workload.
+
+For canonical Godzilla commit
+`09214b160b402011359f0ef9d5fa8f8be1112e85`, pass `--cuda-architectures 86 89`
+to the composition build command. Verification checks the selected CUDA
+compiler/toolkit and architecture cache as well as the hash-bounded overlay and
+`llama-server` flags. On Windows Visual Studio generators, toolkit selection is
+pinned through CMake's CUDA toolset option so another installed CUDA version is
+not silently substituted.
 
 ### CUDA weight-share launch wrapper
 
@@ -1565,6 +1594,13 @@ multi_turboquant/
   _paths.py                Symlink-preserving executable path helpers
   tokenizer_backends.py    Bounded Gigatoken interpreter discovery
 
+  optimizations/
+    catalog.py             Reviewed optional optimization descriptors
+    composition.py         Complete pairwise compatibility matrix
+    profiles.py            Guarded executable profile contracts
+    routing.py             Deterministic workload routing and fallback
+    composition_cli.py     mtq-compose plan/route/simulate command
+
   methods/
     base.py                CompressionMethod ABC, CompressedKV, MethodInfo
     turboquant.py           WHT butterfly encode/decode (turbo2/3/4)
@@ -1604,6 +1640,8 @@ multi_turboquant/
 
   benchmark/
     run_benchmark.py        Head-to-head method comparison
+    composition.py          Provenance-safe benchmark contracts
+    capacity.py             Analytical KV byte-capacity simulator
     perplexity.py           Quality evaluation via API
     vram_profile.py         Memory usage profiling
 ```
@@ -1753,6 +1791,7 @@ these authors for the mathematical ideas and research:
 | Compatible TriAttention interpreter discovery, fail-closed dependency checks, exact-environment domvox conversion, and detailed calibration failure reports | jawadala / issue #42 | Community contribution |
 | JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review; pinned source profiles, source contracts, scanner coverage, and fail-closed composition | jawadala / issue #43 | Community contribution |
 | Exact-commit Godzilla PFlash/KVFlash composition workflow and safe pairing boundaries | jawadala / issue #44 | Community contribution |
+| Full guarded add-on composition, workload routing, simulation, LuceBox review, UI coverage, and SM86/SM89 Godzilla qualification | jawadala / issue #46 | Community contribution |
 
 We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, the issue #43 research projects, or llama.cpp source trees; installable workflows use reviewed revisions in isolated environments, while guided entries remain read-only contracts. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, parity-checked Gigatoken options, and the broader fail-closed optimization review.
 

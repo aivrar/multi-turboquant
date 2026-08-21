@@ -102,6 +102,53 @@ a separately implemented and validated LMCache SERDE.
 | Godzilla composition | Experimental pinned native workflow | Exact `09214b160` overlay with request-gated PFlash and complete-idle-slot KVFlash residency |
 | Resonance-JetLong | Native backend required | Reviewed only for JetLong `yarn`/`jetlong_freq`; Qwen3 remains a gated research hypothesis |
 
+## Guarded execution profiles
+
+`mtq-compose` is the executable planning layer above the catalog. Its complete
+pairwise matrix covers all reviewed entries; it does not infer compatibility
+from two projects merely sharing CUDA, vLLM, or an attention domain. Thirteen
+profiles represent combinations with a concrete guarded path. Each declares
+its engine, OS/compute support, source or model artifacts, required model
+traits, forbidden active features, version constraints, and quality risk.
+
+```bash
+mtq-compose profiles
+mtq-compose plan godzilla_guarded --os linux --compute cuda \
+  --artifact godzilla_09214b160_source --artifact gguf_model
+mtq-compose route --task long_context --prompt-tokens 65536 \
+  --preferred-engine vllm --artifact minference_pattern
+```
+
+Routing is deterministic. It filters candidates through the same validation
+contract, then ranks eligible profiles by explicit workload signals and stable
+priority/tie-breaking rules. If none is safe, the result is `baseline`; it does
+not silently activate the least-incompatible add-on. Profiles create plans
+only—installation remains in `mtq-env`, while native Godzilla preparation and
+build remain in `mtq-godzilla-compose`.
+
+The two LuceBox profiles preserve the runtime boundary. `lucebox_guarded`
+requires a reviewed LuceBox source and a supported model. The narrower
+`lucebox_qwen36_composed` route represents LuceBox's documented Qwen 3.6 27B
+DFlash/DDTree, PFlash, and KVFlash path and requires both drafter artifacts plus
+a supported GPU. PFlash makes this route lossy; neither its quality nor its
+GPU-specific upstream measurements are transferred to another model/runtime.
+
+The capacity simulator reports baseline and candidate KV bytes per sequence
+and maximum byte-budget concurrency:
+
+```bash
+mtq-compose simulate-capacity --layers 32 --kv-heads 8 --head-dim 128 \
+  --context-tokens 131072 --available-memory-gib 24 \
+  --model-weights-gib 16 --runtime-overhead-gib 2 \
+  --k-bits 4 --v-bits 4 --retained-fraction 0.5
+```
+
+This is analytical byte accounting. It does not predict throughput, latency,
+kernel support, allocator behavior beyond the supplied efficiency, or output
+quality. Benchmark contracts separately label evidence as measured,
+upstream-reported, or simulated and require comparable model, hardware,
+software, workload, and metric definitions before calculating a speedup.
+
 ## Composition rules
 
 Every catalog entry declares the runtime domains it changes. The planner
@@ -129,6 +176,14 @@ active `kvarn` feature conflicts with TriAttention because both the v0.3.7 and
 implemented. `cuda_weight_share` is eligible only for llama.cpp/Godzilla on
 Linux CUDA x86-64 with GCC available. These checks describe a single runtime;
 independent add-ons for other engines remain separate processes/environments.
+
+The exact `09214b160` composition builder accepts explicit
+`--cuda-architectures 86 89` targets. On Windows with a Visual Studio generator
+it pins the requested CUDA toolkit through CMake's toolset selection (rather
+than allowing Visual Studio to select another installed CUDA compiler);
+non-Visual-Studio generators receive `CMAKE_CUDA_COMPILER`. Verification checks
+the source/overlay hashes, selected compiler, selected architectures,
+executable, and supported flags.
 
 ```bash
 mtq-optimizations --engine godzilla --select triattention --select gigatoken

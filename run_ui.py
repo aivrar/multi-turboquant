@@ -42,6 +42,18 @@ from multi_turboquant.calibration import (
 from multi_turboquant._paths import lexical_absolute_path
 from multi_turboquant.hardware import detect_platform, detect_gpus
 from multi_turboquant.optimizations.environments import environment_python, plan_environment
+from multi_turboquant.optimizations.profiles import (
+    BUILTIN_EXECUTABLE_PROFILES,
+    ProfileHost,
+    plan_execution_profile,
+)
+from multi_turboquant.optimizations.routing import WorkloadRequest, route_workload
+from multi_turboquant.benchmark.capacity import (
+    CachePolicy,
+    CapacityScenario,
+    KVModelShape,
+    simulate_capacity,
+)
 from multi_turboquant.tokenizer_backends import scan_gigatoken_interpreters
 from multi_turboquant.compatibility import check_config
 from multi_turboquant.config import CALIBRATION_REQUIRED, METHOD_BITS, METHOD_FAMILIES
@@ -49,6 +61,7 @@ from multi_turboquant.integration import (
     CudaWeightShareConfig,
     LlamaCppContextExtensionConfig,
     inspect_godzilla_checkout,
+    plan_godzilla_composition,
     plan_godzilla_triattention,
     scan_llamacpp_binary,
 )
@@ -174,6 +187,161 @@ def api_presets():
             }
         )
     return results
+
+
+def api_composition_profiles():
+    """Return reviewed, read-only composition profiles for the UI."""
+    return [profile.to_dict() for profile in BUILTIN_EXECUTABLE_PROFILES]
+
+
+def _composition_host(params):
+    detected = detect_platform()
+    memory = params.get("gpu_memory_gb")
+    return ProfileHost(
+        _optional_string_value(params, "os") or detected.os,
+        _optional_string_value(params, "compute") or detected.primary_compute,
+        _optional_string_value(params, "architecture") or detected.arch,
+        _number_value(memory, "gpu_memory_gb") if memory is not None else detected.available_vram_gb,
+    )
+
+
+def _string_values(params, name):
+    values = params.get(name, [])
+    if not isinstance(values, list) or any(
+        not isinstance(item, str) or not item.strip() for item in values
+    ):
+        raise ValueError(f"{name} must be a JSON list of non-empty strings")
+    return frozenset(values)
+
+
+def _boolean_value(params, name, default=False):
+    value = params.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be a JSON boolean")
+    return value
+
+
+def _integer_value(value, name):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be a JSON integer")
+    return value
+
+
+def _number_value(value, name):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a JSON number")
+    return float(value)
+
+
+def _optional_string_value(params, name):
+    value = params.get(name)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a JSON string")
+    return value.strip()
+
+
+def _required_string_value(params, name, default=None):
+    value = params.get(name, default)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty JSON string")
+    return value.strip()
+
+
+def api_composition_plan(params):
+    plan = plan_execution_profile(
+        _required_string_value(params, "profile"),
+        _composition_host(params),
+        available_artifacts=_string_values(params, "artifacts"),
+        active_features=_string_values(params, "active_features"),
+        exact_output_required=_boolean_value(params, "exact_output_required"),
+    )
+    return plan.to_dict()
+
+
+def api_composition_route(params):
+    candidates = params.get("profiles")
+    if candidates is not None:
+        if not isinstance(candidates, list) or any(not isinstance(item, str) for item in candidates):
+            raise ValueError("profiles must be a JSON list of strings")
+        candidates = tuple(candidates)
+    decision = route_workload(
+        WorkloadRequest(
+            task=_required_string_value(params, "task"),
+            prompt_tokens=_integer_value(params.get("prompt_tokens", 0), "prompt_tokens"),
+            expected_output_tokens=_integer_value(
+                params.get("expected_output_tokens", 0), "expected_output_tokens"
+            ),
+            repeated_prefix=_boolean_value(params, "repeated_prefix"),
+            exact_output_required=_boolean_value(params, "exact_output_required"),
+            preferred_engine=_optional_string_value(params, "preferred_engine"),
+            artifacts=_string_values(params, "artifacts"),
+            model_traits=_string_values(params, "model_traits"),
+            active_features=_string_values(params, "active_features"),
+        ),
+        _composition_host(params),
+        candidate_profile_ids=candidates,
+    )
+    return decision.to_dict()
+
+
+def api_capacity_simulation(params):
+    gib = 1024 ** 3
+    result = simulate_capacity(
+        KVModelShape(
+            _integer_value(params.get("layers", 0), "layers"),
+            _integer_value(params.get("kv_heads", 0), "kv_heads"),
+            _integer_value(params.get("head_dim", 0), "head_dim"),
+        ),
+        CapacityScenario(
+            context_tokens=_integer_value(params.get("context_tokens", 0), "context_tokens"),
+            available_memory_bytes=int(
+                _number_value(params.get("available_memory_gib", 0), "available_memory_gib") * gib
+            ),
+            model_weights_bytes=int(
+                _number_value(params.get("model_weights_gib", 0), "model_weights_gib") * gib
+            ),
+            runtime_overhead_bytes=int(
+                _number_value(params.get("runtime_overhead_gib", 0), "runtime_overhead_gib") * gib
+            ),
+        ),
+        CachePolicy(
+            k_bits=_number_value(params.get("k_bits", 16), "k_bits"),
+            v_bits=_number_value(params.get("v_bits", 16), "v_bits"),
+            retained_fraction=_number_value(
+                params.get("retained_fraction", 1), "retained_fraction"
+            ),
+            allocator_efficiency=_number_value(
+                params.get("allocator_efficiency", 1), "allocator_efficiency"
+            ),
+            per_token_metadata_bytes=_integer_value(
+                params.get("metadata_bytes_per_token", 0), "metadata_bytes_per_token"
+            ),
+            fixed_overhead_bytes=_integer_value(
+                params.get("fixed_overhead_bytes", 0), "fixed_overhead_bytes"
+            ),
+        ),
+    )
+    return result.to_dict()
+
+
+def api_godzilla_composition_build_plan(params):
+    architectures = params.get("cuda_architectures", [])
+    if not isinstance(architectures, list) or any(
+        not isinstance(item, (str, int)) or isinstance(item, bool) for item in architectures
+    ):
+        raise ValueError("cuda_architectures must be a JSON list of strings or integers")
+    plan = plan_godzilla_composition(
+        _required_string_value(params, "target"),
+        action=_required_string_value(params, "action", "prepare"),
+        backend=_required_string_value(params, "backend", "cpu"),
+        max_jobs=_integer_value(params.get("max_jobs", 2), "max_jobs"),
+        generator=_optional_string_value(params, "generator"),
+        cuda_toolkit=_optional_string_value(params, "cuda_toolkit"),
+        cuda_architectures=architectures,
+    )
+    return plan.to_dict()
 
 
 def api_plan(params):
@@ -998,6 +1166,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
   <div class="topbar">
     <div class="view-tabs" role="tablist" aria-label="Workspace views">
       <button id="tab-quick" class="active" onclick="showView('quick')">Quick Run</button>
+      <button id="tab-compose" onclick="showView('compose')">Composition Lab</button>
       <button id="tab-setup" onclick="showView('setup')">Setup &amp; Add-ons</button>
     </div>
     <div id="save-state" class="save-state">Loading saved settings...</div>
@@ -1205,6 +1374,91 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
   </div>
   </section>
 
+  <section id="view-compose" class="view">
+    <div class="grid">
+      <div class="card full">
+        <h2>Guarded Execution Profile</h2>
+        <div class="setup-note">Planning is read-only. A ready result confirms declared host, artifact, feature, and quality gates; it does not install or launch an external runtime.</div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Profile</label><select id="compose-profile"></select></div>
+          <div><label>Operating system</label><input id="compose-os" value="linux"></div>
+          <div><label>Compute backend</label><select id="compose-compute"><option value="cuda">CUDA</option><option value="rocm">ROCm</option><option value="cpu">CPU</option></select></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Available artifacts (one per line)</label><textarea id="compose-artifacts" rows="4" placeholder="gguf_model\nlucebox_source"></textarea></div>
+          <div style="grid-column:span 2"><label>Active features (one per line)</label><textarea id="compose-features" rows="4" placeholder="prefix_cache"></textarea></div>
+        </div>
+        <div class="button-row">
+          <label><input type="checkbox" id="compose-exact"> Exact output required</label>
+          <button onclick="planCompositionProfile()">Check Profile</button>
+        </div>
+        <div class="result-box" id="compose-plan-result">Select a profile and check its gates.</div>
+      </div>
+
+      <div class="card full">
+        <h2>Workload Router</h2>
+        <div class="setup-note">The router selects one reviewed runtime profile from explicit workload signals. If every candidate fails, it returns the unmodified baseline.</div>
+        <div class="form-row">
+          <div><label>Task</label><select id="route-task"><option>chat</option><option>completion</option><option>code</option><option>reasoning</option><option>rag</option><option value="long_context">long_context</option></select></div>
+          <div><label>Prompt tokens</label><input type="number" id="route-prompt" value="32768" min="0"></div>
+          <div><label>Expected output tokens</label><input type="number" id="route-output" value="1024" min="0"></div>
+          <div><label>Preferred engine</label><input id="route-engine" placeholder="Optional: vllm, lucebox, godzilla"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Model/workload traits (one per line)</label><textarea id="route-traits" rows="4" placeholder="qwen36_27b\nlucebox_supported_gpu\nhigh_concurrency"></textarea></div>
+          <div style="grid-column:span 2"><label>Available artifacts (one per line)</label><textarea id="route-artifacts" rows="4" placeholder="lucebox_source\ngguf_model\nlucebox_drafter\nlucebox_prefill_drafter"></textarea></div>
+        </div>
+        <div class="button-row">
+          <label><input type="checkbox" id="route-prefix"> Repeated prefix</label>
+          <label><input type="checkbox" id="route-exact"> Exact output required</label>
+          <button onclick="routeCompositionWorkload()">Route Workload</button>
+        </div>
+        <div class="result-box" id="compose-route-result">No route evaluated.</div>
+      </div>
+
+      <div class="card full">
+        <h2>Analytical KV Capacity</h2>
+        <div class="setup-note">This is byte-accounting only. Results are always labelled <code>analytical-simulation</code> and do not predict latency, throughput, quality, or compounded speedups.</div>
+        <div class="form-row">
+          <div><label>Layers</label><input type="number" id="sim-layers" value="32" min="1"></div>
+          <div><label>KV heads</label><input type="number" id="sim-heads" value="8" min="1"></div>
+          <div><label>Head dimension</label><input type="number" id="sim-dim" value="128" min="1"></div>
+          <div><label>Context tokens</label><input type="number" id="sim-context" value="32768" min="1"></div>
+        </div>
+        <div class="form-row">
+          <div><label>Available memory GiB</label><input type="number" step="0.1" id="sim-memory" value="24" min="0"></div>
+          <div><label>Model weights GiB</label><input type="number" step="0.1" id="sim-weights" value="14" min="0"></div>
+          <div><label>Runtime overhead GiB</label><input type="number" step="0.1" id="sim-overhead" value="2" min="0"></div>
+          <div><label>Allocator efficiency</label><input type="number" step="0.01" id="sim-efficiency" value="0.9" min="0.01" max="1"></div>
+        </div>
+        <div class="form-row">
+          <div><label>K bits</label><input type="number" step="0.1" id="sim-kbits" value="4" min="0.1"></div>
+          <div><label>V bits</label><input type="number" step="0.1" id="sim-vbits" value="4" min="0.1"></div>
+          <div><label>Retained token fraction</label><input type="number" step="0.01" id="sim-retained" value="0.5" min="0.01" max="1"></div>
+          <div><label>&nbsp;</label><button onclick="simulateCompositionCapacity()">Simulate Capacity</button></div>
+        </div>
+        <div class="result-box" id="compose-sim-result">No simulation evaluated.</div>
+      </div>
+
+      <div class="card full">
+        <h2>Pinned Godzilla Build Plan</h2>
+        <div class="setup-note">This panel only renders the exact-commit build plan. It never downloads, patches, compiles, or verifies a tree. SM86 and SM89 are the currently qualified CUDA targets for this composition profile.</div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>New or prepared composition tree</label><input id="compose-godzilla-target" placeholder="/opt/godzilla-composed"></div>
+          <div><label>Action to plan</label><select id="compose-godzilla-action"><option value="prepare">prepare</option><option value="build">build</option><option value="verify">verify</option></select></div>
+          <div><label>Backend</label><select id="compose-godzilla-backend"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>CUDA toolkit or nvcc</label><input id="compose-godzilla-toolkit" placeholder="/usr/local/cuda-12.8"></div>
+          <div><label>CUDA architectures</label><select id="compose-godzilla-architectures" multiple size="2"><option value="86" selected>SM86 (Ampere)</option><option value="89" selected>SM89 (Ada)</option></select></div>
+          <div><label>Maximum build jobs</label><input type="number" id="compose-godzilla-jobs" value="2" min="1"></div>
+        </div>
+        <div class="button-row"><button onclick="planGodzillaCompositionBuild()">Render Build Plan</button></div>
+        <div class="result-box" id="compose-godzilla-result">No build plan evaluated.</div>
+      </div>
+    </div>
+  </section>
+
   <section id="view-setup" class="view">
     <div class="grid">
       <div class="card full">
@@ -1407,7 +1661,8 @@ function collectFormValues() {
   persistentControls().forEach(el => {
     values[el.id] = el.type === 'checkbox' ? el.checked : el.value;
   });
-  values.active_view = document.getElementById('view-setup').classList.contains('active') ? 'setup' : 'quick';
+  const active = document.querySelector('.view.active');
+  values.active_view = active ? active.id.replace('view-', '') : 'quick';
   return values;
 }
 
@@ -1419,7 +1674,7 @@ function applyFormValues(values={}) {
     if (el.type === 'checkbox') el.checked = Boolean(value);
     else el.value = value ?? '';
   });
-  if (values.active_view === 'setup') showView('setup');
+  if (['quick', 'compose', 'setup'].includes(values.active_view)) showView(values.active_view);
 }
 
 function settingsPayload() {
@@ -1564,10 +1819,96 @@ function renderMemoryStatus() {
     '<div>RAM and VRAM remain separate limits; this total is informational.</div>';
 }
 
+function lineValues(id) {
+  return document.getElementById(id).value.split(/\\r?\\n/).map(value => value.trim()).filter(Boolean);
+}
+
+async function planCompositionProfile() {
+  const target = document.getElementById('compose-plan-result');
+  target.textContent = 'Checking profile gates...';
+  try {
+    const result = await api('/api/composition/plan', {
+      profile: document.getElementById('compose-profile').value,
+      os: document.getElementById('compose-os').value,
+      compute: document.getElementById('compose-compute').value,
+      artifacts: lineValues('compose-artifacts'),
+      active_features: lineValues('compose-features'),
+      exact_output_required: document.getElementById('compose-exact').checked,
+    });
+    target.textContent = JSON.stringify(result, null, 2);
+  } catch (error) {
+    target.textContent = `Profile check failed: ${error.message}`;
+  }
+}
+
+async function routeCompositionWorkload() {
+  const target = document.getElementById('compose-route-result');
+  target.textContent = 'Evaluating guarded routes...';
+  try {
+    const result = await api('/api/composition/route', {
+      task: document.getElementById('route-task').value,
+      prompt_tokens: Number(document.getElementById('route-prompt').value),
+      expected_output_tokens: Number(document.getElementById('route-output').value),
+      preferred_engine: document.getElementById('route-engine').value.trim(),
+      repeated_prefix: document.getElementById('route-prefix').checked,
+      exact_output_required: document.getElementById('route-exact').checked,
+      model_traits: lineValues('route-traits'),
+      artifacts: lineValues('route-artifacts'),
+      active_features: [],
+    });
+    target.textContent = JSON.stringify(result, null, 2);
+  } catch (error) {
+    target.textContent = `Routing failed: ${error.message}`;
+  }
+}
+
+async function simulateCompositionCapacity() {
+  const target = document.getElementById('compose-sim-result');
+  target.textContent = 'Calculating analytical capacity...';
+  try {
+    const result = await api('/api/composition/simulate-capacity', {
+      layers: Number(document.getElementById('sim-layers').value),
+      kv_heads: Number(document.getElementById('sim-heads').value),
+      head_dim: Number(document.getElementById('sim-dim').value),
+      context_tokens: Number(document.getElementById('sim-context').value),
+      available_memory_gib: Number(document.getElementById('sim-memory').value),
+      model_weights_gib: Number(document.getElementById('sim-weights').value),
+      runtime_overhead_gib: Number(document.getElementById('sim-overhead').value),
+      allocator_efficiency: Number(document.getElementById('sim-efficiency').value),
+      k_bits: Number(document.getElementById('sim-kbits').value),
+      v_bits: Number(document.getElementById('sim-vbits').value),
+      retained_fraction: Number(document.getElementById('sim-retained').value),
+    });
+    target.textContent = JSON.stringify(result, null, 2);
+  } catch (error) {
+    target.textContent = `Simulation failed: ${error.message}`;
+  }
+}
+
+async function planGodzillaCompositionBuild() {
+  const target = document.getElementById('compose-godzilla-result');
+  target.textContent = 'Inspecting pinned build requirements...';
+  try {
+    const architectureSelect = document.getElementById('compose-godzilla-architectures');
+    const result = await api('/api/composition/godzilla-build-plan', {
+      target: document.getElementById('compose-godzilla-target').value.trim(),
+      action: document.getElementById('compose-godzilla-action').value,
+      backend: document.getElementById('compose-godzilla-backend').value,
+      cuda_toolkit: document.getElementById('compose-godzilla-toolkit').value.trim(),
+      cuda_architectures: [...architectureSelect.selectedOptions].map(option => option.value),
+      max_jobs: Number(document.getElementById('compose-godzilla-jobs').value),
+    });
+    target.textContent = JSON.stringify(result, null, 2) + '\\n\\nNo files, downloads, or builds were changed.';
+  } catch (error) {
+    target.textContent = `Build plan failed: ${error.message}`;
+  }
+}
+
 async function init() {
   const saved = await loadSettings();
-  const [status, methods, presets] = await Promise.all([
-    api('/api/status'), api('/api/methods'), api('/api/presets')
+  const [status, methods, presets, compositionProfiles] = await Promise.all([
+    api('/api/status'), api('/api/methods'), api('/api/presets'),
+    api('/api/composition/profiles')
   ]);
 
   document.getElementById('version-info').textContent =
@@ -1624,6 +1965,10 @@ async function init() {
     cmdK.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
     cmdV.innerHTML += `<option value="${m.value}">${m.value} (${m.compression}x)</option>`;
   });
+  const profileSelect = document.getElementById('compose-profile');
+  profileSelect.innerHTML = compositionProfiles.map(profile =>
+    `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)} (${escapeHtml(profile.engine)})</option>`
+  ).join('');
   applyFormValues(saved.form_values || {});
   renderMemoryStatus();
   persistentControls().forEach(el => {
@@ -2374,6 +2719,8 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 self._json(api_methods())
             elif path == "/api/presets":
                 self._json(api_presets())
+            elif path == "/api/composition/profiles":
+                self._json(api_composition_profiles())
             elif path == "/api/settings":
                 self._json(api_settings())
             elif path == "/api/runtime/status":
@@ -2415,6 +2762,12 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/godzilla/plan": lambda: api_plan_godzilla(body),
                 "/api/godzilla/calibration-text": lambda: api_generate_calibration_text(body),
                 "/api/godzilla/create": lambda: api_create_godzilla(body),
+                "/api/composition/plan": lambda: api_composition_plan(body),
+                "/api/composition/route": lambda: api_composition_route(body),
+                "/api/composition/simulate-capacity": lambda: api_capacity_simulation(body),
+                "/api/composition/godzilla-build-plan": lambda: (
+                    api_godzilla_composition_build_plan(body)
+                ),
                 "/api/runtime/start": lambda: api_runtime_start(body),
                 "/api/runtime/stop": api_runtime_stop,
             }

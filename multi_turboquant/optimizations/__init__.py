@@ -2,6 +2,12 @@
 """Optional optimization catalog and compatibility planner."""
 
 from .catalog import BUILTIN_DESCRIPTORS, create_builtin_registry
+from .composition import (
+    CompositionDisposition,
+    CompositionMatrix,
+    CompositionRule,
+    build_composition_matrix,
+)
 from .core import (
     IntegrationMode,
     ManifestPlugin,
@@ -35,16 +41,38 @@ from .environments import (
     synchronize_environment,
 )
 from .planner import OptimizationPlan, detect_optimization_context, plan_optimizations
+from .profiles import (
+    BUILTIN_EXECUTABLE_PROFILES,
+    ExecutableProfile,
+    ExecutionProfilePlan,
+    ProfileHost,
+    ProfileIssue,
+    get_executable_profile,
+    plan_execution_profile,
+)
+from .routing import (
+    SUPPORTED_TASKS,
+    RouteCandidate,
+    RouteDecision,
+    WorkloadRequest,
+    route_workload,
+)
 
 __all__ = [
     "BUILTIN_DESCRIPTORS",
     "BUILTIN_ENVIRONMENT_PROFILES",
+    "BUILTIN_EXECUTABLE_PROFILES",
+    "CompositionDisposition",
+    "CompositionMatrix",
+    "CompositionRule",
     "DEFAULT_ENVIRONMENT_ROOT",
     "DependencyProfile",
     "EnvironmentCommand",
     "EnvironmentContext",
     "EnvironmentIssue",
     "EnvironmentPlan",
+    "ExecutableProfile",
+    "ExecutionProfilePlan",
     "IntegrationMode",
     "ManifestPlugin",
     "OptimizationContext",
@@ -57,17 +85,27 @@ __all__ = [
     "OptimizationPlugin",
     "OptimizationProbe",
     "OptimizationRegistry",
+    "ProfileHost",
+    "ProfileIssue",
+    "RouteCandidate",
+    "RouteDecision",
+    "SUPPORTED_TASKS",
     "create_builtin_registry",
+    "build_composition_matrix",
     "check_environment",
     "diagnose_environment",
     "detect_optimization_context",
     "detect_environment_context",
     "get_environment_profile",
+    "get_executable_profile",
     "inspect_profile_source",
     "plan_environment",
+    "plan_execution_profile",
     "read_os_release",
     "plan_optimizations",
     "render_profile_project",
     "run_in_environment",
     "synchronize_environment",
+    "WorkloadRequest",
+    "route_workload",
 ]
