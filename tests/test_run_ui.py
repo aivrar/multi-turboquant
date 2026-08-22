@@ -459,6 +459,19 @@ def test_issue_43_profiles_and_capabilities_are_exposed_in_ui():
         assert f"capabilityTag('{capability}'" in run_ui.UI_HTML
 
 
+def test_recent_research_profiles_are_exposed_with_install_boundaries():
+    for profile in ("restorekv", "archead", "novakv", "dspark"):
+        assert f'<option value="{profile}">' in run_ui.UI_HTML
+
+    local_source_section = run_ui.UI_HTML.split('id="env-source-profile"', 1)[1].split(
+        "</select>", 1
+    )[0]
+    assert '<option value="restorekv">' in local_source_section
+    assert '<option value="archead">' in local_source_section
+    assert '<option value="novakv">' not in local_source_section
+    assert '<option value="dspark">' not in local_source_section
+
+
 def test_composition_profiles_and_read_only_workbench_are_exposed_in_ui():
     profiles = run_ui.api_composition_profiles()
     ids = {profile["id"] for profile in profiles}

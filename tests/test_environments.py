@@ -45,6 +45,10 @@ def test_profiles_are_isolated_and_explicit():
         "minference",
         "sageattention",
         "triattention",
+        "restorekv",
+        "archead",
+        "novakv",
+        "dspark",
         "jetspec",
         "proxima",
         "jetlong",
@@ -101,6 +105,43 @@ def test_issue_43_installable_profiles_are_pinned_and_accept_local_source(
     assert any("@ git+https://github.com/" in item for item in profile.packages)
     assert module in profile.validation_modules
     assert rendered["tool"]["uv"]["sources"][package]["path"] == str(source.resolve())
+
+
+@pytest.mark.parametrize(
+    ("profile_id", "package", "module"),
+    [
+        ("restorekv", "kvpress", "kvpress"),
+        ("archead", "archead-llm", "archead"),
+    ],
+)
+def test_recent_installable_profiles_are_pinned_and_accept_local_source(
+    tmp_path: Path, profile_id: str, package: str, module: str
+):
+    profile = get_environment_profile(profile_id)
+    source = tmp_path / profile_id
+    source.mkdir()
+    for marker in profile.local_source_markers:
+        target = source / marker
+        if "." in Path(marker).name:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("marker", encoding="utf-8")
+        else:
+            target.mkdir(parents=True, exist_ok=True)
+
+    rendered = tomllib.loads(render_profile_project(profile, local_source=source))
+
+    assert profile.installable
+    assert any("@ git+https://github.com/" in item for item in profile.packages)
+    assert module in profile.validation_modules
+    assert rendered["tool"]["uv"]["sources"][package]["path"] == str(source.resolve())
+
+
+@pytest.mark.parametrize("profile_id", ["novakv", "dspark"])
+def test_recent_guarded_profiles_remain_blocked(profile_id: str):
+    profile = get_environment_profile(profile_id)
+
+    assert not profile.installable
+    assert profile.blocked_reason
 
 
 def test_jetlong_default_and_fused_profiles_remain_separate():

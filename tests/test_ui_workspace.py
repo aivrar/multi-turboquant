@@ -168,6 +168,8 @@ def test_informational_addon_source_inspection_reports_missing_markers(tmp_path:
         ("duoattention", ("README.md", "setup.py", "duo_attn", "attn_patterns")),
         ("icecache", ("README.md", "IceCache/requirements.txt", "IceCache/source/setup.py")),
         ("pflash_llamacpp", ("README.md", "CMakeLists.txt", "tools/server/qwen36-smart-router.py")),
+        ("novakv", ("README.md", "nova_kv", "python", "calibration")),
+        ("dspark", ("README.md", "pyproject.toml", "speculators")),
     ],
 )
 def test_each_blocked_addon_profile_has_a_read_only_source_contract(
@@ -194,6 +196,15 @@ def test_each_blocked_addon_profile_has_a_read_only_source_contract(
     ("folder", "markers", "expected_kind", "has_environment"),
     [
         ("JetSpec", ("README.md", "pyproject.toml", "jetspec"), "jetspec", True),
+        (
+            "kvpress",
+            ("README.md", "pyproject.toml", "kvpress", "kvpress/presses/restorekv_press.py"),
+            "restorekv",
+            True,
+        ),
+        ("ARCHead", ("README.md", "pyproject.toml", "archead"), "archead", True),
+        ("nova-kv", ("README.md", "nova_kv", "python", "calibration"), "novakv", False),
+        ("speculators", ("README.md", "pyproject.toml", "speculators"), "dspark", False),
         ("lucebox", ("README.md", "server/CMakeLists.txt", "optimizations/pflash"), "lucebox", False),
         ("Proxima", ("README.md", "pyproject.toml", "proxima_vllm"), "proxima", True),
         ("jet-long", ("README.md", "pyproject.toml", "jetlm", "model_configs"), "jetlong", True),

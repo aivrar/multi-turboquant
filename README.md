@@ -560,6 +560,13 @@ TriAttention, KVarN conflicts with TriAttention in the reviewed source profiles,
 and CUDA weight sharing is limited to Linux/CUDA/x86-64 with a validated source
 build. Add-ons for different engines are not forced into one process.
 
+The newest reviewed additions are RestoreKV (pinned KVPress quality-repair
+profile), ARCHead (pinned Transformers output-head compression profile), and
+guarded research records for NOVA-KV and DSpark. See the
+[August 2026 inference research review](docs/recent-inference-research.md) for
+the newest-first evidence, duplicate analysis, side-effect controls, and the
+paper-only directions that are deliberately not presented as implemented.
+
 ### Guarded composition and workload routing
 
 The composition layer covers every reviewed optimization in the catalog and
@@ -670,7 +677,7 @@ report distro, lexical and resolved interpreters, prefixes, import failures,
 CUDA/toolchain state, and Accelerate environment information.
 
 `--local-source` is a separate option for a checkout you already have. It is
-accepted only for the nine reviewed installable profiles, verifies the
+accepted only for the eleven reviewed installable profiles, verifies the
 profile-specific source markers, and records an absolute local-path source in
 that profile's generated `uv` project. `uv` then builds the selected package
 and resolves its declared dependencies inside the isolated environment. It
@@ -936,6 +943,7 @@ contracts and do not imply runtime compatibility.
 | Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 | Requested full guarded treatment of the reviewed add-on catalog, workload routing, simulation, LuceBox composition research, UI coverage, and SM86/SM89 qualification for the canonical Godzilla baseline | [@jawadala](https://github.com/jawadala) | Issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
 | Reported model-specific TriAttention calibration failures with Mythos-nano-heretic `IQ4_XS`, prompting source-model context validation, nested RoPE correction, memory preflight, and explicit multi-GPU device selection | [@jawadala](https://github.com/jawadala) | Community testing report (August 2026) |
+| Requested a newest-first inference research pass covering memory, context reuse, speed, quality, and safe composition; this prompted the RestoreKV and ARCHead profiles, guarded NOVA-KV and DSpark records, and the evidence-backed research roadmap | [@jawadala](https://github.com/jawadala) | Community research suggestion (August 2026) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue
@@ -948,7 +956,10 @@ catalog with explicit safety boundaries, including the exact-commit composition
 workflow prompted by issue #44 and the full guarded composition, routing,
 simulation, LuceBox, UI, and SM86/SM89 qualification follow-up in issue #46.
 Their subsequent Mythos-nano-heretic calibration report also prompted the
-model-aware context, RoPE, memory, and CUDA-device safeguards.
+model-aware context, RoPE, memory, and CUDA-device safeguards. Their latest
+research suggestion prompted the newest-first inference review and its guarded
+quality-repair, output-head compression, KV quantization, speculative-decoding,
+and context-sharing directions.
 
 The Metal path is community-maintained — the maintainer does not have Apple Silicon hardware, so issues specific to MLX/Metal should tag the contributor for context.
 

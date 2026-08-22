@@ -20,6 +20,7 @@ class OptimizationKind(str, Enum):
     POSITION_ENCODING = "position_encoding"
     TOKENIZER = "tokenizer"
     RESOURCE_SHARING = "resource_sharing"
+    WEIGHT_REPRESENTATION = "weight_representation"
 
 
 class OptimizationMaturity(str, Enum):

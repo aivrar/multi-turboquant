@@ -1515,6 +1515,10 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="adadecode">AdaDecode</option>
             <option value="resonance_yarn">Resonance YaRN</option>
             <option value="jetspec">JetSpec</option>
+            <option value="restorekv">RestoreKV / KVPress</option>
+            <option value="archead">ARCHead</option>
+            <option value="novakv">NOVA-KV</option>
+            <option value="dspark">DSpark</option>
             <option value="lucebox">Lucebox</option>
             <option value="proxima">Proxima</option>
             <option value="jetlong">Jet-Long</option>
@@ -1546,7 +1550,8 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
             <option value="flashattention">FlashAttention</option><option value="fastdms">FastDMS</option>
             <option value="lmcache">LMCache</option><option value="minference">MInference</option>
             <option value="sageattention">SageAttention</option><option value="triattention">TriAttention calibration</option>
-            <option value="jetspec">JetSpec</option><option value="proxima">Proxima</option>
+            <option value="jetspec">JetSpec</option><option value="restorekv">RestoreKV / KVPress</option>
+            <option value="archead">ARCHead</option><option value="proxima">Proxima</option>
             <option value="jetlong">Jet-Long</option>
           </select></div>
           <div style="grid-column:span 3"><label>Reviewed local checkout</label><input type="text" id="env-local-source" placeholder="Select a recognized add-on checkout above"></div>
