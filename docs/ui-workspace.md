@@ -232,7 +232,7 @@ Godzilla trees are recognized by `scripts/godzilla-paths.ps1`. FlashAttention in
 the expected source markers and reports version and Git remote metadata when
 available.
 
-For the eleven reviewed Python add-ons, a recognized checkout has a **Use for
+For the nine reviewed Python add-ons, a recognized checkout has a **Use for
 profile** action. It fills the local-source profile and path controls. Refresh
 the profile plan before creation: the plan validates the checkout markers,
 then `uv` builds that package and resolves its dependencies in the selected

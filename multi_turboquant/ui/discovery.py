@@ -13,9 +13,9 @@ MODEL_FILE_SUFFIXES = frozenset({".gguf", ".safetensors", ".bin", ".pt", ".pth"}
 MAX_SCAN_DIRECTORIES = 5_000
 
 
-# Marker groups let the UI inspect reviewed source projects without executing
-# checkout code. Each setup contract states whether the source has a pinned
-# isolated profile or remains informational/blocked.
+# These source projects are not installable Python profiles. Marker groups let
+# the UI inspect them without executing checkout code; each setup contract says
+# whether a separate reviewed build workflow exists.
 _SOURCE_ADDON_SPECS: dict[str, dict[str, object]] = {
     "cuda_weight_share": {
         "profile": "cuda_weight_share",
@@ -224,92 +224,6 @@ _SOURCE_ADDON_SPECS: dict[str, dict[str, object]] = {
             "next_steps": (
                 "Create the jetspec environment only after reviewing the plan.",
                 "Validate greedy output parity and acceptance length before benchmarking.",
-            ),
-        },
-    },
-    "restorekv": {
-        "profile": "restorekv",
-        "name": "RestoreKV / NVIDIA KVPress",
-        "source_url": "https://github.com/NVIDIA/kvpress",
-        "marker_groups": (
-            ("README.md",),
-            ("pyproject.toml",),
-            ("kvpress",),
-            ("kvpress/presses/restorekv_press.py",),
-        ),
-        "summary": "Learned restoration for aggressive KVzip-family cache eviction.",
-        "setup": {
-            "mode": "isolated_environment",
-            "automatic": True,
-            "requirements": (
-                "Linux CUDA and the pinned KVPress environment",
-                "A released RestoreKV adapter matching the exact model and KVzip variant",
-            ),
-            "next_steps": (
-                "Create the restorekv environment only after reviewing the source pin.",
-                "Compare full-cache, base-evictor, and restored functional quality.",
-            ),
-        },
-    },
-    "archead": {
-        "profile": "archead",
-        "name": "ARCHead",
-        "source_url": "https://github.com/suayptalha/archead",
-        "marker_groups": (("README.md",), ("pyproject.toml",), ("archead",)),
-        "summary": "Activation-aware compression for a dense Transformers output head.",
-        "setup": {
-            "mode": "isolated_environment",
-            "automatic": True,
-            "requirements": (
-                "Linux CUDA and the pinned ARCHead environment",
-                "Representative hidden-state calibration data and access to the dense head",
-            ),
-            "next_steps": (
-                "Create the archead environment only after reviewing the source pin.",
-                "Validate logits, perplexity, task quality, serialization, memory, and latency.",
-            ),
-        },
-    },
-    "novakv": {
-        "profile": "novakv",
-        "name": "NOVA-KV",
-        "source_url": "https://github.com/Amir-zsh/nova-kv",
-        "marker_groups": (
-            ("README.md",),
-            ("nova_kv",),
-            ("python",),
-            ("calibration",),
-        ),
-        "summary": "Two-bit attention-aware KV quantization in a separate SGLang fork.",
-        "setup": {
-            "mode": "separate_runtime_fork",
-            "automatic": False,
-            "requirements": (
-                "A dedicated Linux CUDA checkout of the reviewed SGLang research fork",
-                "Model-specific rotations and vector-quantizer codebooks",
-            ),
-            "next_steps": (
-                "Reproduce the upstream BF16 and NOVA quality matrix independently.",
-                "Do not install the fork into another serving profile.",
-            ),
-        },
-    },
-    "dspark": {
-        "profile": "dspark",
-        "name": "DSpark",
-        "source_url": "https://github.com/vllm-project/speculators",
-        "marker_groups": (("README.md",), ("pyproject.toml",), ("speculators",)),
-        "summary": "Confidence-scheduled semi-autoregressive speculative decoding research.",
-        "setup": {
-            "mode": "runtime_qualification_required",
-            "automatic": False,
-            "requirements": (
-                "A DSpark drafter matching the exact verifier",
-                "An exact vLLM release with a validated DSpark proposer and hidden-state path",
-            ),
-            "next_steps": (
-                "Keep installation blocked while the serving path has unresolved reports.",
-                "Require target parity and concurrency sweeps before enabling it.",
             ),
         },
     },
@@ -535,9 +449,8 @@ def _marker_group_present(root: Path, group: tuple[str, ...]) -> bool:
 def inspect_addon_source(profile_id: str, path: str | Path) -> dict[str, object]:
     """Inspect a reviewed add-on checkout without importing or executing it.
 
-    Installable and blocked profiles are both accepted for source selection
-    and documentation. Inspection never changes an environment profile's
-    installability.
+    Blocked profiles are deliberately accepted here for source selection and
+    documentation.  They remain blocked for environment creation.
     """
     normalized = str(profile_id).strip().lower()
     if normalized == "cuda_weight_share":
@@ -799,13 +712,6 @@ def _classify_addon(path: Path, files: set[str], directories: set[str]) -> str |
         "cuda_llm_weight_share": "cuda_weight_share",
         "cuda_weight_share": "cuda_weight_share",
         "jetspec": "jetspec",
-        "restorekv": "restorekv",
-        "kvpress": "restorekv",
-        "archead": "archead",
-        "nova_kv": "novakv",
-        "novakv": "novakv",
-        "speculators": "dspark",
-        "dspark": "dspark",
         "lucebox": "lucebox",
         "lucebox_hub": "lucebox",
         "proxima": "proxima",
@@ -908,8 +814,6 @@ def scan_addon_roots(
                     "sageattention",
                     "triattention",
                     "jetspec",
-                    "restorekv",
-                    "archead",
                     "proxima",
                     "jetlong",
                 }:

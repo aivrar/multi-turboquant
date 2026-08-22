@@ -101,15 +101,6 @@ a separately implemented and validated LMCache SERDE.
 | PFlash/KVFlash llama.cpp | Guided separate runtime | Hawg33 fork is a separate llama.cpp family, not an arbitrary patch for Godzilla |
 | Godzilla composition | Experimental pinned native workflow | Exact `09214b160` overlay with request-gated PFlash and complete-idle-slot KVFlash residency |
 | Resonance-JetLong | Native backend required | Reviewed only for JetLong `yarn`/`jetlong_freq`; Qwen3 remains a gated research hypothesis |
-| RestoreKV | Installable isolated KVPress profile | Learned repair for KVzip-family eviction; requires a released model-matched adapter and remains lossy |
-| NOVA-KV | Guarded separate research runtime | Apache-2.0 SGLang 0.5.10 fork with model-specific calibration artifacts and H100-oriented evidence |
-| ARCHead | Installable isolated Transformers profile | Compresses a dense LM output head; requires activation calibration and does not patch GGUF |
-| DSpark | Guarded serving research | Distinct confidence-scheduled drafter, but the serving path spans moving vLLM code with reported integration failures |
-
-The [August 2026 inference research review](recent-inference-research.md) records
-the primary-paper evidence, duplicate check, side-effect mitigations, and the
-paper-only OasisKV, CoinRAG, ELDR, and VeriCache directions that are not exposed
-as installable software.
 
 ## Guarded execution profiles
 
@@ -267,8 +258,8 @@ than applying an unreviewed source-build procedure.
 `--local-source PATH` addresses a different case: installing the profile's
 primary package from an existing checkout. It is available for
 `flashattention`, `fastdms`, `lmcache`, `minference`, `sageattention`, and
-`triattention`, plus the source-only `jetspec`, `restorekv`, `archead`,
-`proxima`, and `jetlong` profiles.
+`triattention`, plus the source-only `jetspec`, `proxima`, and `jetlong`
+profiles.
 Planning resolves the path and verifies a profile-specific marker set (for
 example `setup.py`, the import package, and `csrc` where applicable). The
 generated project replaces only that package requirement with a
@@ -359,10 +350,6 @@ eligible for the reviewed profile.
 | `minference` | Installable | Official v0.1.6 source commit `d76b76e`, Transformers 4.x, and PyTorch 2.7.1 CUDA 12.6 | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports Torch, Triton, and MInference |
 | `sageattention` | Installable | Audited upstream commit `d1a57a5`, PyTorch 2.7.1 CUDA 12.6, and build helpers | Linux + CUDA 12.x + Git + `nvcc`; compiles and imports SageAttention |
 | `triattention` | Installable | Official commit `81552bb`, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.6, Accelerate 1.14.0, SentencePiece 0.2.2, and Gigatoken 0.10.0 | Linux CUDA + Git; imports the official/domvox calibration stack and supplies the UI's automatic calibration Python |
-| `restorekv` | Installable | KVPress commit `161705a`, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.6, and PEFT 0.20.0 | Linux CUDA + Git; validates imports, while the adapter and quality budget remain separate gates |
-| `archead` | Installable | ARCHead commit `2900272`, PyTorch 2.7.1 CUDA 12.6, and Transformers 4.57.6 | Linux CUDA + Git; validates the base implementation without optional Triton/baseline packages |
-| `novakv` | Blocked | Complete SGLang 0.5.10 research fork plus model-specific rotations/codebooks | Reproduce upstream independently; do not merge its engine into another profile |
-| `dspark` | Blocked | Matching drafter plus exact vLLM proposer/hidden-state path | Wait for a reviewed release that passes parity and multi-concurrency checks |
 | `jetspec` | Installable | Reviewed JetSpec commit, Python 3.11, PyTorch 2.7.1 CUDA 12.6, Transformers 4.57.1, and Triton | Linux CUDA + Git; validates the local package and preserves the separate-vLLM-fork boundary |
 | `proxima` | Installable | Reviewed Proxima commit and its source-declared vLLM 0.10.1.1 baseline | Linux CUDA + Git; validates the plugin while requiring a separately supplied calibrated model artifact |
 | `jetlong` | Installable | Reviewed Jet-Long commit, Python 3.12, PyTorch 2.9.1 CUDA 13.0, Transformers 5.3, and FlashAttention 2.8.3 | Linux CUDA 13 + Git; validates the reference path; fused SM90 execution is a separate guided profile |

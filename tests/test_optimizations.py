@@ -52,10 +52,6 @@ def test_builtin_catalog_is_explicit_and_disabled_by_default():
         "pflash_llamacpp",
         "godzilla_composition",
         "resonance_jetlong",
-        "restorekv",
-        "novakv",
-        "archead",
-        "dspark",
     } <= set(ids)
     assert all(not plugin.descriptor.default_enabled for plugin in plugins)
 
@@ -75,25 +71,6 @@ def test_issue_43_catalog_records_quality_and_validation_boundaries():
 
     icecache = registry.get("icecache").descriptor
     assert {"openblas", "high_cpu_parallelism"} <= set(icecache.required_capabilities)
-
-
-def test_recent_research_entries_keep_runtime_and_quality_boundaries():
-    registry = create_builtin_registry()
-
-    restorekv = registry.get("restorekv").descriptor
-    assert restorekv.integration_mode == IntegrationMode.OPTIONAL_PYTHON
-    assert restorekv.quality_risk == QualityRisk.LOSSY
-    assert restorekv.required_artifacts
-
-    archead = registry.get("archead").descriptor
-    assert archead.kind == OptimizationKind.WEIGHT_REPRESENTATION
-    assert "GGUF" in " ".join(archead.limitations)
-
-    novakv = registry.get("novakv").descriptor
-    dspark = registry.get("dspark").descriptor
-    assert novakv.integration_mode == IntegrationMode.RESEARCH_ONLY
-    assert dspark.integration_mode == IntegrationMode.RESEARCH_ONLY
-    assert dspark.quality_risk == QualityRisk.EXACT
 
 
 def test_unreviewed_pipeline_composition_fails_closed():

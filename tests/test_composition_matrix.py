@@ -19,7 +19,7 @@ def test_builtin_matrix_covers_every_unordered_pair_once():
     assert matrix.optimization_ids == ids
     assert len(matrix.rules) == len(ids) * (len(ids) - 1) // 2
     assert {rule.pair for rule in matrix.rules} == set(combinations(ids, 2))
-    assert matrix.to_dict()["pair_count"] == len(set(combinations(ids, 2)))
+    assert matrix.to_dict()["pair_count"] == 325
 
 
 def test_lookup_is_symmetric_and_serializable():
@@ -76,19 +76,6 @@ def test_adapter_work_and_separate_runtime_paths_are_distinguished():
     assert matrix.rule("minference", "triattention").disposition == CompositionDisposition.CONDITIONAL
     assert matrix.rule("jetspec", "lmcache").disposition == CompositionDisposition.ROUTED
     assert matrix.rule("jetlong", "triattention").disposition == CompositionDisposition.ROUTED
-
-
-def test_recent_research_compositions_fail_closed_by_domain_and_maturity():
-    matrix = build_composition_matrix(BUILTIN_DESCRIPTORS)
-
-    assert matrix.rule("restorekv", "triattention").disposition == (
-        CompositionDisposition.PROHIBITED
-    )
-    assert matrix.rule("novakv", "proxima").disposition == CompositionDisposition.PROHIBITED
-    assert matrix.rule("dspark", "jetspec").disposition == CompositionDisposition.PROHIBITED
-    assert matrix.rule("archead", "restorekv").disposition == (
-        CompositionDisposition.CONDITIONAL
-    )
 
 
 def test_triattention_catalog_tracks_current_runtime_boundaries():
