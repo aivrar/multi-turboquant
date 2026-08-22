@@ -23,6 +23,7 @@ from .godzilla_triattention import (
 )
 
 PROTOTYPE_MAX_TOKENS = 32_768
+AGGREGATE_MAX_TOKENS = 200_000
 DEFAULT_PROJECTION_CHUNK_TOKENS = 2_048
 _GGUF_QUANTIZATION = re.compile(
     r"(?:^|[-_.])((?:I?Q|TQ|F|BF)\d+(?:_[A-Z0-9]+)*)(?=[-_.]|$)", re.IGNORECASE
@@ -49,6 +50,13 @@ def _positive_int(value: object, field: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{field} must be a positive integer")
     return parsed
+
+
+def _independent_sequence_ranges(total_tokens: int, sequence_tokens: int) -> list[tuple[int, int]]:
+    """Split a statistics budget into independent, position-reset sequences."""
+    total = _positive_int(total_tokens, "total_tokens")
+    sequence = _positive_int(sequence_tokens, "independent_chunk_tokens")
+    return [(start, min(start + sequence, total)) for start in range(0, total, sequence)]
 
 
 def _config_metadata(config: object) -> dict[str, object]:
@@ -265,6 +273,7 @@ def calibrate_local_gguf_streaming(
     max_length: int = 2_048,
     device: str = "cpu",
     projection_chunk_tokens: int = DEFAULT_PROJECTION_CHUNK_TOKENS,
+    independent_chunk_tokens: int | None = None,
     attention_implementation: str = "sdpa",
     confirm_fp32_dequantization: bool = False,
 ) -> dict[str, object]:
@@ -275,9 +284,20 @@ def calibrate_local_gguf_streaming(
             "set confirm_fp32_dequantization=True to acknowledge the RAM cost"
         )
     length = _positive_int(max_length, "max_length")
-    if length > PROTOTYPE_MAX_TOKENS:
+    independent_sequence_length = (
+        _positive_int(independent_chunk_tokens, "independent_chunk_tokens")
+        if independent_chunk_tokens is not None
+        else None
+    )
+    total_limit = AGGREGATE_MAX_TOKENS if independent_sequence_length is not None else PROTOTYPE_MAX_TOKENS
+    if length > total_limit:
         raise ValueError(
-            f"The GGUF streaming prototype is currently capped at {PROTOTYPE_MAX_TOKENS} tokens"
+            f"The GGUF streaming prototype is currently capped at {total_limit} tokens "
+            "for the selected sequence mode"
+        )
+    if independent_sequence_length is not None and independent_sequence_length > PROTOTYPE_MAX_TOKENS:
+        raise ValueError(
+            f"Each independent sequence is capped at {PROTOTYPE_MAX_TOKENS} tokens"
         )
     chunk_tokens = _positive_int(projection_chunk_tokens, "projection_chunk_tokens")
     normalized_device = normalize_calibration_device(device)
@@ -321,7 +341,7 @@ def calibrate_local_gguf_streaming(
         trust_remote_code=False,
     )
     model_metadata = _config_metadata(config)
-    validate_model_calibration_length(length, model_metadata)
+    validate_model_calibration_length(independent_sequence_length or length, model_metadata)
     tokenizer = AutoTokenizer.from_pretrained(
         model_directory,
         config=config,
@@ -345,6 +365,11 @@ def calibrate_local_gguf_streaming(
     )
     input_device = model.get_input_embeddings().weight.device
     input_ids = input_ids.to(input_device)
+    ranges = (
+        _independent_sequence_ranges(int(input_ids.shape[1]), independent_sequence_length)
+        if independent_sequence_length is not None
+        else [(0, int(input_ids.shape[1]))]
+    )
     collector = StreamingQueryStats(
         num_heads=int(model_metadata["num_attention_heads"]),
         head_dim=int(model_metadata["head_dim"]),
@@ -357,7 +382,8 @@ def calibrate_local_gguf_streaming(
     ]
     try:
         with torch.no_grad():
-            model(input_ids, use_cache=False)
+            for start, end in ranges:
+                model(input_ids[:, start:end], use_cache=False)
     finally:
         for handle in handles:
             handle.remove()
@@ -368,7 +394,7 @@ def calibrate_local_gguf_streaming(
         raise RuntimeError("GGUF model changed while calibration was running; no output was written")
     payload = collector.payload(
         metadata={
-            "num_traces": 1,
+            "num_traces": len(ranges),
             "dtype": str(first_parameter.dtype).replace("torch.", ""),
             "use_chat_template": False,
             "system_prompt": "",
@@ -381,6 +407,12 @@ def calibrate_local_gguf_streaming(
             "runtime_parameter_dtype": str(first_parameter.dtype).replace("torch.", ""),
             "tokenized_length": int(input_ids.shape[1]),
             "projection_chunk_tokens": chunk_tokens,
+            "sequence_mode": (
+                "independent_chunks" if independent_sequence_length is not None else "one_shot"
+            ),
+            "independent_chunk_tokens": independent_sequence_length,
+            "independent_chunk_count": len(ranges),
+            "single_contiguous_sequence": independent_sequence_length is None,
         }
     )
     _atomic_torch_save(payload, output)
@@ -392,8 +424,15 @@ def calibrate_local_gguf_streaming(
         "runtime_parameter_dtype": payload["metadata"]["runtime_parameter_dtype"],  # type: ignore[index]
         "retained_query_bytes": 0,
         "projection_chunk_tokens": chunk_tokens,
+        "sequence_mode": payload["metadata"]["sequence_mode"],  # type: ignore[index]
+        "independent_chunk_count": len(ranges),
         "warning": "Transformers dequantizes GGUF weights; this is not native packed-IQ4 execution.",
     }
+    if independent_sequence_length is not None:
+        report["sequence_warning"] = (
+            "Statistics aggregate independent position-reset sequences. This bounds attention "
+            "memory but is not equivalent to one uninterrupted long-context calibration."
+        )
     if godzilla_output is not None:
         converted = convert_official_triattention_stats(
             output,
@@ -427,6 +466,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--projection-chunk-tokens", type=int, default=DEFAULT_PROJECTION_CHUNK_TOKENS
     )
     parser.add_argument(
+        "--independent-chunk-tokens",
+        type=int,
+        help=(
+            "Aggregate statistics across bounded, position-reset sequences. This is not "
+            "equivalent to one uninterrupted long context."
+        ),
+    )
+    parser.add_argument(
         "--attn-implementation",
         choices=("eager", "sdpa", "flash_attention_2"),
         default="sdpa",
@@ -445,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         max_length=args.max_length,
         device=args.device,
         projection_chunk_tokens=args.projection_chunk_tokens,
+        independent_chunk_tokens=args.independent_chunk_tokens,
         attention_implementation=args.attn_implementation,
         confirm_fp32_dequantization=args.confirm_fp32_dequantization,
     )

@@ -119,6 +119,7 @@ Metal cases skip when their required device is unavailable.
 | `test_tokenizer_backends.py` | Exact token-ID parity, mismatch refusal, reviewed-version checks, and bounded managed/pyenv interpreter discovery |
 | `test_calibration_text.py` | Deterministic offline corpus generation, bounds, concurrent publication, and incomplete-file refusal |
 | `test_gguf_streaming.py` | Bounded GGUF query-stat accumulation, quantization provenance, Windows-local loading, and CLI guardrails |
+| `test_huggingface.py` | Repository-link normalization, declared base-model resolution, explicit endpoint validation, and token non-disclosure |
 | Hardware suites | Host/GPU detection, real-GPU inference, and fused Metal behavior when available |
 
 ```bash
@@ -155,6 +156,11 @@ cmd = get_llamacpp_command(
 # llama-server --model ... --cache-type-k turbo3_tcq --cache-type-v turbo3_tcq
 #   -fa on -c 131072 --tensor-split 24,12 --parallel 8
 ```
+
+GPU layers default to llama.cpp's current `auto` policy. Use an exact non-negative
+count for a deliberate CPU/GPU split, or `all` for maximum GPU offload. Legacy
+`-1` input is normalized to `auto` for the reviewed current parser; `auto` lets
+the runtime fit layers to available memory rather than promising a fixed split.
 
 ### llama.cpp context extension
 
@@ -249,7 +255,7 @@ therefore a CPU/RAM fallback, not native packed-GGUF execution:
 ```bash
 pip install -e ".[gguf-calibration]"
 mtq-triattention-gguf-stream \
-  --gguf /models/model-IQ4_XS.gguf \
+  --gguf /models/Mythos-nano-heretic.i1-IQ4_NL.gguf \
   --input calibration.txt \
   --output model.streaming.pt \
   --godzilla-output model.triattention \
@@ -265,6 +271,13 @@ Godzilla v1 output. Its `retained_query_bytes: 0` report refers only to saved qu
 traces; model weights, activations, and attention still consume memory. Use the
 official source-checkpoint route for production qualification and representative
 domain text rather than the generated smoke-test corpus.
+
+For a larger statistics corpus without one quadratic long-context pass, add
+`--independent-chunk-tokens 8192` and set `--max-length` to a total budget up to
+200,000. Each bounded sequence resets positions and contributes weighted moments;
+the output records its sequence count and explicitly marks that it is **not**
+equivalent to one uninterrupted long-context calibration. This mode does not
+silently enable RoPE scaling or claim 200k-context quality.
 
 The Setup & Add-ons view recognizes the official checkout, can build its
 isolated calibration environment from that directory with `MAX_JOBS=2`, and
@@ -300,6 +313,15 @@ interpreter discovery, CUDA/VRAM and toolchain state, disk space, OS details,
 log tails, and recovery guidance. Credential assignments, bearer tokens,
 Hugging Face tokens, and credentials embedded in URLs are redacted.
 
+The UI accepts either `owner/model` or a full Hugging Face repository/file URL.
+**Resolve repository link** reads the model card and, for GGUF repositories,
+selects the declared base Transformers model used for metadata/calibration.
+Public repositories work anonymously. An optional token can be entered for gated
+models or higher rate limits; it is held only in the current page/job environment,
+excluded from saved/exported settings, and redacted from plans and diagnostics.
+Alternate Hub endpoints are explicit HTTPS settings—no mirror or authentication
+bypass is selected automatically.
+
 On Linux and macOS, the managed `.venv/bin/python` entry is intentionally kept
 as a lexical path. It is commonly a symlink; resolving it to the base `uv` or
 system interpreter would discard the virtual environment and its installed
@@ -313,7 +335,7 @@ command. Official and domvox calibration still need the exact Hugging Face model
 a compatible source. The separate experimental local-GGUF command above derives
 the missing query statistics by executing the dequantized GGUF model. The official
 script uses `trust_remote_code=True`, so only calibrate model sources you trust.
-`IQ4_XS`, `Q4_K_M`, and similar labels describe the selected GGUF's weight
+`IQ4_NL`, `Q4_K_M`, and similar labels describe the selected GGUF's weight
 encoding; they do not make the Transformers calibration load quantized. Before
 weights are downloaded, the workflow now reads the matching model config,
 prefers authoritative nested `rope_parameters.rope_theta` over conflicting
@@ -500,7 +522,7 @@ cmd = get_llamacpp_command(
         draft_n_max=16,
         branch_budget=0,
         dflash_cross_ctx=512,
-        draft_gpu_layers="all",
+        draft_gpu_layers="auto",
     ),
 )
 ```
@@ -963,7 +985,7 @@ contracts and do not imply runtime compatibility.
 | Proposed the JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review, prompting pinned source profiles, read-only discovery contracts, runtime capability scanning, and fail-closed composition metadata | [@jawadala](https://github.com/jawadala) | Issue [#43](https://github.com/aivrar/multi-turboquant/issues/43) |
 | Requested a safe PFlash/KVFlash composition path for the exact Godzilla `09214b160` baseline, prompting the pinned overlay, request and runtime guardrails, and build verification | [@jawadala](https://github.com/jawadala) | Issue [#44](https://github.com/aivrar/multi-turboquant/issues/44) |
 | Requested full guarded treatment of the reviewed add-on catalog, workload routing, simulation, LuceBox composition research, UI coverage, and SM86/SM89 qualification for the canonical Godzilla baseline | [@jawadala](https://github.com/jawadala) | Issue [#46](https://github.com/aivrar/multi-turboquant/issues/46) |
-| Reported model-specific TriAttention calibration failures with Mythos-nano-heretic `IQ4_XS` and proposed a quantized low-memory path, prompting source-model context validation, nested RoPE correction, memory preflight, explicit multi-GPU selection, and the experimental local-GGUF streaming-statistics backend | [@jawadala](https://github.com/jawadala) | Community testing report (August 2026) |
+| Reported model-specific TriAttention calibration failures, corrected the target to Mythos-nano-heretic `IQ4_NL`, and proposed simpler model-link resolution, partial CPU/GPU offload, and bounded large-corpus calibration; this informed the local-GGUF streaming backend, Hugging Face resolver, current `-ngl` semantics, and independent-sequence statistics mode | [@jawadala](https://github.com/jawadala) | Community testing report (August 2026) |
 | ForgeAttention — fused MLX kernels for Apple Silicon (`multi_turboquant/kernels/metal/`): packed-3-bit fused QK, tiled SV, flash decode, sparse SV with phase-1/2 early exit, per-head attention budget calibration | [@user-23xyz](https://github.com/user-23xyz) | PR [#1](https://github.com/aivrar/multi-turboquant/pull/1) · sibling project [user-23xyz/forgeattention](https://github.com/user-23xyz/forgeattention) |
 
 Thank you to [@jawadala](https://github.com/jawadala) for the sustained issue

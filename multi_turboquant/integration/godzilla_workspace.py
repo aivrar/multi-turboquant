@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from .._paths import lexical_absolute_path
+from ..huggingface import normalize_huggingface_endpoint
 from ..optimizations.environments import read_os_release, redact_diagnostic_text
 
 from ..calibration.godzilla_triattention import (
@@ -190,6 +191,10 @@ class GodzillaCalibrationPlan:
         return not any(issue.severity == "error" for issue in self.issues)
 
     def to_dict(self) -> dict[str, object]:
+        public_environment = {
+            key: "<configured>" if key == "HF_TOKEN" else value
+            for key, value in self.environment
+        }
         return {
             "checkout": str(self.checkout),
             "gguf": str(self.gguf),
@@ -220,7 +225,7 @@ class GodzillaCalibrationPlan:
             "model_metadata": self.model_metadata,
             "memory_estimate": self.memory_estimate,
             "command": list(self.command),
-            "environment": dict(self.environment),
+            "environment": public_environment,
             "issues": [issue.to_dict() for issue in self.issues],
             "ready": self.ready,
             "kvarn_calibration_required": False,
@@ -240,6 +245,8 @@ def plan_godzilla_triattention(
     domvox_accept_lossy: bool = False,
     allow_long_calibration: bool = False,
     hf_model: str | None = None,
+    hf_token: str | None = None,
+    hf_endpoint: str | None = None,
     n_tokens: int = 2048,
     device: str = "cuda",
     mode: str = "official_python",
@@ -261,6 +268,12 @@ def plan_godzilla_triattention(
         else checkout_path / "calibrations" / f"{gguf_path.stem}.triattention"
     )
     normalized_hf = hf_model.strip() if hf_model and hf_model.strip() else None
+    normalized_hf_token = hf_token.strip() if hf_token and hf_token.strip() else None
+    if normalized_hf_token is not None and any(
+        character.isspace() for character in normalized_hf_token
+    ):
+        raise ValueError("Hugging Face token must not contain whitespace")
+    normalized_hf_endpoint = normalize_huggingface_endpoint(hf_endpoint) if hf_endpoint else None
     device_error = None
     try:
         normalized_device = normalize_calibration_device(device)
@@ -925,6 +938,10 @@ def plan_godzilla_triattention(
         if normalized_hf is not None:
             command.extend(("-HfModel", normalized_hf))
     environment: list[tuple[str, str]] = [("GODZILLA_ROOT", str(checkout_path))]
+    if normalized_hf_token is not None:
+        environment.append(("HF_TOKEN", normalized_hf_token))
+    if normalized_hf_endpoint is not None:
+        environment.append(("HF_ENDPOINT", normalized_hf_endpoint))
     if python_path is not None:
         environment.append(("TRIATTENTION_PYTHON", str(python_path)))
     if calibrator_path is not None:

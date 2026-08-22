@@ -42,6 +42,11 @@ from multi_turboquant.calibration import (
 )
 from multi_turboquant._paths import lexical_absolute_path
 from multi_turboquant.hardware import detect_platform, detect_gpus
+from multi_turboquant.huggingface import (
+    normalize_huggingface_endpoint,
+    normalize_huggingface_reference,
+    resolve_huggingface_model_reference,
+)
 from multi_turboquant.optimizations.environments import environment_python, plan_environment
 from multi_turboquant.optimizations.profiles import (
     BUILTIN_EXECUTABLE_PROFILES,
@@ -431,6 +436,14 @@ def _optional_text(value):
     return str(value)
 
 
+def _gpu_layers_value(value, default="auto"):
+    from multi_turboquant.integration.llamacpp_args import normalize_gpu_layers
+
+    if value is None or value == "":
+        value = default
+    return normalize_gpu_layers(value)
+
+
 def _command_config(params):
     """Build a CacheConfig from command-generator params.
 
@@ -580,7 +593,7 @@ def api_generate_command(params):
                 host=params.get("host") or "127.0.0.1",
                 port=int(params.get("port", 8080)),
                 context_size=int(params.get("context", 4096)),
-                gpu_layers=_optional_int(params.get("gpu_layers"), 99),
+                gpu_layers=_gpu_layers_value(params.get("gpu_layers")),
                 tensor_split=params.get("tensor_split"),
                 parallel_slots=int(params["parallel"]) if params.get("parallel") else None,
                 cuda_weight_share=cuda_weight_share,
@@ -778,7 +791,7 @@ def _validated_hf_model(value) -> str | None:
         return None
     candidate = Path(model).expanduser()
     if not candidate.exists():
-        return model
+        return normalize_huggingface_reference(model)
     resolved = candidate.resolve()
     settings = _saved_settings()
     roots = [Path(item).expanduser().resolve() for item in settings["addon_roots"]]
@@ -789,6 +802,30 @@ def _validated_hf_model(value) -> str | None:
     if not resolved.is_dir():
         raise ValueError(f"Local Hugging Face model is not a directory: {resolved}")
     return str(resolved)
+
+
+def _validated_hf_token(value) -> str | None:
+    token = _optional_text(value)
+    if token is None:
+        return None
+    token = token.strip()
+    if not token:
+        return None
+    if (
+        len(token) > 4096
+        or any(ord(character) < 32 for character in token)
+        or any(character.isspace() for character in token)
+    ):
+        raise ValueError("Hugging Face token is invalid")
+    return token
+
+
+def api_resolve_huggingface_model(params):
+    return resolve_huggingface_model_reference(
+        str(params.get("reference", "")),
+        token=_validated_hf_token(params.get("token")),
+        endpoint=normalize_huggingface_endpoint(_optional_text(params.get("endpoint"))),
+    )
 
 
 def _managed_triattention_python(settings) -> Path:
@@ -823,6 +860,8 @@ def _godzilla_plan_from_params(params):
     device = _optional_text(params.get("device")) or "cuda"
     tokenizer_backend = _optional_text(params.get("tokenizer_backend")) or "transformers"
     attention_implementation = _optional_text(params.get("attention_implementation")) or "sdpa"
+    hf_token = _validated_hf_token(params.get("hf_token"))
+    hf_endpoint = normalize_huggingface_endpoint(_optional_text(params.get("hf_endpoint")))
     python = _optional_text(params.get("python"))
     python_discovery = None
     if python is None and mode in {"official_python", "official_convert", "domvox"}:
@@ -864,6 +903,8 @@ def _godzilla_plan_from_params(params):
         domvox_accept_lossy=_truthy(params.get("domvox_accept_lossy")),
         allow_long_calibration=_truthy(params.get("allow_long_calibration")),
         hf_model=_validated_hf_model(params.get("hf_model")),
+        hf_token=hf_token,
+        hf_endpoint=hf_endpoint,
         n_tokens=_optional_int(params.get("n_tokens"), 2048),
         device=device,
         mode=mode,
@@ -873,7 +914,7 @@ def _godzilla_plan_from_params(params):
         dependency_override=_truthy(params.get("dependency_override")),
         python_discovery=python_discovery,
         model_metadata_loader=lambda model_id: load_huggingface_model_metadata(
-            model_id, trust_remote_code=False
+            model_id, trust_remote_code=False, token=hf_token
         ),
     )
 
@@ -978,6 +1019,8 @@ def api_create_godzilla(params):
         "calibration_input": plan.calibration_input,
         "official_stats_input": plan.official_stats_input,
         "hf_model": plan.hf_model,
+        "hf_token": _validated_hf_token(params.get("hf_token")),
+        "hf_endpoint": normalize_huggingface_endpoint(_optional_text(params.get("hf_endpoint"))),
         "n_tokens": plan.n_tokens,
         "device": plan.device,
         "mode": plan.mode,
@@ -1297,7 +1340,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           </select>
         </div>
         <div><label>&nbsp;</label><button class="secondary" onclick="scanModels()">Refresh Models</button></div>
-        <div><label>GPU Layers</label><input type="number" id="cmd-gpu-layers" value="99" onchange="generateCommand()"></div>
+        <div><label>GPU Layers</label><input type="text" id="cmd-gpu-layers" value="auto" placeholder="auto, all, or exact count" onchange="generateCommand()"><div class="muted">Auto fits available VRAM. An exact count uses GPU for that many layers and CPU for the rest; all means maximum GPU offload.</div></div>
       </div>
       <div class="form-row">
         <div style="grid-column:1/4"><label>Model Path</label>
@@ -1320,7 +1363,7 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
         <div><label>DFlash Cross Ctx</label><input type="number" id="cmd-spec-cross-ctx" value="512" onchange="generateCommand()"></div>
       </div>
       <div class="form-row">
-        <div><label>Draft GPU Layers</label><input type="text" id="cmd-spec-draft-ngl" value="all" onchange="generateCommand()"></div>
+        <div><label>Draft GPU Layers</label><input type="text" id="cmd-spec-draft-ngl" value="auto" onchange="generateCommand()"></div>
         <div><label>Branch Budget</label><input type="number" id="cmd-spec-branch-budget" value="0" onchange="generateCommand()"></div>
         <div><label>Draft K Cache</label><input type="text" id="cmd-spec-cache-k" value="" placeholder="f16" onchange="generateCommand()"></div>
         <div><label>Draft V Cache</label><input type="text" id="cmd-spec-cache-v" value="" placeholder="f16" onchange="generateCommand()"></div>
@@ -1590,8 +1633,12 @@ button:disabled { opacity:0.55; cursor:not-allowed; }
           <div style="grid-column:span 2"><div class="setup-note">Calibration dependencies are fail-closed. The planner checks the managed environment, active virtual environment, current/PATH Python, and bounded pyenv locations; a job cannot bypass missing imports.</div></div>
         </div>
         <div class="form-row">
-          <div style="grid-column:span 2"><label>Matching Hugging Face model</label><input type="text" id="godzilla-hf-model" placeholder="org/model or local Transformers directory"></div>
+          <div style="grid-column:span 2"><label>Matching Hugging Face model</label><input type="text" id="godzilla-hf-model" placeholder="Paste an org/model ID, repository URL, or local directory"><div class="button-row"><button class="secondary" onclick="resolveGodzillaModel()">Resolve repository link</button></div><div class="muted" id="godzilla-hf-resolution">GGUF repository links can be mapped to the base Transformers model declared on the model card.</div></div>
           <div style="grid-column:span 2"><label>Output .triattention (optional)</label><input type="text" id="godzilla-output" placeholder="Defaults to checkout/calibrations/model.triattention"></div>
+        </div>
+        <div class="form-row">
+          <div style="grid-column:span 2"><label>Hugging Face token (optional, session only)</label><input type="password" id="godzilla-hf-token" autocomplete="off" placeholder="Only needed for private/gated repositories or higher rate limits"><div class="muted">Public model downloads work anonymously. This value is never saved or returned by the planner.</div></div>
+          <div style="grid-column:span 2"><label>Hub endpoint (advanced)</label><input type="url" id="godzilla-hf-endpoint" value="https://huggingface.co"><div class="muted">No mirror is selected automatically; an alternate HTTPS endpoint must be explicit.</div></div>
         </div>
         <div class="form-row">
           <div><label>Calibration tokens</label><input type="number" id="godzilla-tokens" value="2048" min="128" max="200000"></div>
@@ -1658,7 +1705,7 @@ function setSaveState(message, kind='') {
 function persistentControls() {
   return [...document.querySelectorAll('input[id], select[id], textarea[id]')].filter(el =>
     !['settings-import', 'env-confirm', 'godzilla-confirm', 'setup-model-root', 'setup-environment-root',
-      'setup-flash-source', 'setup-addon-roots'].includes(el.id)
+      'setup-flash-source', 'setup-addon-roots', 'godzilla-hf-token'].includes(el.id)
   );
 }
 
@@ -2317,12 +2364,33 @@ function godzillaPayload() {
     calibration_input: document.getElementById('godzilla-input').value,
     official_stats_input: document.getElementById('godzilla-official-stats').value,
     hf_model: document.getElementById('godzilla-hf-model').value,
+    hf_token: document.getElementById('godzilla-hf-token').value,
+    hf_endpoint: document.getElementById('godzilla-hf-endpoint').value,
     output: document.getElementById('godzilla-output').value,
     n_tokens: document.getElementById('godzilla-tokens').value,
     device: document.getElementById('godzilla-device').value,
     allow_long_calibration: document.getElementById('godzilla-long-calibration').checked,
     domvox_accept_lossy: document.getElementById('godzilla-domvox-lossy').checked,
   };
+}
+
+async function resolveGodzillaModel() {
+  const target = document.getElementById('godzilla-hf-resolution');
+  target.textContent = 'Resolving repository metadata...';
+  try {
+    const result = await api('/api/huggingface/resolve-model', {
+      reference: document.getElementById('godzilla-hf-model').value,
+      token: document.getElementById('godzilla-hf-token').value,
+      endpoint: document.getElementById('godzilla-hf-endpoint').value,
+    });
+    document.getElementById('godzilla-hf-model').value = result.resolved_model;
+    target.textContent = result.base_model
+      ? `Resolved ${result.repo_id} to declared base model ${result.base_model}.`
+      : `Using model repository ${result.repo_id}; no separate base model was declared.`;
+    scheduleSave();
+  } catch (error) {
+    target.textContent = `Could not resolve model: ${error.message}`;
+  }
 }
 
 function renderGodzillaPlan(plan) {
@@ -2789,6 +2857,7 @@ class UIHandler(http.server.BaseHTTPRequestHandler):
                 "/api/environments/scan": lambda: api_scan_environments(body),
                 "/api/environments/create": lambda: api_create_environment(body),
                 "/api/tokenizers/gigatoken/scan": lambda: api_scan_gigatoken(body),
+                "/api/huggingface/resolve-model": lambda: api_resolve_huggingface_model(body),
                 "/api/environments/repair-triattention": lambda: (
                     api_repair_triattention_environment(body)
                 ),

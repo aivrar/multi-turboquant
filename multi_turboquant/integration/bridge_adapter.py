@@ -15,12 +15,10 @@ Usage in bridge_services.py:
 
 from __future__ import annotations
 
-import json
 import os
-from pathlib import Path
 from typing import Any
 
-from ..config import CacheConfig, CacheMethod, MethodFamily, METHOD_FAMILIES
+from ..config import CacheConfig
 
 
 class BridgeAdapter:
@@ -43,7 +41,7 @@ class BridgeAdapter:
         host: str = "0.0.0.0",
         port: int = 8080,
         context_size: int = 4096,
-        gpu_layers: int = 99,
+        gpu_layers: int | str | None = "auto",
         extra_args: list[str] | None = None,
     ) -> list[str]:
         """Generate the service start command.
@@ -54,7 +52,7 @@ class BridgeAdapter:
             host: Listen address.
             port: Listen port.
             context_size: Context window.
-            gpu_layers: GPU layer offload count.
+            gpu_layers: ``auto``, ``all``, or an exact GPU layer offload count.
             extra_args: Additional arguments.
 
         Returns:

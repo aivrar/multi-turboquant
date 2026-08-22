@@ -99,7 +99,7 @@ When Gigatoken is selected, domvox is launched through the same fail-closed
 parity wrapper as the official calibrator; its script receives only supported
 arguments after parity succeeds.
 
-`IQ4_XS` and similar names are GGUF weight encodings, not calibration model IDs for
+`IQ4_NL` and similar names are GGUF weight encodings, not calibration model IDs for
 the official or domvox UI modes. Both UI calibrators load the matching Hugging Face
 checkpoint rather than the selected quantized GGUF. The experimental local-GGUF CLI
 is distinct and explicitly warns that Transformers dequantizes those weights. The UI
@@ -109,12 +109,20 @@ conflicts with a legacy fallback, and reports the model context and RoPE source.
 It also reports when the checkpoint's recorded Transformers version differs from
 the managed calibration runtime.
 
+The matching-model field accepts full Hugging Face links as well as repository IDs.
+The resolver uses a GGUF model card's declared base model when available. Public
+repositories need no account; an optional token is session-only, never included in
+saved/exported settings, and redacted from plans and diagnostics. Alternate Hub
+endpoints are explicit HTTPS settings rather than an automatic mirror or bypass.
+
 The global input ceiling remains 200,000 tokens, but the effective one-shot
 limit is also bounded by the matching model's `max_position_embeddings`. Values
 above 32,768 require **Allow long calibration**; the upstream guide recommends
 approaching its 32,768-token default and does not establish 200,000 as best.
 The UI does not silently reinterpret 200k total corpus tokens as one or more
-safe sequences. For the official path it estimates retained Q tensors, BF16
+safe sequences. The separate local-GGUF CLI can explicitly aggregate bounded,
+position-reset sequences, but labels that result as non-equivalent to one long
+context. For the official path the UI estimates retained Q tensors, BF16
 weights, and transient state and blocks a run when that conservative floor
 already exceeds free VRAM. Individual `cuda:N` devices are selectable, with the
 largest currently free GPU selected initially. The estimate remains a lower

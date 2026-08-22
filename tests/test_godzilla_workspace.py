@@ -151,6 +151,36 @@ def test_godzilla_triattention_plan_uses_explicit_prerequisites(tmp_path: Path):
     assert plan.to_dict()["kvarn_calibration_required"] is False
 
 
+def test_godzilla_plan_redacts_huggingface_token(tmp_path: Path):
+    checkout = _godzilla_checkout(tmp_path)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"gguf")
+
+    plan = plan_godzilla_triattention(
+        checkout,
+        model,
+        mode="godzilla_script",
+        hf_model="org/model",
+        hf_token="hf_secret",
+        hf_endpoint="https://hub.example",
+        shell_executable="pwsh-test",
+    )
+
+    assert dict(plan.environment)["HF_TOKEN"] == "hf_secret"
+    assert plan.to_dict()["environment"]["HF_TOKEN"] == "<configured>"
+    assert "hf_secret" not in repr(plan.to_dict())
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        plan_godzilla_triattention(
+            checkout,
+            model,
+            mode="godzilla_script",
+            hf_model="org/model",
+            hf_endpoint="http://unsafe.example",
+            shell_executable="pwsh-test",
+        )
+
+
 def test_godzilla_triattention_plan_rejects_missing_prerequisites(tmp_path: Path):
     checkout = _godzilla_checkout(tmp_path)
 

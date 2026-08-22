@@ -488,6 +488,7 @@ def test_calibration_python_preflight_selects_explicit_cuda_device(tmp_path: Pat
 
 
 def test_model_metadata_prefers_nested_rope_and_exposes_context(monkeypatch):
+    calls = []
     config = SimpleNamespace(
         num_hidden_layers=36,
         num_attention_heads=16,
@@ -504,18 +505,23 @@ def test_model_metadata_prefers_nested_rope_and_exposes_context(monkeypatch):
     fake_transformers = SimpleNamespace(
         __version__="test",
         AutoConfig=SimpleNamespace(
-            from_pretrained=staticmethod(lambda *_args, **_kwargs: config)
+            from_pretrained=staticmethod(
+                lambda *args, **kwargs: calls.append((args, kwargs)) or config
+            )
         ),
     )
     monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
 
-    metadata = calibration.load_huggingface_model_metadata("org/model")
+    metadata = calibration.load_huggingface_model_metadata("org/model", token="hf_test")
 
     assert metadata["rope_theta"] == 1_000_000.0
     assert metadata["legacy_rope_theta"] == 10_000.0
     assert metadata["rope_theta_conflict"] is True
     assert metadata["rope_theta_source"] == "rope_parameters"
     assert metadata["max_position_embeddings"] == 131_072
+    assert calls == [
+        (("org/model",), {"trust_remote_code": True, "token": "hf_test"})
+    ]
 
 
 def test_mythos_shape_rejects_200k_and_reports_memory_floor():

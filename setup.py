@@ -22,12 +22,14 @@ setup(
     ],
     extras_require={
         "calibration": [
+            "huggingface_hub>=0.35.0,<2",
             "safetensors>=0.4.0",
             "transformers>=4.36.0,<5",
         ],
         "gguf-calibration": [
             "accelerate>=1.0.0",
             "gguf>=0.10.0",
+            "huggingface_hub>=0.35.0,<2",
             "transformers>=4.46.0,<5",
         ],
         "triton": [
@@ -47,6 +49,7 @@ setup(
         "all": [
             "accelerate>=1.0.0",
             "gguf>=0.10.0",
+            "huggingface_hub>=0.35.0,<2",
             "safetensors>=0.4.0",
             "transformers>=4.36.0,<5",
             "triton>=2.1.0",

@@ -9,6 +9,7 @@ from multi_turboquant.calibration.gguf_streaming import (
     StreamingQueryStats,
     _config_metadata,
     _gguf_quantization,
+    _independent_sequence_ranges,
     _local_gguf_arguments,
     build_parser,
     calibrate_local_gguf_streaming,
@@ -74,6 +75,15 @@ def test_streaming_query_stats_accumulate_multiple_forwards():
     assert torch.allclose(stats["q_mean_imag"], torch.full((2,), 2.0))
 
 
+def test_independent_sequence_ranges_cover_budget_without_overlap():
+    assert _independent_sequence_ranges(10, 4) == [(0, 4), (4, 8), (8, 10)]
+
+
+def test_independent_sequence_ranges_reject_invalid_size():
+    with pytest.raises(ValueError, match="independent_chunk_tokens"):
+        _independent_sequence_ranges(10, 0)
+
+
 def test_config_metadata_prefers_nested_rope_theta():
     metadata = _config_metadata(
         SimpleNamespace(
@@ -118,8 +128,11 @@ def test_cli_accepts_optional_godzilla_output():
             "stats.pt",
             "--godzilla-output",
             "model.triattention",
+            "--independent-chunk-tokens",
+            "8192",
             "--confirm-fp32-dequantization",
         ]
     )
 
     assert args.godzilla_output == "model.triattention"
+    assert args.independent_chunk_tokens == 8192

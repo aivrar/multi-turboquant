@@ -16,11 +16,56 @@ import run_ui
 from run_ui import (
     _command_config,
     _command_context_extension_config,
+    _gpu_layers_value,
     api_generate_command,
+    api_resolve_huggingface_model,
     api_methods,
     api_presets,
     api_scan_llamacpp,
 )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(None, "auto"), ("auto", "auto"), ("all", "all"), ("12", 12), ("-1", "auto")],
+)
+def test_gpu_layers_use_current_llamacpp_semantics(value, expected):
+    assert _gpu_layers_value(value) == expected
+
+
+def test_gpu_layers_reject_invalid_negative_counts():
+    with pytest.raises(ValueError, match="GPU layers"):
+        _gpu_layers_value("-2")
+
+
+def test_huggingface_resolver_api_forwards_optional_session_token(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        run_ui,
+        "resolve_huggingface_model_reference",
+        lambda reference, **kwargs: calls.append((reference, kwargs)) or {"resolved_model": "base/model"},
+    )
+
+    result = api_resolve_huggingface_model(
+        {"reference": "https://huggingface.co/owner/gguf", "token": "hf_test"}
+    )
+
+    assert result == {"resolved_model": "base/model"}
+    assert calls == [
+        (
+            "https://huggingface.co/owner/gguf",
+            {"token": "hf_test", "endpoint": "https://huggingface.co"},
+        )
+    ]
+
+
+def test_huggingface_token_control_is_password_and_excluded_from_persistence():
+    assert 'type="password" id="godzilla-hf-token"' in run_ui.UI_HTML
+    persistence = re.search(
+        r"(?s)function persistentControls\(\) \{(.*?)\n\}", run_ui.UI_HTML
+    )
+    assert persistence is not None
+    assert "godzilla-hf-token" in persistence.group(1)
 
 
 @pytest.fixture(autouse=True)
@@ -1194,6 +1239,8 @@ def test_godzilla_creation_forwards_checked_plan(tmp_path, monkeypatch):
                 "calibration_input": plan.calibration_input,
                 "official_stats_input": None,
                 "hf_model": "org/model",
+                "hf_token": None,
+                "hf_endpoint": "https://huggingface.co",
                 "n_tokens": 2048,
                 "device": "cuda",
                 "mode": "official_python",

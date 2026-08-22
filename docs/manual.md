@@ -255,9 +255,15 @@ cmd = get_llamacpp_command(
 )
 print(" ".join(cmd))
 # llama-server --model /opt/models/... --cache-type-k turbo3_tcq
-#   --cache-type-v turbo3_tcq -fa on -c 131072 -ngl 99
+#   --cache-type-v turbo3_tcq -fa on -c 131072 -ngl auto
 #   --tensor-split 24,12 --parallel 8 --host 0.0.0.0 --port 8080
 ```
+
+The command generator defaults GPU layers to llama.cpp's current `auto` policy.
+An exact non-negative count creates a deliberate partial CPU/GPU split; `all`
+requests maximum GPU offload. Legacy `-1` is accepted and normalized to `auto`
+for the reviewed current parser, which lets the runtime select the fit rather
+than guaranteeing a particular CPU/GPU balance.
 
 ### Plan a multi-agent deployment
 
@@ -694,7 +700,7 @@ cmd = get_llamacpp_command(
         draft_n_max=16,
         branch_budget=0,
         dflash_cross_ctx=512,
-        draft_gpu_layers="all",
+        draft_gpu_layers="auto",
     ),
 )
 ```
@@ -785,7 +791,7 @@ moments directly from a local GGUF without downloading the original source weigh
 ```bash
 pip install -e ".[gguf-calibration]"
 mtq-triattention-gguf-stream \
-  --gguf /models/model-IQ4_XS.gguf \
+  --gguf /models/Mythos-nano-heretic.i1-IQ4_NL.gguf \
   --input calibration.txt \
   --output model.streaming.pt \
   --godzilla-output model.triattention \
@@ -813,6 +819,26 @@ production qualification. Automatic RoPE extension to 200k is intentionally not
 performed: a longer declared/effective context does not remove the forward pass's
 attention and activation cost.
 
+An opt-in aggregate mode accepts a total statistics budget up to 200,000 tokens:
+
+```bash
+mtq-triattention-gguf-stream \
+  --gguf /models/Mythos-nano-heretic.i1-IQ4_NL.gguf \
+  --input calibration.txt \
+  --output model.aggregate.pt \
+  --godzilla-output model.aggregate.triattention \
+  --max-length 200000 \
+  --independent-chunk-tokens 8192 \
+  --device cpu \
+  --confirm-fp32-dequantization
+```
+
+This aggregates weighted query moments over independent position-reset sequences,
+records the sequence mode/count in the intermediate artifact, and bounds each
+attention pass. It is not equivalent to one uninterrupted 200k context and does
+not silently enable RoPE scaling. Use retrieval/quality evaluation before treating
+either route as production calibration.
+
 Neither official command uses `llama-cli`. Multi-TurboQuant does not show a native
 `llama-cli` calibration choice because the current Godzilla binary does not
 expose a real calibration command. The original Hugging Face checkpoint remains
@@ -829,6 +855,14 @@ coherent text file, the GGUF, and the exact Hugging Face model. **Convert
 existing official .pt** skips the forward pass while preserving model-metadata
 and output validation. **Godzilla checkout script** retains the older
 `scripts/ensure-triattention.ps1` workflow for compatible checkouts.
+The matching-model field accepts an `owner/model` ID or a full Hugging Face link.
+The resolver maps a GGUF repository to its model-card-declared base model. Public
+repositories remain anonymously accessible; the unauthenticated warning indicates
+lower Hub rate limits, not failure. The optional token is session-only, excluded
+from settings/export, passed only to metadata/download processes, and redacted in
+plans and diagnostics. An alternate endpoint must be explicitly configured over
+HTTPS; the application never selects a mirror or bypasses Hub access controls.
+
 The UI reports missing prerequisites before it starts a confirmed background
 job, validates new and existing output artifacts, and never builds the Godzilla
 CMake project. KVarN requires no calibration and remains a launch-time cache
@@ -876,7 +910,7 @@ cannot fit the selected GPU's currently free VRAM. Select GPUs explicitly as
 `cuda:N`; the UI initially chooses the device with the most free VRAM. System
 RAM is not a substitute for discrete VRAM in those CUDA workflows. The
 experimental local-GGUF route is a separate CPU/RAM fallback with the limits described
-above. GGUF labels such as `IQ4_XS` describe stored inference weights; Transformers
+above. GGUF labels such as `IQ4_NL` describe stored inference weights; Transformers
 does not preserve that packed representation during this calibration path.
 Selecting Gigatoken runs domvox through the same fail-closed parity wrapper as
 the official script and forwards only domvox-supported arguments afterward.
@@ -1839,7 +1873,7 @@ these authors for the mathematical ideas and research:
 | JetSpec, Lucebox, Proxima, Jet-Long, ChunkLlama, RaBitQCache, ScoPE, DuoAttention, IceCache, PFlash/KVFlash, and Resonance-JetLong review; pinned source profiles, source contracts, scanner coverage, and fail-closed composition | jawadala / issue #43 | Community contribution |
 | Exact-commit Godzilla PFlash/KVFlash composition workflow and safe pairing boundaries | jawadala / issue #44 | Community contribution |
 | Full guarded add-on composition, workload routing, simulation, LuceBox review, UI coverage, and SM86/SM89 Godzilla qualification | jawadala / issue #46 | Community contribution |
-| Mythos-nano-heretic IQ4_XS calibration report and low-memory quantized-model proposal, prompting model-aware safeguards and the experimental local-GGUF streaming-statistics backend | jawadala / community testing report (August 2026) | Community contribution |
+| Mythos-nano-heretic IQ4_NL calibration report, model-link/offload feedback, and low-memory large-corpus proposal, prompting model-aware safeguards, the local-GGUF backend, Hub resolver, and independent-sequence statistics mode | jawadala / community testing report (August 2026) | Community contribution |
 
 We reimplemented the Python-native algorithms in Python under a unified API. Godzilla/KVarN support is a command-generation, source-inspection, and preparation-workflow integration; context-extension support is a llama.cpp command-generation and capability-scanning integration only. This repository does not bundle Godzilla, BeeLlama, KVarN, Resonance RoPE, LongRoPE, domvox, Gigatoken, CUDA weight sharing, the issue #43 research projects, or llama.cpp source trees; installable workflows use reviewed revisions in isolated environments, while guided entries remain read-only contracts. Credit goes to the upstream authors for the technical work, and thank you to @jawadala for the sustained issue reports and concrete suggestions that identified the Godzilla/KVarN integration target, context-extension/UI scanner work, optional dependency workflow, consolidated UI workspace, official and domvox calibration paths, parity-checked Gigatoken options, the broader fail-closed optimization review, and the local-GGUF calibration experiment.
 
