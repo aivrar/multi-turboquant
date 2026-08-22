@@ -468,6 +468,21 @@ class TestIntegration:
         assert cmd[0] == "llama-server"
         assert "/opt/models/test.gguf" in cmd
         assert "8080" in cmd
+        assert cmd[cmd.index("-ngl") + 1] == "auto"
+
+    def test_llamacpp_partial_gpu_offload_keeps_exact_count(self):
+        from multi_turboquant.integration import get_llamacpp_command
+
+        cmd = get_llamacpp_command(CacheConfig(), gpu_layers=12)
+
+        assert cmd[cmd.index("-ngl") + 1] == "12"
+
+    def test_llamacpp_legacy_minus_one_normalizes_to_auto(self):
+        from multi_turboquant.integration import get_llamacpp_command
+
+        cmd = get_llamacpp_command(CacheConfig(), gpu_layers=-1)
+
+        assert cmd[cmd.index("-ngl") + 1] == "auto"
 
     def test_llamacpp_context_extension_args(self):
         from multi_turboquant.integration import (
@@ -641,6 +656,7 @@ class TestIntegration:
         assert "dflash" in args
         assert "--spec-draft-model" in args
         assert "draft.gguf" in args
+        assert args[args.index("--spec-draft-ngl") + 1] == "all"
         assert "--spec-draft-n-max" in args
         assert "16" in args
         assert "--spec-branch-budget" in args
@@ -669,6 +685,16 @@ class TestIntegration:
                     spec_type="dflash",
                     draft_model="draft.gguf",
                     draft_cache_type_k=CacheMethod.KVARN4,
+                ),
+            )
+        with pytest.raises(ValueError, match="GPU layers"):
+            get_llamacpp_args(
+                config,
+                fork_profile="godzilla",
+                speculative=LlamaCppSpeculativeConfig(
+                    spec_type="dflash",
+                    draft_model="draft.gguf",
+                    draft_gpu_layers=-2,
                 ),
             )
 

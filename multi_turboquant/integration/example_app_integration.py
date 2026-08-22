@@ -13,7 +13,7 @@ method selection, capacity planning, and auto-calibration.
 # cmd = (
 #     "/opt/llama.cpp/build/bin/llama-server "
 #     f"--model {model_path} --host 0.0.0.0 --port 8080 "
-#     "-ngl 99 -fa on --cache-type-k turbo3_tcq --cache-type-v turbo3_tcq"
+#     "-ngl auto -fa on --cache-type-k turbo3_tcq --cache-type-v turbo3_tcq"
 # )
 
 

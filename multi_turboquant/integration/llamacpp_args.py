@@ -55,6 +55,28 @@ class LlamaCppSpeculativeConfig:
     extra_args: tuple[str, ...] = ()
 
 
+def normalize_gpu_layers(value: int | str | None) -> int | str | None:
+    """Normalize current llama.cpp GPU-layer values without forcing full offload."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("GPU layers must be 'auto', 'all', or a non-negative integer")
+    if isinstance(value, int):
+        if value == -1:
+            return "auto"
+        if value < 0:
+            raise ValueError("GPU layers must be 'auto', 'all', or a non-negative integer")
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"auto", "all"}:
+        return normalized
+    try:
+        parsed = int(normalized)
+    except ValueError as exc:
+        raise ValueError("GPU layers must be 'auto', 'all', or a non-negative integer") from exc
+    return normalize_gpu_layers(parsed)
+
+
 @dataclass(frozen=True)
 class LlamaCppContextExtensionConfig:
     """llama.cpp RoPE and YaRN context-extension arguments.
@@ -377,7 +399,9 @@ def _get_godzilla_speculative_args(
     if speculative.draft_context_size is not None:
         args.extend(["--spec-draft-ctx-size", str(speculative.draft_context_size)])
     if speculative.draft_gpu_layers is not None:
-        args.extend(["--spec-draft-ngl", str(speculative.draft_gpu_layers)])
+        args.extend(
+            ["--spec-draft-ngl", str(normalize_gpu_layers(speculative.draft_gpu_layers))]
+        )
     if speculative.draft_device:
         args.extend(["--spec-draft-device", speculative.draft_device])
     if speculative.draft_cache_type_k is not None:
@@ -424,7 +448,7 @@ def get_llamacpp_args(
     flash_attention: bool = True,
     model_path: str | None = None,
     context_size: int | None = None,
-    gpu_layers: int | None = None,
+    gpu_layers: int | str | None = None,
     tensor_split: str | None = None,
     parallel_slots: int | None = None,
     fork_profile: LlamaCppProfile | str | None = LlamaCppProfile.UPSTREAM,
@@ -438,7 +462,7 @@ def get_llamacpp_args(
         flash_attention: Enable flash attention (required for turbo/iso/planar).
         model_path: Path to GGUF model file.
         context_size: Context window size.
-        gpu_layers: Number of layers to offload to GPU.
+        gpu_layers: ``auto``, ``all``, or an exact number of layers to place in VRAM.
         fork_profile: llama.cpp-compatible profile to target.
         context_extension: RoPE/YaRN context-extension options.
         speculative: Godzilla speculative-decoding options.
@@ -505,7 +529,7 @@ def get_llamacpp_args(
         args.extend(_get_context_extension_args(context_extension))
 
     if gpu_layers is not None:
-        args.extend(["-ngl", str(gpu_layers)])
+        args.extend(["-ngl", str(normalize_gpu_layers(gpu_layers))])
 
     # Tensor split for multi-GPU
     if tensor_split:
@@ -564,7 +588,7 @@ def get_llamacpp_command(
     host: str = "0.0.0.0",
     port: int = 8080,
     context_size: int = 4096,
-    gpu_layers: int = 99,
+    gpu_layers: int | str | None = "auto",
     tensor_split: str | None = None,
     parallel_slots: int | None = None,
     cuda_weight_share: object | None = None,
@@ -582,7 +606,8 @@ def get_llamacpp_command(
         host: Listen address.
         port: Listen port.
         context_size: Context window size.
-        gpu_layers: GPU layer count.
+        gpu_layers: ``auto``, ``all``, or an exact GPU layer count. Exact partial
+            counts leave remaining layers on CPU; legacy ``-1`` normalizes to ``auto``.
         fork_profile: llama.cpp-compatible profile to target.
         context_extension: RoPE/YaRN context-extension options.
         speculative: Godzilla speculative-decoding options.

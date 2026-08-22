@@ -76,7 +76,7 @@ for config_line in "${CONFIGS[@]}"; do
     $SERVER \
         --model "$MODEL" \
         --host 0.0.0.0 --port $PORT \
-        -c "$CONTEXT" -ngl 99 -fa on \
+        -c "$CONTEXT" -ngl all -fa on \
         --cache-type-k "$k_type" --cache-type-v "$v_type" \
         > /tmp/mtq_server.log 2>&1 &
     SERVER_PID=$!

@@ -1090,7 +1090,7 @@ def inspect_godzilla_triattention_file(path: str | Path) -> dict[str, object]:
 
 
 def load_huggingface_model_metadata(
-    model: str, *, trust_remote_code: bool = True
+    model: str, *, trust_remote_code: bool = True, token: str | None = None
 ) -> dict[str, object]:
     """Load only the matching Hugging Face config needed by the converter."""
     try:
@@ -1098,7 +1098,11 @@ def load_huggingface_model_metadata(
         from transformers import AutoConfig
     except ImportError as exc:
         raise RuntimeError("transformers is required to load model calibration metadata") from exc
-    config = AutoConfig.from_pretrained(model, trust_remote_code=trust_remote_code)
+    config = AutoConfig.from_pretrained(
+        model,
+        trust_remote_code=trust_remote_code,
+        token=token or None,
+    )
     text_config = getattr(config, "text_config", config)
     num_layers = _require_positive_int(
         getattr(text_config, "num_hidden_layers", None), "config.num_hidden_layers"

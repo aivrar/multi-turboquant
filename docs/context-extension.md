@@ -119,20 +119,26 @@ guardrail in command generation, compatibility checks, and UI warnings.
 Godzilla TriAttention calibration is a separate, per-model offline step. Its
 runtime `.triattention` file can now be produced from the official
 WeianMao/triattention Python calibrator and the matching Hugging Face checkpoint,
-not from the GGUF. Multi-TurboQuant converts the official `.pt` payload to
-Godzilla v1 and validates the result. This route does not use `llama-cli`; the
+or by the experimental local-GGUF streaming-statistics CLI on supported standard
+attention architectures. Multi-TurboQuant converts the official-compatible `.pt`
+payload to Godzilla v1 and validates the result. Neither route uses `llama-cli`; the
 current Godzilla binary has no implemented native calibration command. The
 older checkout-owned PowerShell workflow remains an explicit fallback for
 compatible checkouts. Multi-TurboQuant never synthesizes unverified model
 statistics and reuses existing artifacts only after strict validation.
 
-Calibration performs a Transformers BF16 model load; a small `IQ4_XS` GGUF does
-not reduce that memory. The preflight resolves the matching Hugging Face config,
+Official calibration performs a Transformers BF16 model load; a small `IQ4_NL` GGUF
+does not reduce that route's memory. The local-GGUF experiment avoids downloading
+source weights but Transformers dequantizes the GGUF to FP32 and still owns normal
+forward-pass memory; only its added query-stat retention is bounded. The official
+preflight resolves the matching Hugging Face config,
 prefers nested `rope_parameters.rope_theta` over conflicting legacy defaults,
 bounds the sequence by `max_position_embeddings`, estimates the official
 one-shot memory floor, and supports explicit `cuda:N` selection. The upstream
-32,768-token default remains the evidence-backed target; 200,000 is only the
-application's global ceiling for models and hardware that pass those checks.
+32,768-token default remains the evidence-backed one-shot target. The local-GGUF
+experiment can aggregate up to 200,000 tokens across explicitly requested bounded,
+position-reset sequences, but that is not evidence for one uninterrupted 200k
+context and does not automatically change RoPE parameters.
 
 The UI selects calibration Python only after a bounded isolated import probe,
 does not combine packages from different environments, and rechecks the exact

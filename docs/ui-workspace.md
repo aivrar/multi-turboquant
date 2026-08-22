@@ -56,8 +56,10 @@ UI server shuts down. A binary path can be supplied in the command controls, or
 
 For patched Godzilla TriAttention, the stats-path control expects the finished
 binary `.triattention` file. Producing that file is a model-specific offline
-calibration against the matching Hugging Face checkpoint; a discovered GGUF
-alone does not contain the required pre-RoPE query statistics.
+calibration. The UI modes use the matching Hugging Face checkpoint. A separate
+experimental `mtq-triattention-gguf-stream` CLI can derive the missing statistics
+from supported local GGUF models by executing dequantized weights; it is not yet a UI
+job mode.
 
 The default **Generate stats + convert** mode uses the official TriAttention
 checkout's `scripts/calibrate.py`, keeps its `.pt` output, converts that payload
@@ -92,25 +94,35 @@ resulting TRIA v2 file, and adapts it to Godzilla v1 only after the explicit
 lossy-conversion acknowledgement is selected. Layer-budget scales and
 attention scale are not representable in Godzilla v1 and are reported as
 dropped. The matching Hugging Face model is required for shape and RoPE checks;
-a GGUF by itself is not sufficient.
+a GGUF by itself is not sufficient for this domvox mode.
 When Gigatoken is selected, domvox is launched through the same fail-closed
 parity wrapper as the official calibrator; its script receives only supported
 arguments after parity succeeds.
 
-`IQ4_XS` and similar names are GGUF weight encodings, not calibration model IDs.
-Both Python calibrators load the matching Hugging Face checkpoint rather than
-the selected quantized GGUF. The plan now validates that checkpoint's config
+`IQ4_NL` and similar names are GGUF weight encodings, not calibration model IDs for
+the official or domvox UI modes. Both UI calibrators load the matching Hugging Face
+checkpoint rather than the selected quantized GGUF. The experimental local-GGUF CLI
+is distinct and explicitly warns that Transformers dequantizes those weights. The UI
+plan validates its checkpoint's config
 before weight download, uses nested `rope_parameters.rope_theta` when it
 conflicts with a legacy fallback, and reports the model context and RoPE source.
 It also reports when the checkpoint's recorded Transformers version differs from
 the managed calibration runtime.
+
+The matching-model field accepts full Hugging Face links as well as repository IDs.
+The resolver uses a GGUF model card's declared base model when available. Public
+repositories need no account; an optional token is session-only, never included in
+saved/exported settings, and redacted from plans and diagnostics. Alternate Hub
+endpoints are explicit HTTPS settings rather than an automatic mirror or bypass.
 
 The global input ceiling remains 200,000 tokens, but the effective one-shot
 limit is also bounded by the matching model's `max_position_embeddings`. Values
 above 32,768 require **Allow long calibration**; the upstream guide recommends
 approaching its 32,768-token default and does not establish 200,000 as best.
 The UI does not silently reinterpret 200k total corpus tokens as one or more
-safe sequences. For the official path it estimates retained Q tensors, BF16
+safe sequences. The separate local-GGUF CLI can explicitly aggregate bounded,
+position-reset sequences, but labels that result as non-equivalent to one long
+context. For the official path the UI estimates retained Q tensors, BF16
 weights, and transient state and blocks a run when that conservative floor
 already exceeds free VRAM. Individual `cuda:N` devices are selectable, with the
 largest currently free GPU selected initially. The estimate remains a lower

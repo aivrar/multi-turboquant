@@ -43,6 +43,7 @@ benchmark_results_*.md
 retest_results.md
 
 # Model files (too large for git)
+/models/
 *.gguf
 *.safetensors
 *.bin

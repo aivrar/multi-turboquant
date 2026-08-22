@@ -351,6 +351,8 @@ class GodzillaCalibrationJobManager:
         domvox_accept_lossy: bool = False,
         allow_long_calibration: bool = False,
         hf_model: str | None = None,
+        hf_token: str | None = None,
+        hf_endpoint: str | None = None,
         n_tokens: int = 2048,
         device: str = "cuda",
         mode: str = "official_python",
@@ -374,6 +376,8 @@ class GodzillaCalibrationJobManager:
             domvox_accept_lossy=domvox_accept_lossy,
             allow_long_calibration=allow_long_calibration,
             hf_model=hf_model,
+            hf_token=hf_token,
+            hf_endpoint=hf_endpoint,
             n_tokens=n_tokens,
             device=device,
             mode=mode,
@@ -383,7 +387,7 @@ class GodzillaCalibrationJobManager:
             dependency_override=dependency_override,
             python_discovery=python_discovery,
             model_metadata_loader=lambda model_id: load_huggingface_model_metadata(
-                model_id, trust_remote_code=False
+                model_id, trust_remote_code=False, token=hf_token
             ),
         )
         if not plan.ready:
